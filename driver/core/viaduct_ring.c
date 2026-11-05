@@ -2,6 +2,8 @@
 #include "vd_port.h"
 
 _Static_assert(sizeof(vd_ring_header) == 192, "Ring header is three cache lines");
+_Static_assert(VD_RING_MAX_BYTES == sizeof(vd_ring_header) + VD_RING_MAX_FRAMES * sizeof(float),
+               "VD_RING_MAX_BYTES matches the largest valid Ring");
 
 /*
  * Samples are only ever copied, never computed on, so they move as raw 32-bit

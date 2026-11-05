@@ -98,4 +98,10 @@ void vd_ring_write(vd_ring *ring, const float *src, uint32_t count);
 uint64_t vd_clock_frames(uint64_t start_ticks, uint64_t now_ticks,
                          uint64_t tick_hz, uint32_t sample_rate);
 
+/*
+ * Seam C, inverse: the fewest ticks after the start at which vd_clock_frames
+ * reaches `frames`. The shell schedules packet completions with it.
+ */
+uint64_t vd_clock_ticks_for(uint64_t frames, uint64_t tick_hz, uint32_t sample_rate);
+
 #endif /* VIADUCT_CORE_H */

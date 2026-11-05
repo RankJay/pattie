@@ -1,0 +1,60 @@
+;
+; Viaduct virtual audio driver: installs the root device (ADR 0010).
+;
+; The root device has no circuits of its own. Each Device an app creates becomes
+; a raw child circuit device at runtime, so nothing per-Device lives here.
+; Validated by InfVerif on every build; never installed by building.
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = MEDIA
+ClassGuid   = {4d36e96c-e325-11ce-bfc1-08002be10318}
+Provider    = %ProviderName%
+DriverVer   = 01/01/2026,0.1.0.0
+CatalogFile = viaduct.cat
+PnpLockDown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+viaduct.sys = 1,,
+
+[Manufacturer]
+%ManufacturerName% = Viaduct,NT$ARCH$.10.0...22000
+
+[Viaduct.NT$ARCH$.10.0...22000]
+%Viaduct.DeviceDesc% = Viaduct_Device, Root\Viaduct
+
+[Viaduct_Device.NT]
+CopyFiles = Viaduct_Device.NT.Copy
+
+[Viaduct_Device.NT.Copy]
+viaduct.sys
+
+[Viaduct_Device.NT.Services]
+AddService = Viaduct, 0x00000002, Viaduct_Service
+
+[Viaduct_Service]
+DisplayName   = %Viaduct.ServiceDesc%
+ServiceType   = 1               ; SERVICE_KERNEL_DRIVER
+StartType     = 3               ; SERVICE_DEMAND_START
+ErrorControl  = 1               ; SERVICE_ERROR_NORMAL
+ServiceBinary = %13%\viaduct.sys
+
+[Viaduct_Device.NT.Wdf]
+KmdfService = Viaduct, Viaduct_Wdf
+
+[Viaduct_Wdf]
+KmdfLibraryVersion = $KMDFVERSION$
+
+[Strings]
+ProviderName        = "Viaduct"
+ManufacturerName    = "Viaduct"
+DiskName            = "Viaduct Installation Disk"
+Viaduct.DeviceDesc  = "Viaduct Virtual Audio"
+Viaduct.ServiceDesc = "Viaduct Virtual Audio Driver"

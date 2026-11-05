@@ -72,7 +72,8 @@
       <PreprocessorDefinitions>ACX_VERSION_MAJOR=1;ACX_VERSION_MINOR=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>$(DDK_LIB_PATH)acx\km\1.1\acxstub.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <!-- ksguid.lib: in C, ks.h only declares the KS category and node-type GUIDs. -->
+      <AdditionalDependencies>$(DDK_LIB_PATH)acx\km\1.1\acxstub.lib;$(DDK_LIB_PATH)ksguid.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
 
@@ -84,6 +85,14 @@
 
   <ItemGroup Label="Shell">
     <ClCompile Include="src\driver.c" />
+    <ClCompile Include="src\control.c" />
+    <ClCompile Include="src\endpoint.c" />
+    <ClCompile Include="src\stream.c" />
+    <ClInclude Include="src\shell.h" />
+  </ItemGroup>
+
+  <ItemGroup Label="Package">
+    <Inf Include="viaduct.inf" />
   </ItemGroup>
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

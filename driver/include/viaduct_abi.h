@@ -26,6 +26,7 @@ typedef uint32_t vd_status;
 #define VD_ERR_DUPLICATE_NAME 8u    /* a live Device of this kind has that name */
 #define VD_ERR_TOO_MANY_DEVICES 9u  /* VD_MAX_DEVICES are already live */
 #define VD_ERR_NO_SUCH_DEVICE 10u   /* no live Device with that ID for this Owner */
+#define VD_ERR_SYSTEM 11u           /* Windows refused to create the Device's endpoint */
 
 /* Most Devices alive at once, across all Owners (ADR 0005). */
 #define VD_MAX_DEVICES 8u
@@ -34,6 +35,28 @@ typedef uint32_t vd_status;
 #define VD_CMD_HELLO 1u
 #define VD_CMD_CREATE_DEVICE 2u
 #define VD_CMD_REMOVE_DEVICE 3u
+
+/*
+ * How an Owner reaches the driver (ADR 0010): open this path, one handle per
+ * Owner, then send each command as a buffered IOCTL.
+ */
+#define VIADUCT_DEVICE_PATH "\\\\.\\Viaduct"
+
+/*
+ * IOCTL code for a command: CTL_CODE(FILE_DEVICE_UNKNOWN, 0x800 + command,
+ * METHOD_BUFFERED, FILE_READ_ACCESS | FILE_WRITE_ACCESS), spelled out so this
+ * header needs no Windows headers.
+ */
+#define VD_IOCTL(command) ((0x22u << 16) | (3u << 14) | ((0x800u + (command)) << 2) | 0u)
+
+/*
+ * Every reply starts with this envelope, followed by the command's own reply
+ * (if any). The IOCTL itself succeeds whenever the command ran; the outcome is
+ * `status`. The output buffer must hold at least the envelope.
+ */
+typedef struct vd_reply_envelope {
+    vd_status status;
+} vd_reply_envelope;
 
 typedef struct vd_hello_request {
     uint16_t major;
@@ -74,6 +97,9 @@ typedef struct vd_remove_device_request {
 /* Ring capacity: a power of two within these bounds (about 5 ms to 1.4 s at 48 kHz). */
 #define VD_RING_MIN_FRAMES 256u
 #define VD_RING_MAX_FRAMES 65536u
+
+/* Largest Ring the driver will pin: the header plus VD_RING_MAX_FRAMES frames. */
+#define VD_RING_MAX_BYTES (192u + VD_RING_MAX_FRAMES * 4u)
 
 typedef struct vd_ring_header {
     /* Writer's line: only the writing side stores here. */

@@ -1,6 +1,6 @@
 //! Seam C: the clock (ADR 0007, ADR 0008).
 
-use viaduct_driver_core_tests::ffi::vd_clock_frames;
+use viaduct_driver_core_tests::ffi::{vd_clock_frames, vd_clock_ticks_for};
 
 const QPC_HZ: u64 = 10_000_000; // the usual Windows performance-counter rate
 
@@ -31,4 +31,34 @@ fn the_tick_counter_wrapping_past_its_maximum_still_gives_the_right_frames() {
     let frames = unsafe { vd_clock_frames(start, ten_ms_later, QPC_HZ, 48_000) };
 
     assert_eq!(frames, 480);
+}
+
+#[test]
+fn a_480_frame_packet_takes_100_000_ticks_at_48_khz() {
+    let ticks = unsafe { vd_clock_ticks_for(480, QPC_HZ, 48_000) };
+
+    assert_eq!(ticks, 100_000);
+}
+
+#[test]
+fn ticks_for_a_frame_count_are_the_first_moment_the_clock_reaches_it() {
+    // One frame at 48 kHz is 208.33 ticks: the clock reaches it on tick 209.
+    let ticks = unsafe { vd_clock_ticks_for(1, QPC_HZ, 48_000) };
+    let (before, at) = unsafe {
+        (
+            vd_clock_frames(0, ticks - 1, QPC_HZ, 48_000),
+            vd_clock_frames(0, ticks, QPC_HZ, 48_000),
+        )
+    };
+
+    assert_eq!((ticks, before, at), (209, 0, 1));
+}
+
+#[test]
+fn ticks_for_1000_days_of_frames_do_not_overflow() {
+    let frames = 4_147_200_000_000; // 1000 days at 48 kHz
+
+    let ticks = unsafe { vd_clock_ticks_for(frames, QPC_HZ, 48_000) };
+
+    assert_eq!(ticks, 1000 * 86_400 * QPC_HZ);
 }
