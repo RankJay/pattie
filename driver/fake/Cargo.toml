@@ -1,0 +1,13 @@
+[package]
+name = "viaduct-fake-driver"
+version = "0.0.0"
+edition.workspace = true
+publish = false
+description = "Test-only, in-process stand-in for the Viaduct driver: the real C core behind the SDK's transport (ADR 0012)"
+
+[dependencies]
+viaduct = { path = "../../sdk" }
+
+[build-dependencies]
+bindgen = "0.73.2"
+cc = "1.11.0"

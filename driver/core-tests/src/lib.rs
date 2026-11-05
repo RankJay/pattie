@@ -33,7 +33,11 @@ impl Driver {
     pub fn new() -> Self {
         let mut core = Box::new(unsafe { MaybeUninit::<vd_core>::zeroed().assume_init() });
         unsafe { vd_core_init(&mut *core) };
-        Driver { core, owners: Vec::new(), rings: HashMap::new() }
+        Driver {
+            core,
+            owners: Vec::new(),
+            rings: HashMap::new(),
+        }
     }
 
     /// Opens a new Owner connection.
@@ -83,7 +87,12 @@ impl Driver {
     }
 
     pub fn hello(&mut self, owner: OwnerRef, major: u16, minor: u16) -> vd_status {
-        self.send(owner, VD_CMD_HELLO, as_bytes(&vd_hello_request { major, minor })).0
+        self.send(
+            owner,
+            VD_CMD_HELLO,
+            as_bytes(&vd_hello_request { major, minor }),
+        )
+        .0
     }
 
     /// Sends Hello with the ABI version these tests were built against.
@@ -93,7 +102,12 @@ impl Driver {
     }
 
     /// Creates a Device with a fresh, valid Ring; returns its ID or the status.
-    pub fn create_device(&mut self, owner: OwnerRef, kind: u32, name: &str) -> Result<u32, vd_status> {
+    pub fn create_device(
+        &mut self,
+        owner: OwnerRef,
+        kind: u32,
+        name: &str,
+    ) -> Result<u32, vd_status> {
         let ring = RingMemory::new(DEFAULT_RING_FRAMES);
         self.create_device_with(owner, create_device_request(kind, name), Some(ring), 256)
     }
@@ -120,9 +134,14 @@ impl Driver {
         if status != VD_OK {
             return Err(status);
         }
-        assert_eq!(reply.len(), size_of::<vd_create_device_reply>(), "reply size");
+        assert_eq!(
+            reply.len(),
+            size_of::<vd_create_device_reply>(),
+            "reply size"
+        );
         let id = u32::from_ne_bytes(reply[..4].try_into().unwrap());
-        self.rings.insert(id, ring.expect("a Device was created without a Ring"));
+        self.rings
+            .insert(id, ring.expect("a Device was created without a Ring"));
         Ok(id)
     }
 
@@ -135,7 +154,11 @@ impl Driver {
     pub fn close(&mut self, owner: OwnerRef) -> Vec<u32> {
         let mut removed = [0u32; VD_MAX_DEVICES as usize];
         let count = unsafe {
-            vd_core_owner_closed(&mut *self.core, &*self.owners[owner.0], removed.as_mut_ptr())
+            vd_core_owner_closed(
+                &mut *self.core,
+                &*self.owners[owner.0],
+                removed.as_mut_ptr(),
+            )
         };
         let mut ids = removed[..count].to_vec();
         ids.sort();
@@ -144,7 +167,9 @@ impl Driver {
 
     /// The app's side of a Device's Ring.
     pub fn app_ring(&mut self, device_id: u32) -> &mut RingMemory {
-        self.rings.get_mut(&device_id).expect("no Ring was given for that Device")
+        self.rings
+            .get_mut(&device_id)
+            .expect("no Ring was given for that Device")
     }
 
     /// The shell streams from a Device, as Windows pulls Microphone audio.
@@ -203,7 +228,10 @@ impl RingMemory {
     pub fn with_claim(capacity_frames: u32, len: usize) -> Self {
         // Always back at least a whole header, so the claim can be written.
         let backing = len.max(size_of::<vd_ring_header>());
-        let mut memory = RingMemory { words: vec![0u64; backing.div_ceil(8)], len };
+        let mut memory = RingMemory {
+            words: vec![0u64; backing.div_ceil(8)],
+            len,
+        };
         memory.header_mut().capacity_frames = capacity_frames;
         memory
     }
@@ -230,7 +258,13 @@ impl RingMemory {
     }
 
     fn frames(&mut self) -> *mut f32 {
-        unsafe { self.words.as_mut_ptr().cast::<u8>().add(size_of::<vd_ring_header>()).cast() }
+        unsafe {
+            self.words
+                .as_mut_ptr()
+                .cast::<u8>()
+                .add(size_of::<vd_ring_header>())
+                .cast()
+        }
     }
 
     /// The app appends frames, as the SDK writer does for a Microphone.

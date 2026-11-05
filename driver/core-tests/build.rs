@@ -7,21 +7,23 @@ fn main() {
     let driver = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("..");
     let include = driver.join("include");
     let core = driver.join("core");
+    let probe = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("probe");
 
     let mut build = cc::Build::new();
     build
         .include(&include)
         .include(&core)
+        .include(&probe)
         .std("c17")
         .warnings(true)
         .warnings_into_errors(true);
-    for dir in [&include, &core] {
+    for dir in [&include, &core, &probe] {
         // Watching the folder too picks up newly added source files.
         println!("cargo:rerun-if-changed={}", dir.display());
         for entry in fs::read_dir(dir).unwrap() {
             let path = entry.unwrap().path();
             println!("cargo:rerun-if-changed={}", path.display());
-            if dir == &core && path.extension().is_some_and(|ext| ext == "c") {
+            if dir != &include && path.extension().is_some_and(|ext| ext == "c") {
                 build.file(&path);
             }
         }
@@ -30,6 +32,7 @@ fn main() {
 
     bindgen::Builder::default()
         .header(core.join("viaduct_core.h").to_string_lossy())
+        .header(probe.join("abi_probe.h").to_string_lossy())
         .clang_arg(format!("-I{}", include.display()))
         .allowlist_item("(vd|VD|VIADUCT)_.*")
         .rust_edition(bindgen::RustEdition::Edition2024)

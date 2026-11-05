@@ -1,0 +1,19 @@
+//! How the SDK reaches a driver (ADR 0012).
+//!
+//! Public so test backends (the in-process fake driver) can implement it, but not
+//! part of the supported API. A connection is one Owner: one open handle.
+
+use crate::Error;
+
+/// Something that can open Owner connections to a driver.
+pub trait Transport: Send + Sync {
+    fn connect(&self) -> Result<Box<dyn Connection>, Error>;
+}
+
+/// One open handle on the driver. Dropping it closes the handle, and the driver
+/// removes every Device this Owner created (ADR 0005).
+pub trait Connection: Send {
+    /// Sends one IOCTL exactly as the Windows driver receives it. Returns how many
+    /// bytes were written to `output` (reply envelope, then the command's reply).
+    fn ioctl(&mut self, code: u32, input: &[u8], output: &mut [u8]) -> Result<usize, Error>;
+}

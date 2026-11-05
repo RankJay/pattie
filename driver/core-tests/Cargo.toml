@@ -10,3 +10,6 @@ description = "Host-side tests for the pure C driver core (ADR 0002, ADR 0008)"
 [build-dependencies]
 bindgen = "0.73.2"
 cc = "1.11.0"
+
+[dev-dependencies]
+viaduct = { path = "../../sdk" }

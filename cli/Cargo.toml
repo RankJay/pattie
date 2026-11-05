@@ -1,0 +1,13 @@
+[package]
+name = "viaduct-cli"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+description = "Creates a Viaduct microphone or speaker from the command line, for testing the driver"
+
+[[bin]]
+name = "viaduct-cli"
+path = "src/main.rs"
+
+[dependencies]
+viaduct = { path = "../sdk" }
