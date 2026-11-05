@@ -1,0 +1,4 @@
+# bindgen (used by driver/core-tests) needs libclang. Visual Studio ships one;
+# an existing LIBCLANG_PATH in your environment takes precedence.
+[env]
+LIBCLANG_PATH = "C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/Llvm/x64/bin"

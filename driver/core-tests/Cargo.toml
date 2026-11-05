@@ -1,0 +1,12 @@
+[package]
+name = "viaduct-driver-core-tests"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "Host-side tests for the pure C driver core (ADR 0002, ADR 0008)"
+
+[dependencies]
+
+[build-dependencies]
+bindgen = "0.73.2"
+cc = "1.11.0"
