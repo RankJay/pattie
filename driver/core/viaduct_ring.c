@@ -26,6 +26,8 @@ vd_status vd_ring_attach(vd_ring *ring, void *memory, size_t memory_len)
     ring->capacity_frames = capacity;
     ring->read_frames = 0;
     ring->gap_frames = 0;
+    ring->write_frames = 0;
+    ring->overflow_frames = 0;
     return VD_OK;
 }
 
@@ -58,4 +60,30 @@ void vd_ring_read(vd_ring *ring, float *dst, uint32_t count)
     ring->gap_frames += count - n;
     vd_store_release_u64(&ring->shared->gap_frames, ring->gap_frames);
     vd_store_release_u64(&ring->shared->read_frames, ring->read_frames);
+}
+
+void vd_ring_write(vd_ring *ring, const float *src, uint32_t count)
+{
+    /* The reader counter is app-controlled: clamp it to what can be true. */
+    uint64_t read = vd_load_acquire_u64(&ring->shared->read_frames);
+    uint64_t unread = 0;
+    uint64_t room;
+    uint32_t n;
+
+    if (read <= ring->write_frames) {
+        unread = ring->write_frames - read;
+        if (unread > ring->capacity_frames) {
+            unread = ring->capacity_frames; /* impossible claim: treat as full */
+        }
+    }
+    room = ring->capacity_frames - unread;
+    n = room < count ? (uint32_t)room : count;
+
+    for (uint32_t i = 0; i < n; i++) {
+        ring->frames[(ring->write_frames + i) % ring->capacity_frames] = src[i];
+    }
+    ring->write_frames += n;
+    ring->overflow_frames += count - n; /* no room: the newest frames are dropped */
+    vd_store_release_u64(&ring->shared->overflow_frames, ring->overflow_frames);
+    vd_store_release_u64(&ring->shared->write_frames, ring->write_frames);
 }
