@@ -3,6 +3,15 @@
 
 _Static_assert(sizeof(vd_ring_header) == 192, "Ring header is three cache lines");
 
+/*
+ * Samples are only ever copied, never computed on, so they move as raw 32-bit
+ * patterns. That keeps every floating-point instruction out of the driver: no
+ * FPU state to worry about at raised IRQL, and no _fltused on x64. Silence is
+ * all-zero bits, which is exactly 0.0f.
+ */
+_Static_assert(sizeof(float) == sizeof(uint32_t), "samples are 32-bit");
+typedef uint32_t vd_sample_bits;
+
 vd_status vd_ring_attach(vd_ring *ring, void *memory, size_t memory_len)
 {
     const vd_ring_header *header = (const vd_ring_header *)memory;
@@ -50,11 +59,16 @@ void vd_ring_read(vd_ring *ring, float *dst, uint32_t count)
     }
     n = available < count ? (uint32_t)available : count;
 
-    for (uint32_t i = 0; i < n; i++) {
-        dst[i] = ring->frames[(ring->read_frames + i) % ring->capacity_frames];
-    }
-    for (uint32_t i = n; i < count; i++) {
-        dst[i] = 0.0f; /* the app fell behind: listeners hear silence */
+    {
+        const vd_sample_bits *frames = (const vd_sample_bits *)ring->frames;
+        vd_sample_bits *out = (vd_sample_bits *)dst;
+
+        for (uint32_t i = 0; i < n; i++) {
+            out[i] = frames[(ring->read_frames + i) % ring->capacity_frames];
+        }
+        for (uint32_t i = n; i < count; i++) {
+            out[i] = 0; /* the app fell behind: listeners hear silence */
+        }
     }
     ring->read_frames += n;
     ring->gap_frames += count - n;
@@ -79,8 +93,13 @@ void vd_ring_write(vd_ring *ring, const float *src, uint32_t count)
     room = ring->capacity_frames - unread;
     n = room < count ? (uint32_t)room : count;
 
-    for (uint32_t i = 0; i < n; i++) {
-        ring->frames[(ring->write_frames + i) % ring->capacity_frames] = src[i];
+    {
+        vd_sample_bits *frames = (vd_sample_bits *)ring->frames;
+        const vd_sample_bits *in = (const vd_sample_bits *)src;
+
+        for (uint32_t i = 0; i < n; i++) {
+            frames[(ring->write_frames + i) % ring->capacity_frames] = in[i];
+        }
     }
     ring->write_frames += n;
     ring->overflow_frames += count - n; /* no room: the newest frames are dropped */
