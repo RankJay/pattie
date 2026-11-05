@@ -18,6 +18,8 @@ typedef uint32_t vd_status;
 #define VD_OK 0u
 #define VD_ERR_HELLO_REQUIRED 1u    /* Hello must be the Owner's first command */
 #define VD_ERR_BUFFER_TOO_SMALL 2u  /* reply buffer can't hold the reply */
+#define VD_ERR_BAD_RING 3u          /* Ring memory or header is invalid */
+#define VD_ERR_BAD_REQUEST 4u       /* unknown command, or input of the wrong size */
 
 /* Commands an Owner can send. */
 #define VD_CMD_HELLO 1u
@@ -53,6 +55,10 @@ typedef struct vd_create_device_reply {
  * own cache line. Audio frames (32-bit float, mono in v0) follow the header
  * immediately; frame n lives at index n % capacity_frames.
  */
+/* Ring capacity: a power of two within these bounds (about 5 ms to 1.4 s at 48 kHz). */
+#define VD_RING_MIN_FRAMES 256u
+#define VD_RING_MAX_FRAMES 65536u
+
 typedef struct vd_ring_header {
     /* Writer's line: only the writing side stores here. */
     uint64_t write_frames;

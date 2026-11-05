@@ -39,10 +39,12 @@ vd_status vd_core_command(vd_core *core, vd_owner *owner, uint32_t command,
                           void *output, size_t output_cap, size_t *output_len)
 {
     (void)input;
-    (void)input_len;
     *output_len = 0;
 
     if (command == VD_CMD_HELLO) {
+        if (input_len != sizeof(vd_hello_request)) {
+            return VD_ERR_BAD_REQUEST;
+        }
         owner->greeted = true;
         return VD_OK;
     }
@@ -50,7 +52,10 @@ vd_status vd_core_command(vd_core *core, vd_owner *owner, uint32_t command,
         return VD_ERR_HELLO_REQUIRED;
     }
     if (command == VD_CMD_CREATE_DEVICE) {
+        if (input_len != sizeof(vd_create_device_request)) {
+            return VD_ERR_BAD_REQUEST;
+        }
         return create_device(core, output, output_cap, output_len);
     }
-    return VD_OK;
+    return VD_ERR_BAD_REQUEST;
 }
