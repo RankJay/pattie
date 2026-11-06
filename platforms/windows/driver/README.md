@@ -1,6 +1,6 @@
 # Viaduct driver shell
 
-The thin ACX/KMDF shell around the pure C core in `../core` (ADR 0002). It only
+The thin ACX/KMDF shell around the pure C core in `core/` (ADR 0002). It only
 translates between Windows and the core; every decision is made, and tested, in
 the core. Layout (ADR 0010, ADR 0011):
 
@@ -18,7 +18,7 @@ Needs Visual Studio's driver tools plus a matching Windows SDK and Driver Kit
 API-validator helper that can't check x64 drivers.
 
 ```bash
-"/c/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" driver/shell/viaduct.vcxproj -p:Configuration=Debug -p:Platform=x64
+"/c/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" platforms/windows/driver/viaduct.vcxproj -p:Configuration=Debug -p:Platform=x64
 ```
 
 Platforms: `x64`, `ARM64`. Configurations: `Debug`, `Release`. Add

@@ -3,7 +3,7 @@
 
 use std::mem::{offset_of, size_of};
 use viaduct::abi as rust;
-use viaduct_driver_core_tests::ffi as c;
+use viaduct_core_tests::ffi as c;
 
 #[test]
 fn version_status_command_and_kind_constants_match() {

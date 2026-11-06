@@ -1,5 +1,5 @@
 //! viaduct-cli: create a Viaduct Device from the command line, for testing the
-//! driver (first VM test, see driver/shell/README.md).
+//! driver (first VM test, see platforms/windows/driver/README.md).
 //!
 //!   viaduct-cli mic "Agent Mic" [--tone 440]   stream a sine tone into a microphone
 //!   viaduct-cli speaker "Agent Speaker"        show the level of what's played to it

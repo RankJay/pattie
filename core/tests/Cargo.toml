@@ -1,5 +1,5 @@
 [package]
-name = "viaduct-driver-core-tests"
+name = "viaduct-core-tests"
 version = "0.0.0"
 edition = "2024"
 publish = false
@@ -12,4 +12,4 @@ bindgen = "0.73.2"
 cc = "1.11.0"
 
 [dev-dependencies]
-viaduct = { path = "../../sdk" }
+viaduct = { path = "../../crates/viaduct" }

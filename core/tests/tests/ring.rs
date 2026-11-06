@@ -1,7 +1,7 @@
 //! Seam B: the Ring (ADR 0007, ADR 0008).
 
-use viaduct_driver_core_tests::Ring;
-use viaduct_driver_core_tests::ffi::*;
+use viaduct_core_tests::Ring;
+use viaduct_core_tests::ffi::*;
 
 #[test]
 fn memory_too_small_for_the_claimed_capacity_is_rejected() {

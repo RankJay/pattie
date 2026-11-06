@@ -1,6 +1,6 @@
-//! A plain-Rust mirror of `driver/include/viaduct_abi.h` (ADR 0012).
+//! A plain-Rust mirror of `core/include/viaduct_abi.h` (ADR 0012).
 //!
-//! Hand-written so apps don't need libclang to build. The core-tests crate checks
+//! Hand-written so apps don't need libclang to build. The core tests (core/tests) check
 //! every size, offset and constant here against bindgen's reading of the header,
 //! so the two can't drift silently (Seam S2). Within a major version the header
 //! only grows (ADR 0003): mirror additions, never change what's here.

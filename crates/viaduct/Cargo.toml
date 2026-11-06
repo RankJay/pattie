@@ -11,4 +11,4 @@ publish = false # the crates.io name is taken; rename before publishing (.ai/POS
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO"] }
 
 [dev-dependencies]
-viaduct-fake-driver = { path = "../driver/fake" }
+viaduct-fake-driver = { path = "../../testing/fake-driver" }

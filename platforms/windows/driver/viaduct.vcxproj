@@ -55,8 +55,8 @@
 
   <PropertyGroup>
     <TargetName>viaduct</TargetName>
-    <OutDir>$(MSBuildThisFileDirectory)..\..\target\driver\$(Platform)\$(Configuration)\</OutDir>
-    <IntDir>$(MSBuildThisFileDirectory)..\..\target\driver\obj\$(Platform)\$(Configuration)\</IntDir>
+    <OutDir>$(MSBuildThisFileDirectory)..\..\..\target\driver\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>$(MSBuildThisFileDirectory)..\..\..\target\driver\obj\$(Platform)\$(Configuration)\</IntDir>
     <EnableInf2cat>false</EnableInf2cat>
     <EnableDeployment>false</EnableDeployment>
   </PropertyGroup>
@@ -68,7 +68,7 @@
       <!-- The kernel toolset ignores LanguageStandard_C, so pass C17 directly. -->
       <AdditionalOptions>/std:c17 %(AdditionalOptions)</AdditionalOptions>
       <!-- kernel-crt first: kernel-safe stdint.h/stdbool.h shadow the user-mode MSVC ones. -->
-      <AdditionalIncludeDirectories>$(MSBuildThisFileDirectory)kernel-crt;$(MSBuildThisFileDirectory)..\include;$(MSBuildThisFileDirectory)..\core;$(DDK_INC_PATH)acx\km\1.1;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(MSBuildThisFileDirectory)kernel-crt;$(MSBuildThisFileDirectory)..\..\..\core\include;$(MSBuildThisFileDirectory)..\..\..\core\src;$(DDK_INC_PATH)acx\km\1.1;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>ACX_VERSION_MAJOR=1;ACX_VERSION_MINOR=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
@@ -78,9 +78,9 @@
   </ItemDefinitionGroup>
 
   <ItemGroup Label="Pure core (ADR 0002), compiled unchanged">
-    <ClCompile Include="..\core\viaduct_core.c" />
-    <ClCompile Include="..\core\viaduct_ring.c" />
-    <ClCompile Include="..\core\viaduct_clock.c" />
+    <ClCompile Include="..\..\..\core\src\viaduct_core.c" />
+    <ClCompile Include="..\..\..\core\src\viaduct_ring.c" />
+    <ClCompile Include="..\..\..\core\src\viaduct_clock.c" />
   </ItemGroup>
 
   <ItemGroup Label="Shell">

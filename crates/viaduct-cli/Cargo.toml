@@ -10,4 +10,4 @@ name = "viaduct-cli"
 path = "src/main.rs"
 
 [dependencies]
-viaduct = { path = "../sdk" }
+viaduct = { path = "../viaduct" }

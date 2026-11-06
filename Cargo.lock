@@ -230,7 +230,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "viaduct-driver-core-tests"
+name = "viaduct-core-tests"
 version = "0.0.0"
 dependencies = [
  "bindgen",

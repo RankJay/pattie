@@ -1,7 +1,7 @@
 //! An in-process stand-in for the Viaduct Windows driver (ADR 0012).
 //!
 //! It runs the real C core and mirrors the shell's control path
-//! (`driver/shell/src/control.c`): the same IOCTL codes, the same request bytes,
+//! (`platforms/windows/driver/src/control.c`): the same IOCTL codes, the same request bytes,
 //! the same reply envelope. Where the shell pins the app's Ring, the fake simply
 //! uses the address in the request, which is valid because it's the same process.
 //! Closing a connection does what the shell's file cleanup does.

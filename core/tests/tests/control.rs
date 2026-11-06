@@ -1,7 +1,7 @@
 //! Seam A: the control path (ADR 0008).
 
-use viaduct_driver_core_tests::ffi::*;
-use viaduct_driver_core_tests::{
+use viaduct_core_tests::ffi::*;
+use viaduct_core_tests::{
     DEFAULT_RING_FRAMES, Driver, RingMemory, as_bytes, create_device_request,
 };
 
@@ -161,7 +161,7 @@ fn first_microphone_created_gets_device_id_1() {
     assert_eq!(created, Ok(1));
 }
 
-fn greeted_driver() -> (Driver, viaduct_driver_core_tests::OwnerRef) {
+fn greeted_driver() -> (Driver, viaduct_core_tests::OwnerRef) {
     let mut driver = Driver::new();
     let owner = driver.connect();
     driver.greet(owner);
@@ -170,7 +170,7 @@ fn greeted_driver() -> (Driver, viaduct_driver_core_tests::OwnerRef) {
 
 fn send_create(
     driver: &mut Driver,
-    owner: viaduct_driver_core_tests::OwnerRef,
+    owner: viaduct_core_tests::OwnerRef,
     request: &vd_create_device_request,
 ) -> vd_status {
     driver

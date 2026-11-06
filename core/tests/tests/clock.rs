@@ -1,6 +1,6 @@
 //! Seam C: the clock (ADR 0007, ADR 0008).
 
-use viaduct_driver_core_tests::ffi::{vd_clock_frames, vd_clock_ticks_for};
+use viaduct_core_tests::ffi::{vd_clock_frames, vd_clock_ticks_for};
 
 const QPC_HZ: u64 = 10_000_000; // the usual Windows performance-counter rate
 

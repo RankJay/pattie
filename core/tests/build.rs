@@ -4,9 +4,9 @@
 use std::{env, fs, path::PathBuf};
 
 fn main() {
-    let driver = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("..");
-    let include = driver.join("include");
-    let core = driver.join("core");
+    let core_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("..");
+    let include = core_dir.join("include");
+    let core = core_dir.join("src");
     let probe = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("probe");
 
     let mut build = cc::Build::new();

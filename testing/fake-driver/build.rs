@@ -1,12 +1,12 @@
 //! Compiles the pure C driver core for the host and generates its bindings, the
-//! same way the core-tests crate does (ADR 0002).
+//! same way the core tests do (ADR 0002).
 
 use std::{env, fs, path::PathBuf};
 
 fn main() {
-    let driver = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("..");
-    let include = driver.join("include");
-    let core = driver.join("core");
+    let repo = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("../..");
+    let include = repo.join("core/include");
+    let core = repo.join("core/src");
 
     let mut build = cc::Build::new();
     build
