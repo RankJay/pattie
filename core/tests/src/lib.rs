@@ -349,6 +349,16 @@ impl Ring {
     pub fn driver_read(&mut self, dst: &mut [f32]) {
         unsafe { vd_ring_read(&mut *self.view, dst.as_mut_ptr(), dst.len() as u32) };
     }
+
+    /// As `driver_read`, when Windows streams the Microphone as 16-bit PCM.
+    pub fn driver_read_pcm16(&mut self, dst: &mut [i16]) {
+        unsafe { vd_ring_read_pcm16(&mut *self.view, dst.as_mut_ptr(), dst.len() as u32) };
+    }
+
+    /// As `driver_write`, when Windows plays 16-bit PCM to a Speaker.
+    pub fn driver_write_pcm16(&mut self, src: &[i16]) {
+        unsafe { vd_ring_write_pcm16(&mut *self.view, src.as_ptr(), src.len() as u32) };
+    }
 }
 
 /// The bytes of a plain C struct from the ABI, as the SDK would send them.

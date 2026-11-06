@@ -89,7 +89,11 @@ fn run_mic(name: &str, hz: f32) -> Result<(), String> {
                 chunk.push(0.2 * phase.sin());
                 phase = (phase + step) % TAU;
             }
-            written += tx.write(&chunk).map_err(|e| e.to_string())? as u64;
+            // Frames the Ring had no room for are dropped (and counted as Overflow);
+            // the tone's timeline moves on regardless, or a full Ring would make
+            // every later chunk larger.
+            tx.write(&chunk).map_err(|e| e.to_string())?;
+            written = due;
         }
         if start.elapsed() >= next_report {
             let stats = mic.stats();

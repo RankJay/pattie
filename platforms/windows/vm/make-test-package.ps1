@@ -12,7 +12,7 @@
     4. Collects everything the VM needs into target\vm-package\.
 
     It does not install, load or trust anything on this machine. Copy the package
-    folder into the VM and run install-in-vm.ps1 there (.ai/VM-PLAN.md).
+    folder into the VM and run install-in-vm.ps1 there (.ai/VM-STEPS.md).
 #>
 [CmdletBinding()]
 param(
@@ -51,17 +51,27 @@ Invoke-Tool 'Driver build' $msbuild @(
     (Join-Path $repo 'platforms\windows\driver\viaduct.vcxproj'), '-t:Rebuild',
     "-p:Configuration=$Configuration", '-p:Platform=x64', '-nologo', '-v:minimal')
 
-Write-Host '== Building viaduct-cli'
-Invoke-Tool 'viaduct-cli build' 'cargo' @(
-    'build', '--release', '-p', 'viaduct-cli', '--manifest-path', (Join-Path $repo 'Cargo.toml'))
+# Static C runtime: a clean Windows VM may lack VCRUNTIME140.dll (the Visual C++
+# Redistributable). Its own target folder keeps normal builds from recompiling.
+Write-Host '== Building viaduct-cli (static C runtime)'
+$cliTarget = Join-Path $repo 'target\vm-build'
+$env:RUSTFLAGS = '-C target-feature=+crt-static'
+try {
+    Invoke-Tool 'viaduct-cli build' 'cargo' @(
+        'build', '--release', '-p', 'viaduct-cli', '--manifest-path', (Join-Path $repo 'Cargo.toml'),
+        '--target-dir', $cliTarget)
+} finally {
+    Remove-Item Env:\RUSTFLAGS
+}
 
 Write-Host '== Collecting the package'
 if (Test-Path $package) { Remove-Item -Recurse -Force $package }
 New-Item -ItemType Directory -Force $package | Out-Null
 Copy-Item (Join-Path $driverOut 'viaduct.sys'), (Join-Path $driverOut 'viaduct.inf') $package
-Copy-Item (Join-Path $repo 'target\release\viaduct-cli.exe') $package
+Copy-Item (Join-Path $cliTarget 'release\viaduct-cli.exe') $package
 Copy-Item $devgen $package
-Copy-Item (Join-Path $PSScriptRoot 'install-in-vm.ps1') $package
+Copy-Item (Join-Path $PSScriptRoot 'prepare-vm.ps1'), (Join-Path $PSScriptRoot 'install-in-vm.ps1'),
+    (Join-Path $PSScriptRoot 'probe-endpoint.ps1') $package
 
 Write-Host '== Creating the catalog'
 Invoke-Tool 'Inf2Cat' $inf2cat @("/driver:$package", '/os:10_CO_X64', '/uselocaltime')

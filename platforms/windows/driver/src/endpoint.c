@@ -1,47 +1,25 @@
 /*
- * Circuit devices: one raw child of the root per live Device (ADR 0010).
+ * Circuit devices: one raw child of the root per live Device (ADR 0010). This
+ * file owns the child's lifecycle; its circuit is built in circuit.c and its
+ * audio interface values are written in interfaces.c.
  *
- * Runtime endpoints follow ACX's dynamic-circuit pattern: allocate a child with
- * WdfPdoInitAllocate, create it, hand it to ACX with AcxDeviceAddCircuitDevice,
- * and build its one circuit when it prepares hardware. Removal asks ACX to remove
- * the child, which completes asynchronously.
+ * Follows Microsoft's runtime circuit-device pattern (SdcaVad sample, the XU
+ * driver's dynamic capture devices): allocate a child with WdfPdoInitAllocate,
+ * create it and its one circuit, hand it to ACX with AcxDeviceAddCircuitDevice,
+ * and add the circuit the first time the child prepares its hardware. Later
+ * prepare-hardware calls (a rebalance, or the restart that installing the child's
+ * null driver causes) keep it, and there is no release-hardware callback: the
+ * circuit leaves only with the whole child, through AcxDeviceRemoveCircuitDevice,
+ * which completes asynchronously. Removing the circuit on release and re-adding
+ * it crashed inside ACX (VM, 2026-11-07).
  */
 #include "shell.h"
 
 static EVT_WDF_DEVICE_PREPARE_HARDWARE VdEvtCircuitDevicePrepareHardware;
-static EVT_WDF_DEVICE_RELEASE_HARDWARE VdEvtCircuitDeviceReleaseHardware;
 static EVT_WDF_OBJECT_CONTEXT_CLEANUP VdEvtCircuitDeviceCleanup;
 
+/* Hardware ID; the INF matches it to install the child's null driver. */
 DECLARE_CONST_UNICODE_STRING(VdCircuitDeviceId, L"Viaduct\\Endpoint");
-DECLARE_CONST_UNICODE_STRING(VdMicrophoneCircuitName, L"Microphone0");
-DECLARE_CONST_UNICODE_STRING(VdSpeakerCircuitName, L"Speaker0");
-
-/* The one format v0 supports: 48 kHz, mono, 32-bit float (ADR 0005). */
-static KSDATAFORMAT_WAVEFORMATEXTENSIBLE VdFormat = {
-    {
-        sizeof(KSDATAFORMAT_WAVEFORMATEXTENSIBLE),
-        0,
-        0,
-        0,
-        STATICGUIDOF(KSDATAFORMAT_TYPE_AUDIO),
-        STATICGUIDOF(KSDATAFORMAT_SUBTYPE_IEEE_FLOAT),
-        STATICGUIDOF(KSDATAFORMAT_SPECIFIER_WAVEFORMATEX),
-    },
-    {
-        {
-            WAVE_FORMAT_EXTENSIBLE,
-            1,                                       /* channels */
-            VD_SAMPLE_RATE,
-            VD_SAMPLE_RATE * VD_BYTES_PER_FRAME,     /* bytes per second */
-            VD_BYTES_PER_FRAME,                      /* block align */
-            32,                                      /* bits per sample */
-            sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX),
-        },
-        { 32 },                                      /* valid bits per sample */
-        KSAUDIO_SPEAKER_MONO,
-        STATICGUIDOF(KSDATAFORMAT_SUBTYPE_IEEE_FLOAT),
-    },
-};
 
 _Use_decl_annotations_
 NTSTATUS VdCircuitDeviceAdd(VD_DRIVER_CONTEXT *Ctx, UINT32 DeviceId,
@@ -98,11 +76,16 @@ NTSTATUS VdCircuitDeviceAdd(VD_DRIVER_CONTEXT *Ctx, UINT32 DeviceId,
 
     WDF_PNPPOWER_EVENT_CALLBACKS_INIT(&pnpCallbacks);
     pnpCallbacks.EvtDevicePrepareHardware = VdEvtCircuitDevicePrepareHardware;
-    pnpCallbacks.EvtDeviceReleaseHardware = VdEvtCircuitDeviceReleaseHardware;
     WdfDeviceInitSetPnpPowerEventCallbacks(init, &pnpCallbacks);
 
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&attributes, VD_CIRCUIT_DEVICE_CONTEXT);
     attributes.EvtCleanupCallback = VdEvtCircuitDeviceCleanup;
+    /*
+     * Default execution level, unlike the XU sample's passive one: our streams run
+     * a DISPATCH-level, automatically serialized timer under this device, which
+     * WDF refuses beneath a passive parent. Microsoft's AudioCodec sample, the one
+     * with a stream timer, keeps the default too.
+     */
     status = WdfDeviceCreate(&init, &attributes, &device);
     if (!NT_SUCCESS(status)) {
         WdfDeviceInitFree(init);
@@ -121,6 +104,10 @@ NTSTATUS VdCircuitDeviceAdd(VD_DRIVER_CONTEXT *Ctx, UINT32 DeviceId,
 
     ACX_DEVICE_CONFIG_INIT(&acxConfig);
     status = AcxDeviceInitialize(device, &acxConfig);
+    if (NT_SUCCESS(status)) {
+        /* Created with the device, before ACX sees it (Microsoft's pattern). */
+        status = VdCircuitCreate(device, deviceCtx);
+    }
     if (NT_SUCCESS(status)) {
         status = AcxDeviceAddCircuitDevice(Ctx->Root, device);
     }
@@ -177,87 +164,22 @@ static VOID VdEvtCircuitDeviceCleanup(WDFOBJECT Object)
     InterlockedExchange(&VdCircuitDeviceContext((WDFDEVICE)Object)->Deleted, 1);
 }
 
-static NTSTATUS VdCreateCircuit(WDFDEVICE Device, VD_CIRCUIT_DEVICE_CONTEXT *DeviceCtx)
+/*
+ * Names the child after its Device. Once Windows installs the child's null driver,
+ * the INF's description replaces the device text the PDO was created with, and the
+ * endpoint shows "Viaduct Audio Endpoint" (VM, 2026-11-07); the endpoint builder
+ * prefers the devnode's FriendlyName. Cosmetic, so a failure is ignored: it must
+ * never keep the endpoint from starting.
+ */
+static VOID VdAssignFriendlyName(WDFDEVICE Device, const VD_CIRCUIT_DEVICE_CONTEXT *DeviceCtx)
 {
-    BOOLEAN microphone = DeviceCtx->Kind == VD_KIND_MICROPHONE;
-    PACXCIRCUIT_INIT circuitInit;
-    ACX_PIN_CONFIG pinConfig;
-    ACX_DATAFORMAT_CONFIG formatConfig;
-    WDF_OBJECT_ATTRIBUTES attributes;
-    ACXCIRCUIT circuit;
-    ACXPIN pins[2];
-    ACXDATAFORMAT format;
-    ACXDATAFORMATLIST formatList;
-    NTSTATUS status;
+    WDF_DEVICE_PROPERTY_DATA property;
 
-    circuitInit = AcxCircuitInitAllocate(Device);
-    if (circuitInit == NULL) {
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
-    AcxCircuitInitSetComponentId(circuitInit, &VIADUCT_COMPONENT_GUID);
-    status = AcxCircuitInitAssignName(circuitInit,
-                                      microphone ? &VdMicrophoneCircuitName : &VdSpeakerCircuitName);
-    if (NT_SUCCESS(status)) {
-        AcxCircuitInitSetCircuitType(circuitInit, microphone ? AcxCircuitTypeCapture : AcxCircuitTypeRender);
-        status = AcxCircuitInitAssignAcxCreateStreamCallback(circuitInit, VdEvtCircuitCreateStream);
-    }
-    if (!NT_SUCCESS(status)) {
-        AcxCircuitInitFree(circuitInit);
-        return status;
-    }
-
-    WDF_OBJECT_ATTRIBUTES_INIT(&attributes);
-    status = AcxCircuitCreate(Device, &attributes, &circuitInit, &circuit);
-    if (!NT_SUCCESS(status)) {
-        return status; /* ACX frees circuitInit on failure */
-    }
-
-    /* Host pin: where Windows' audio engine streams. */
-    ACX_PIN_CONFIG_INIT(&pinConfig);
-    pinConfig.Type = microphone ? AcxPinTypeSource : AcxPinTypeSink;
-    pinConfig.Communication = AcxPinCommunicationSink;
-    pinConfig.Category = &KSCATEGORY_AUDIO;
-    WDF_OBJECT_ATTRIBUTES_INIT(&attributes);
-    attributes.ParentObject = circuit;
-    status = AcxPinCreate(circuit, &attributes, &pinConfig, &pins[0]);
-    if (!NT_SUCCESS(status)) {
-        return status;
-    }
-
-    /* Bridge pin: the "physical" end, a microphone or speaker. */
-    ACX_PIN_CONFIG_INIT(&pinConfig);
-    pinConfig.Type = microphone ? AcxPinTypeSink : AcxPinTypeSource;
-    pinConfig.Communication = AcxPinCommunicationNone;
-    pinConfig.Category = microphone ? &KSNODETYPE_MICROPHONE : &KSNODETYPE_SPEAKER;
-    WDF_OBJECT_ATTRIBUTES_INIT(&attributes);
-    attributes.ParentObject = circuit;
-    status = AcxPinCreate(circuit, &attributes, &pinConfig, &pins[1]);
-    if (!NT_SUCCESS(status)) {
-        return status;
-    }
-
-    ACX_DATAFORMAT_CONFIG_INIT_KS(&formatConfig, &VdFormat);
-    WDF_OBJECT_ATTRIBUTES_INIT(&attributes);
-    attributes.ParentObject = circuit;
-    status = AcxDataFormatCreate(Device, &attributes, &formatConfig, &format);
-    if (!NT_SUCCESS(status)) {
-        return status;
-    }
-    formatList = AcxPinGetRawDataFormatList(pins[0]);
-    if (formatList == NULL) {
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
-    status = AcxDataFormatListAddDataFormat(formatList, format);
-    if (!NT_SUCCESS(status)) {
-        return status;
-    }
-
-    status = AcxCircuitAddPins(circuit, pins, ARRAYSIZE(pins));
-    if (!NT_SUCCESS(status)) {
-        return status;
-    }
-    DeviceCtx->Circuit = circuit;
-    return STATUS_SUCCESS;
+    WDF_DEVICE_PROPERTY_DATA_INIT(&property, &DEVPKEY_Device_FriendlyName);
+    property.Lcid = LOCALE_NEUTRAL;
+    /* NameBuffer is zero-filled past the name, so it is NUL-terminated. */
+    (void)WdfDeviceAssignProperty(Device, &property, DEVPROP_TYPE_STRING,
+                                  DeviceCtx->Name.Length + sizeof(WCHAR), (PVOID)DeviceCtx->NameBuffer);
 }
 
 static NTSTATUS VdEvtCircuitDevicePrepareHardware(WDFDEVICE Device, WDFCMRESLIST Resources,
@@ -269,26 +191,19 @@ static NTSTATUS VdEvtCircuitDevicePrepareHardware(WDFDEVICE Device, WDFCMRESLIST
     UNREFERENCED_PARAMETER(Resources);
     UNREFERENCED_PARAMETER(ResourcesTranslated);
 
-    if (deviceCtx->Circuit == NULL) {
-        status = VdCreateCircuit(Device, deviceCtx);
-        if (!NT_SUCCESS(status)) {
-            return status;
-        }
-    }
-    if (deviceCtx->Circuit == NULL) {
-        return STATUS_INVALID_DEVICE_STATE;
-    }
-    return AcxDeviceAddCircuit(Device, deviceCtx->Circuit);
-}
+    /* Every prepare, so the name survives the restart that installing the child causes. */
+    VdAssignFriendlyName(Device, deviceCtx);
 
-static NTSTATUS VdEvtCircuitDeviceReleaseHardware(WDFDEVICE Device, WDFCMRESLIST ResourcesTranslated)
-{
-    VD_CIRCUIT_DEVICE_CONTEXT *deviceCtx = VdCircuitDeviceContext(Device);
-
-    UNREFERENCED_PARAMETER(ResourcesTranslated);
-
-    if (deviceCtx->Circuit != NULL) {
-        return AcxDeviceRemoveCircuit(Device, deviceCtx->Circuit);
+    if (deviceCtx->CircuitAdded) {
+        return STATUS_SUCCESS; /* rebalance or restart: keep the circuit */
     }
-    return STATUS_SUCCESS;
+    status = VdEndpointInterfacesPrepare(Device, deviceCtx);
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+    status = AcxDeviceAddCircuit(Device, deviceCtx->Circuit);
+    if (NT_SUCCESS(status)) {
+        deviceCtx->CircuitAdded = TRUE;
+    }
+    return status;
 }

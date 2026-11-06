@@ -92,6 +92,26 @@ void vd_ring_read(vd_ring *ring, float *dst, uint32_t count);
 void vd_ring_write(vd_ring *ring, const float *src, uint32_t count);
 
 /*
+ * Seam B, Windows-facing format (ADR 0005): Windows' audio endpoint builder needs a
+ * PCM device format, while the Ring and the app stay 32-bit float. Samples are
+ * converted with integer arithmetic on their IEEE-754 bit patterns, so the driver
+ * still has no floating-point code; samples cross this interface as bits.
+ *
+ * A float sample as 16-bit PCM: scaled by 32768, rounded half away from zero,
+ * clamped to [-32768, 32767]. NaN, denormals and anything that rounds to zero give 0.
+ */
+int16_t vd_pcm16_from_sample(uint32_t sample_bits);
+
+/* A 16-bit PCM sample as a float sample's bits: exactly pcm / 32768. */
+uint32_t vd_sample_from_pcm16(int16_t pcm);
+
+/* vd_ring_read, delivering 16-bit PCM: same Gap and overrun behaviour. */
+void vd_ring_read_pcm16(vd_ring *ring, int16_t *dst, uint32_t count);
+
+/* vd_ring_write, taking 16-bit PCM: same Overflow behaviour. */
+void vd_ring_write_pcm16(vd_ring *ring, const int16_t *src, uint32_t count);
+
+/*
  * Seam C: the clock. Frames a Device has played between two tick readings
  * the shell took (ticks at `tick_hz`), at `sample_rate` frames per second.
  */

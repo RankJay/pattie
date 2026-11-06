@@ -9,6 +9,15 @@
  *   circuit devices   one raw child per Device, carrying one capture or render
  *                     circuit, added and removed at runtime
  *
+ * Files, one concern each:
+ *
+ *   driver.c      DriverEntry and the root ACX device
+ *   control.c     the control device: Owners, commands, Ring pinning
+ *   endpoint.c    a circuit device's lifecycle: create, prepare, name, tear down
+ *   circuit.c     the circuit inside it: pins and the formats Windows may use
+ *   interfaces.c  the audio interface values an INF would normally write
+ *   stream.c      streaming: one copy per packet between Windows and the Ring
+ *
  * Lifetime rule: everything touching a Device's Ring from the streaming timer
  * holds the circuit device's rundown protection. Removal runs it down, then
  * unpins the Ring, all under the driver lock, so no Ring memory is touched after
@@ -26,6 +35,7 @@
 #include <ks.h>
 #include <ksmedia.h>
 #include <devguid.h>
+#include <devpkey.h>        /* DEVPKEY_Device_FriendlyName */
 #include <ntstrsafe.h>
 #include <ntintsafe.h>
 #include <wdf.h>
@@ -35,7 +45,9 @@
 
 #define VD_POOL_TAG 'dvaV'
 #define VD_SAMPLE_RATE 48000u
-#define VD_BYTES_PER_FRAME 4u   /* 32-bit float, mono (ADR 0005) */
+/* Frame sizes of the two mono formats Windows may stream in (ADR 0005). */
+#define VD_FLOAT_BYTES_PER_FRAME 4u   /* 32-bit float: the Ring's own format */
+#define VD_PCM16_BYTES_PER_FRAME 2u   /* 16-bit PCM: converted in the copy */
 
 /* Identifies Viaduct's circuits to ACX. */
 DEFINE_GUID(VIADUCT_COMPONENT_GUID,
@@ -48,7 +60,8 @@ typedef struct _VD_CIRCUIT_DEVICE_CONTEXT {
     vd_ring *Ring;                  /* in the core's table; only under Rundown */
     EX_RUNDOWN_REF Rundown;         /* streaming access to Ring */
     volatile LONG Deleted;          /* set once Windows starts deleting the device */
-    ACXCIRCUIT Circuit;
+    ACXCIRCUIT Circuit;             /* created with the device, kept until it is deleted */
+    BOOLEAN CircuitAdded;           /* added at the first prepare-hardware */
     UNICODE_STRING Name;
     WCHAR NameBuffer[VD_DEVICE_NAME_MAX + 1];
 } VD_CIRCUIT_DEVICE_CONTEXT;
@@ -94,6 +107,13 @@ NTSTATUS VdCircuitDeviceAdd(_In_ VD_DRIVER_CONTEXT *Ctx, _In_ UINT32 DeviceId,
                             _In_ const vd_create_device_request *Request,
                             _Out_ WDFDEVICE *CircuitDevice);
 VOID VdDeviceTeardown(_In_ VD_DRIVER_CONTEXT *Ctx, _In_ UINT32 DeviceId);
+
+/* circuit.c */
+PCUNICODE_STRING VdCircuitName(_In_ UINT32 Kind);
+NTSTATUS VdCircuitCreate(_In_ WDFDEVICE Device, _Inout_ VD_CIRCUIT_DEVICE_CONTEXT *DeviceCtx);
+
+/* interfaces.c */
+NTSTATUS VdEndpointInterfacesPrepare(_In_ WDFDEVICE Device, _In_ const VD_CIRCUIT_DEVICE_CONTEXT *DeviceCtx);
 
 /* stream.c */
 EVT_ACX_CIRCUIT_CREATE_STREAM VdEvtCircuitCreateStream;

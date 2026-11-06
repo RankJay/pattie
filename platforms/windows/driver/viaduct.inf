@@ -28,7 +28,18 @@ viaduct.sys = 1,,
 %ManufacturerName% = Viaduct,NT$ARCH$.10.0...22000
 
 [Viaduct.NT$ARCH$.10.0...22000]
-%Viaduct.DeviceDesc% = Viaduct_Device, Root\Viaduct
+%Viaduct.DeviceDesc%   = Viaduct_Device, Root\Viaduct
+%Viaduct.EndpointDesc% = Viaduct_Endpoint, Viaduct\Endpoint
+
+; Each runtime circuit device (hardware ID Viaduct\Endpoint) gets a null driver:
+; it stays raw, served by the root's viaduct.sys, but is installed as a MEDIA
+; device with a driver key, which Windows' audio endpoint builder needs before it
+; builds an endpoint (VM, 2026-11-06). Its interface values are written by the
+; driver at runtime, since they depend on the Device's kind and name (ADR 0010).
+[Viaduct_Endpoint.NT]
+
+[Viaduct_Endpoint.NT.Services]
+AddService = , 0x00000002       ; null service: no function driver, runs raw
 
 [Viaduct_Device.NT]
 CopyFiles = Viaduct_Device.NT.Copy
@@ -57,4 +68,5 @@ ProviderName        = "Viaduct"
 ManufacturerName    = "Viaduct"
 DiskName            = "Viaduct Installation Disk"
 Viaduct.DeviceDesc  = "Viaduct Virtual Audio"
+Viaduct.EndpointDesc = "Viaduct Audio Endpoint"
 Viaduct.ServiceDesc = "Viaduct Virtual Audio Driver"

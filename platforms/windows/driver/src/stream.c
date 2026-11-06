@@ -18,6 +18,8 @@ typedef struct _VD_STREAM_CONTEXT {
     PVOID Packets[VD_MAX_PACKETS];
     ULONG PacketCount;
     ULONG PacketSize;               /* bytes */
+    ULONG BytesPerFrame;            /* from the stream's format */
+    BOOLEAN Pcm16;                  /* 16-bit PCM, converted in the copy; else float, copied (ADR 0005) */
     ULONG FirstPacketOffset;
     ULONGLONG TickHz;
     volatile BOOLEAN Running;       /* cleared before the timer stops: passes only re-arm while set */
@@ -66,7 +68,7 @@ static ULONGLONG VdPosition(const VD_STREAM_CONTEXT *StreamCtx)
 /* Arms the timer for the end of the next packet, measured from when the stream started running. */
 static VOID VdScheduleNextPass(VD_STREAM_CONTEXT *StreamCtx)
 {
-    ULONGLONG packetFrames = StreamCtx->PacketSize / VD_BYTES_PER_FRAME;
+    ULONGLONG packetFrames = StreamCtx->PacketSize / StreamCtx->BytesPerFrame;
     ULONGLONG due = StreamCtx->RunStartTicks +
                     vd_clock_ticks_for((StreamCtx->PacketsSinceRun + 1) * packetFrames,
                                        StreamCtx->TickHz, VD_SAMPLE_RATE);
@@ -89,13 +91,19 @@ static VOID VdEvtStreamTimer(WDFTIMER Timer)
     VD_CIRCUIT_DEVICE_CONTEXT *device = streamCtx->Device;
     ULONG index = (ULONG)streamCtx->CurrentPacket % streamCtx->PacketCount;
     UCHAR *packet = (UCHAR *)streamCtx->Packets[index] + (index == 0 ? streamCtx->FirstPacketOffset : 0);
-    uint32_t frames = streamCtx->PacketSize / VD_BYTES_PER_FRAME;
+    uint32_t frames = streamCtx->PacketSize / streamCtx->BytesPerFrame;
     ULONGLONG completedAt;
     LONG completed;
 
     if (ExAcquireRundownProtection(&device->Rundown)) {
         if (device->Kind == VD_KIND_MICROPHONE) {
-            vd_ring_read(device->Ring, (float *)packet, frames);
+            if (streamCtx->Pcm16) {
+                vd_ring_read_pcm16(device->Ring, (int16_t *)packet, frames);
+            } else {
+                vd_ring_read(device->Ring, (float *)packet, frames);
+            }
+        } else if (streamCtx->Pcm16) {
+            vd_ring_write_pcm16(device->Ring, (const int16_t *)packet, frames);
         } else {
             vd_ring_write(device->Ring, (const float *)packet, frames);
         }
@@ -126,12 +134,20 @@ NTSTATUS VdEvtCircuitCreateStream(WDFDEVICE Device, ACXCIRCUIT Circuit, ACXPIN P
     VD_STREAM_CONTEXT *streamCtx;
     LARGE_INTEGER frequency;
     ACXSTREAM stream;
+    ULONG bytesPerFrame = AcxDataFormatGetBlockAlign(StreamFormat);
+    ULONG bitsPerSample = AcxDataFormatGetBitsPerSample(StreamFormat);
+    BOOLEAN pcm16 = bitsPerSample == 16 && bytesPerFrame == VD_PCM16_BYTES_PER_FRAME;
+    BOOLEAN ringFloat = bitsPerSample == 32 && bytesPerFrame == VD_FLOAT_BYTES_PER_FRAME;
     NTSTATUS status;
 
     UNREFERENCED_PARAMETER(Pin);
-    UNREFERENCED_PARAMETER(StreamFormat);  /* the pin offers exactly one format */
     UNREFERENCED_PARAMETER(SignalProcessingMode);
     UNREFERENCED_PARAMETER(VarArguments);
+
+    /* Only the host pin's two mono formats (circuit.c); refuse before anything is created. */
+    if (!pcm16 && !ringFloat) {
+        return STATUS_NOT_SUPPORTED;
+    }
 
     ACX_STREAM_CALLBACKS_INIT(&streamCallbacks);
     streamCallbacks.EvtAcxStreamPrepareHardware = VdEvtStreamPrepareHardware;
@@ -169,6 +185,8 @@ NTSTATUS VdEvtCircuitCreateStream(WDFDEVICE Device, ACXCIRCUIT Circuit, ACXPIN P
     streamCtx = VdStreamContext(stream);
     streamCtx->Stream = stream;
     streamCtx->Device = VdCircuitDeviceContext(Device);
+    streamCtx->BytesPerFrame = bytesPerFrame;
+    streamCtx->Pcm16 = pcm16;
     KeQueryPerformanceCounter(&frequency);
     streamCtx->TickHz = (ULONGLONG)frequency.QuadPart;
     return STATUS_SUCCESS;
@@ -195,6 +213,7 @@ static NTSTATUS VdEvtStreamPrepareHardware(ACXSTREAM Stream)
     return status;
 }
 
+/* Pause to Stop, as Microsoft's ACX stream engine does it: the next start begins at packet 0. */
 static NTSTATUS VdEvtStreamReleaseHardware(ACXSTREAM Stream)
 {
     VD_STREAM_CONTEXT *streamCtx = VdStreamContext(Stream);
@@ -202,7 +221,16 @@ static NTSTATUS VdEvtStreamReleaseHardware(ACXSTREAM Stream)
     streamCtx->Running = FALSE;
     if (streamCtx->Timer != NULL) {
         (void)WdfTimerStop(streamCtx->Timer, TRUE);
+        WdfObjectDelete(streamCtx->Timer);
+        streamCtx->Timer = NULL;
     }
+    KeFlushQueuedDpcs();
+
+    streamCtx->PausedFrames = 0;
+    streamCtx->PacketsSinceRun = 0;
+    InterlockedExchange(&streamCtx->CurrentPacket, 0);
+    InterlockedExchange64(&streamCtx->LastPacketStart, 0);
+    InterlockedExchange64(&streamCtx->CurrentPacketStart, 0);
     return STATUS_SUCCESS;
 }
 
@@ -287,7 +315,7 @@ static NTSTATUS VdEvtStreamAllocateRtPackets(ACXSTREAM Stream, ULONG PacketCount
 
     *Packets = NULL;
     if (PacketCount == 0 || PacketCount > VD_MAX_PACKETS || PacketSize == 0 ||
-        PacketSize % VD_BYTES_PER_FRAME != 0) {
+        PacketSize % streamCtx->BytesPerFrame != 0) {
         return STATUS_INVALID_PARAMETER;
     }
     status = RtlULongAdd(PacketSize, PAGE_SIZE - 1, &allocation);

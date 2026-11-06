@@ -42,12 +42,15 @@ vd_status vd_ring_attach(vd_ring *ring, void *memory, size_t memory_len)
     return VD_OK;
 }
 
-void vd_ring_read(vd_ring *ring, float *dst, uint32_t count)
+/*
+ * How many of `count` frames the reader can take now. The writer counter is
+ * app-controlled: never trust it further than this. An overrun skips ahead to
+ * the oldest intact frame (ADR 0007).
+ */
+static uint32_t vd_ring_readable(vd_ring *ring, uint32_t count)
 {
-    /* The writer counter is app-controlled: never trust it further than this. */
     uint64_t written = vd_load_acquire_u64(&ring->shared->write_frames);
     uint64_t available;
-    uint32_t n;
 
     if (written < ring->read_frames) {
         available = 0; /* moved backwards: nothing valid to read */
@@ -59,32 +62,24 @@ void vd_ring_read(vd_ring *ring, float *dst, uint32_t count)
             available = ring->capacity_frames;
         }
     }
-    n = available < count ? (uint32_t)available : count;
+    return available < count ? (uint32_t)available : count;
+}
 
-    {
-        const vd_sample_bits *frames = (const vd_sample_bits *)ring->frames;
-        vd_sample_bits *out = (vd_sample_bits *)dst;
-
-        for (uint32_t i = 0; i < n; i++) {
-            out[i] = frames[(ring->read_frames + i) % ring->capacity_frames];
-        }
-        for (uint32_t i = n; i < count; i++) {
-            out[i] = 0; /* the app fell behind: listeners hear silence */
-        }
-    }
-    ring->read_frames += n;
-    ring->gap_frames += count - n;
+/* Publishes a read of `taken` frames out of `count` asked for; the rest were silence. */
+static void vd_ring_read_done(vd_ring *ring, uint32_t taken, uint32_t count)
+{
+    ring->read_frames += taken;
+    ring->gap_frames += count - taken;
     vd_store_release_u64(&ring->shared->gap_frames, ring->gap_frames);
     vd_store_release_u64(&ring->shared->read_frames, ring->read_frames);
 }
 
-void vd_ring_write(vd_ring *ring, const float *src, uint32_t count)
+/* How many of `count` frames fit now. The reader counter is app-controlled: clamp it. */
+static uint32_t vd_ring_writable(vd_ring *ring, uint32_t count)
 {
-    /* The reader counter is app-controlled: clamp it to what can be true. */
     uint64_t read = vd_load_acquire_u64(&ring->shared->read_frames);
     uint64_t unread = 0;
     uint64_t room;
-    uint32_t n;
 
     if (read <= ring->write_frames) {
         unread = ring->write_frames - read;
@@ -93,18 +88,66 @@ void vd_ring_write(vd_ring *ring, const float *src, uint32_t count)
         }
     }
     room = ring->capacity_frames - unread;
-    n = room < count ? (uint32_t)room : count;
+    return room < count ? (uint32_t)room : count;
+}
 
-    {
-        vd_sample_bits *frames = (vd_sample_bits *)ring->frames;
-        const vd_sample_bits *in = (const vd_sample_bits *)src;
-
-        for (uint32_t i = 0; i < n; i++) {
-            frames[(ring->write_frames + i) % ring->capacity_frames] = in[i];
-        }
-    }
-    ring->write_frames += n;
-    ring->overflow_frames += count - n; /* no room: the newest frames are dropped */
+/* Publishes a write of `stored` frames out of `count` offered; the rest were dropped. */
+static void vd_ring_write_done(vd_ring *ring, uint32_t stored, uint32_t count)
+{
+    ring->write_frames += stored;
+    ring->overflow_frames += count - stored; /* no room: the newest frames are dropped */
     vd_store_release_u64(&ring->shared->overflow_frames, ring->overflow_frames);
     vd_store_release_u64(&ring->shared->write_frames, ring->write_frames);
+}
+
+void vd_ring_read(vd_ring *ring, float *dst, uint32_t count)
+{
+    uint32_t n = vd_ring_readable(ring, count);
+    const vd_sample_bits *frames = (const vd_sample_bits *)ring->frames;
+    vd_sample_bits *out = (vd_sample_bits *)dst;
+
+    for (uint32_t i = 0; i < n; i++) {
+        out[i] = frames[(ring->read_frames + i) % ring->capacity_frames];
+    }
+    for (uint32_t i = n; i < count; i++) {
+        out[i] = 0; /* the app fell behind: listeners hear silence */
+    }
+    vd_ring_read_done(ring, n, count);
+}
+
+void vd_ring_read_pcm16(vd_ring *ring, int16_t *dst, uint32_t count)
+{
+    uint32_t n = vd_ring_readable(ring, count);
+    const vd_sample_bits *frames = (const vd_sample_bits *)ring->frames;
+
+    for (uint32_t i = 0; i < n; i++) {
+        dst[i] = vd_pcm16_from_sample(frames[(ring->read_frames + i) % ring->capacity_frames]);
+    }
+    for (uint32_t i = n; i < count; i++) {
+        dst[i] = 0;
+    }
+    vd_ring_read_done(ring, n, count);
+}
+
+void vd_ring_write(vd_ring *ring, const float *src, uint32_t count)
+{
+    uint32_t n = vd_ring_writable(ring, count);
+    vd_sample_bits *frames = (vd_sample_bits *)ring->frames;
+    const vd_sample_bits *in = (const vd_sample_bits *)src;
+
+    for (uint32_t i = 0; i < n; i++) {
+        frames[(ring->write_frames + i) % ring->capacity_frames] = in[i];
+    }
+    vd_ring_write_done(ring, n, count);
+}
+
+void vd_ring_write_pcm16(vd_ring *ring, const int16_t *src, uint32_t count)
+{
+    uint32_t n = vd_ring_writable(ring, count);
+    vd_sample_bits *frames = (vd_sample_bits *)ring->frames;
+
+    for (uint32_t i = 0; i < n; i++) {
+        frames[(ring->write_frames + i) % ring->capacity_frames] = vd_sample_from_pcm16(src[i]);
+    }
+    vd_ring_write_done(ring, n, count);
 }
