@@ -359,6 +359,12 @@ impl Ring {
     pub fn driver_write_pcm16(&mut self, src: &[i16]) {
         unsafe { vd_ring_write_pcm16(&mut *self.view, src.as_ptr(), src.len() as u32) };
     }
+
+    /// A recording starts: the driver drops stale Microphone audio, keeping at
+    /// most `keep_frames` of the newest (ADR 0014).
+    pub fn driver_skip_stale(&mut self, keep_frames: u32) {
+        unsafe { vd_ring_skip_stale(&mut *self.view, keep_frames) };
+    }
 }
 
 /// The bytes of a plain C struct from the ABI, as the SDK would send them.

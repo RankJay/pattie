@@ -30,6 +30,16 @@ typedef struct _VD_STREAM_CONTEXT {
     volatile LONG CurrentPacket;
     volatile LONG64 LastPacketStart;
     volatile LONG64 CurrentPacketStart;
+    /*
+     * Timing since the stream last started running, reported in the StreamStopped
+     * event (trace.h). Written by the timer pass and Run only; read after the timer
+     * is stopped and waited for.
+     */
+    ULONGLONG DueTicks;             /* when the armed pass should fire */
+    ULONGLONG Passes;
+    ULONGLONG LatePasses;           /* armed when already due: the timer fell behind */
+    ULONGLONG MaxLatenessTicks;     /* worst pass: fired this long after it was due */
+    ULONGLONG TotalLatenessTicks;
 } VD_STREAM_CONTEXT;
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(VD_STREAM_CONTEXT, VdStreamContext)
 
@@ -56,6 +66,40 @@ static ULONGLONG VdNow(void)
     return (ULONGLONG)KeQueryPerformanceCounter(NULL).QuadPart;
 }
 
+/* Ticks as microseconds, with the core clock's overflow-safe conversion. */
+static ULONGLONG VdTicksToUs(const VD_STREAM_CONTEXT *StreamCtx, ULONGLONG Ticks)
+{
+    return vd_clock_frames(0, Ticks, StreamCtx->TickHz, 1000000u);
+}
+
+/*
+ * The StreamStopped event: how the timer kept up since the stream last ran, plus
+ * the Ring's Gap and Overflow totals. Called with the timer stopped.
+ */
+static VOID VdTraceStreamStopped(const VD_STREAM_CONTEXT *StreamCtx, const char *Reason)
+{
+    VD_CIRCUIT_DEVICE_CONTEXT *device = StreamCtx->Device;
+    ULONGLONG gapFrames = 0;
+    ULONGLONG overflowFrames = 0;
+    ULONGLONG averageLatenessTicks = StreamCtx->Passes == 0 ? 0 : StreamCtx->TotalLatenessTicks / StreamCtx->Passes;
+
+    if (ExAcquireRundownProtection(&device->Rundown)) {
+        gapFrames = device->Ring->gap_frames;
+        overflowFrames = device->Ring->overflow_frames;
+        ExReleaseRundownProtection(&device->Rundown);
+    }
+    TraceLoggingWrite(VdTraceProvider, "StreamStopped",
+                      TraceLoggingLevel(VD_TRACE_LEVEL_INFO),
+                      TraceLoggingUInt32(device->DeviceId, "DeviceId"),
+                      TraceLoggingString(Reason, "Reason"),
+                      TraceLoggingUInt64(StreamCtx->Passes, "Passes"),
+                      TraceLoggingUInt64(StreamCtx->LatePasses, "LatePasses"),
+                      TraceLoggingUInt64(VdTicksToUs(StreamCtx, StreamCtx->MaxLatenessTicks), "MaxLatenessUs"),
+                      TraceLoggingUInt64(VdTicksToUs(StreamCtx, averageLatenessTicks), "AvgLatenessUs"),
+                      TraceLoggingUInt64(gapFrames, "RingGapFrames"),
+                      TraceLoggingUInt64(overflowFrames, "RingOverflowFrames"));
+}
+
 static ULONGLONG VdPosition(const VD_STREAM_CONTEXT *StreamCtx)
 {
     if (!StreamCtx->Running) {
@@ -75,7 +119,10 @@ static VOID VdScheduleNextPass(VD_STREAM_CONTEXT *StreamCtx)
     ULONGLONG now = VdNow();
     LONGLONG wait = -1; /* due already: fire as soon as possible */
 
-    if (due > now) {
+    StreamCtx->DueTicks = due;
+    if (due <= now) {
+        StreamCtx->LatePasses++;
+    } else {
         /* Timer waits are in 100 ns units: the core clock converts ticks at 10 MHz. */
         wait = -(LONGLONG)vd_clock_frames(now, due, StreamCtx->TickHz, 10000000u);
         if (wait == 0) {
@@ -92,8 +139,19 @@ static VOID VdEvtStreamTimer(WDFTIMER Timer)
     ULONG index = (ULONG)streamCtx->CurrentPacket % streamCtx->PacketCount;
     UCHAR *packet = (UCHAR *)streamCtx->Packets[index] + (index == 0 ? streamCtx->FirstPacketOffset : 0);
     uint32_t frames = streamCtx->PacketSize / streamCtx->BytesPerFrame;
+    ULONGLONG firedAt = VdNow();
     ULONGLONG completedAt;
     LONG completed;
+
+    if (firedAt > streamCtx->DueTicks) {
+        ULONGLONG lateness = firedAt - streamCtx->DueTicks;
+
+        streamCtx->TotalLatenessTicks += lateness;
+        if (lateness > streamCtx->MaxLatenessTicks) {
+            streamCtx->MaxLatenessTicks = lateness;
+        }
+    }
+    streamCtx->Passes++;
 
     if (ExAcquireRundownProtection(&device->Rundown)) {
         if (device->Kind == VD_KIND_MICROPHONE) {
@@ -189,6 +247,16 @@ NTSTATUS VdEvtCircuitCreateStream(WDFDEVICE Device, ACXCIRCUIT Circuit, ACXPIN P
     streamCtx->Pcm16 = pcm16;
     KeQueryPerformanceCounter(&frequency);
     streamCtx->TickHz = (ULONGLONG)frequency.QuadPart;
+
+    /* Which format Windows opened the stream in: float, or PCM16 through the conversion. */
+    TraceLoggingWrite(VdTraceProvider, "StreamCreated",
+                      TraceLoggingLevel(VD_TRACE_LEVEL_INFO),
+                      TraceLoggingUInt32(streamCtx->Device->DeviceId, "DeviceId"),
+                      TraceLoggingUInt32(streamCtx->Device->Kind, "Kind"),
+                      TraceLoggingBoolean(pcm16, "Pcm16"),
+                      TraceLoggingUInt32(bitsPerSample, "BitsPerSample"),
+                      TraceLoggingUInt32(bytesPerFrame, "BlockAlign"),
+                      TraceLoggingUInt32(AcxDataFormatGetSampleRate(StreamFormat), "SampleRate"));
     return STATUS_SUCCESS;
 }
 
@@ -217,6 +285,7 @@ static NTSTATUS VdEvtStreamPrepareHardware(ACXSTREAM Stream)
 static NTSTATUS VdEvtStreamReleaseHardware(ACXSTREAM Stream)
 {
     VD_STREAM_CONTEXT *streamCtx = VdStreamContext(Stream);
+    BOOLEAN wasRunning = streamCtx->Running;
 
     streamCtx->Running = FALSE;
     if (streamCtx->Timer != NULL) {
@@ -225,6 +294,9 @@ static NTSTATUS VdEvtStreamReleaseHardware(ACXSTREAM Stream)
         streamCtx->Timer = NULL;
     }
     KeFlushQueuedDpcs();
+    if (wasRunning) {
+        VdTraceStreamStopped(streamCtx, "Release"); /* a Pause already reported otherwise */
+    }
 
     streamCtx->PausedFrames = 0;
     streamCtx->PacketsSinceRun = 0;
@@ -234,9 +306,33 @@ static NTSTATUS VdEvtStreamReleaseHardware(ACXSTREAM Stream)
     return STATUS_SUCCESS;
 }
 
+/*
+ * A Microphone starting to record: drop audio the app wrote while nobody was
+ * recording, keeping one packet, so the first packet is fresh (ADR 0014). Returns
+ * the frames dropped, for the StreamRun event.
+ */
+static ULONGLONG VdSkipStaleCapture(VD_STREAM_CONTEXT *StreamCtx)
+{
+    VD_CIRCUIT_DEVICE_CONTEXT *device = StreamCtx->Device;
+    ULONGLONG skipped = 0;
+
+    if (device->Kind != VD_KIND_MICROPHONE || !ExAcquireRundownProtection(&device->Rundown)) {
+        return 0;
+    }
+    {
+        uint64_t before = device->Ring->read_frames;
+
+        vd_ring_skip_stale(device->Ring, StreamCtx->PacketSize / StreamCtx->BytesPerFrame);
+        skipped = device->Ring->read_frames - before;
+    }
+    ExReleaseRundownProtection(&device->Rundown);
+    return skipped;
+}
+
 static NTSTATUS VdEvtStreamRun(ACXSTREAM Stream)
 {
     VD_STREAM_CONTEXT *streamCtx = VdStreamContext(Stream);
+    ULONGLONG skippedFrames;
 
     if (streamCtx->Running) {
         return STATUS_SUCCESS;
@@ -247,6 +343,15 @@ static NTSTATUS VdEvtStreamRun(ACXSTREAM Stream)
     streamCtx->RunStartTicks = VdNow();
     streamCtx->RunStartFrames = streamCtx->PausedFrames;
     streamCtx->PacketsSinceRun = 0;
+    streamCtx->Passes = 0;
+    streamCtx->LatePasses = 0;
+    streamCtx->MaxLatenessTicks = 0;
+    streamCtx->TotalLatenessTicks = 0;
+    skippedFrames = VdSkipStaleCapture(streamCtx); /* before the timer is armed */
+    TraceLoggingWrite(VdTraceProvider, "StreamRun",
+                      TraceLoggingLevel(VD_TRACE_LEVEL_INFO),
+                      TraceLoggingUInt32(streamCtx->Device->DeviceId, "DeviceId"),
+                      TraceLoggingUInt64(skippedFrames, "StaleFramesSkipped"));
     InterlockedExchange64(&streamCtx->CurrentPacketStart, (LONG64)streamCtx->RunStartTicks);
     streamCtx->Running = TRUE;
     VdScheduleNextPass(streamCtx);
@@ -267,6 +372,7 @@ static NTSTATUS VdEvtStreamPause(ACXSTREAM Stream)
         (void)WdfTimerStop(streamCtx->Timer, TRUE); /* waits for that pass */
         streamCtx->PausedFrames = frames;
     }
+    VdTraceStreamStopped(streamCtx, "Pause");
     return STATUS_SUCCESS;
 }
 
@@ -357,6 +463,14 @@ static NTSTATUS VdEvtStreamAllocateRtPackets(ACXSTREAM Stream, ULONG PacketCount
     streamCtx->PacketCount = PacketCount;
     streamCtx->PacketSize = PacketSize;
     streamCtx->FirstPacketOffset = allocation - PacketSize;
+
+    /* The engine's buffering: PacketCount packets of PacketFrames each. */
+    TraceLoggingWrite(VdTraceProvider, "PacketsAllocated",
+                      TraceLoggingLevel(VD_TRACE_LEVEL_INFO),
+                      TraceLoggingUInt32(streamCtx->Device->DeviceId, "DeviceId"),
+                      TraceLoggingUInt32(PacketCount, "PacketCount"),
+                      TraceLoggingUInt32(PacketSize, "PacketBytes"),
+                      TraceLoggingUInt32(PacketSize / streamCtx->BytesPerFrame, "PacketFrames"));
     *Packets = packets;
     return STATUS_SUCCESS;
 }

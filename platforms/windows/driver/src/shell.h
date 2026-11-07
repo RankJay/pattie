@@ -17,6 +17,7 @@
  *   circuit.c     the circuit inside it: pins and the formats Windows may use
  *   interfaces.c  the audio interface values an INF would normally write
  *   stream.c      streaming: one copy per packet between Windows and the Ring
+ *   trace.c       the driver's ETW provider (trace.h)
  *
  * Lifetime rule: everything touching a Device's Ring from the streaming timer
  * holds the circuit device's rundown protection. Removal runs it down, then
@@ -42,6 +43,7 @@
 #include <acx.h>
 
 #include "viaduct_core.h"
+#include "trace.h"
 
 #define VD_POOL_TAG 'dvaV'
 #define VD_SAMPLE_RATE 48000u
@@ -60,6 +62,7 @@ typedef struct _VD_CIRCUIT_DEVICE_CONTEXT {
     vd_ring *Ring;                  /* in the core's table; only under Rundown */
     EX_RUNDOWN_REF Rundown;         /* streaming access to Ring */
     volatile LONG Deleted;          /* set once Windows starts deleting the device */
+    ULONG64 ChildId;                /* stable ID from kind + name; 0 once released */
     ACXCIRCUIT Circuit;             /* created with the device, kept until it is deleted */
     BOOLEAN CircuitAdded;           /* added at the first prepare-hardware */
     UNICODE_STRING Name;
@@ -80,6 +83,12 @@ typedef struct _VD_DRIVER_CONTEXT {
     WDFDEVICE Root;
     WDFDEVICE Control;
     VD_SLOT Slots[VD_MAX_DEVICES];
+    /*
+     * Stable IDs of circuit devices not yet deleted by Windows: live ones plus
+     * ones still being removed (removal is asynchronous). Claimed under Lock,
+     * released lock-free by the device's cleanup. 0: free. ADR 0015.
+     */
+    volatile LONG64 ChildIds[2 * VD_MAX_DEVICES];
 } VD_DRIVER_CONTEXT;
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(VD_DRIVER_CONTEXT, VdDriverContext)
 

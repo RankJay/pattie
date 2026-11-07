@@ -8,8 +8,14 @@
 #include "shell.h"
 
 static EVT_WDF_DRIVER_DEVICE_ADD VdEvtRootDeviceAdd;
+static EVT_WDF_DRIVER_UNLOAD VdEvtDriverUnload;
 static EVT_WDF_OBJECT_CONTEXT_CLEANUP VdEvtRootCleanup;
 
+/*
+ * The trace provider is registered before anything else and unregistered if
+ * anything after it fails: WDF never calls the unload callback when DriverEntry
+ * fails (trace.c).
+ */
 NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 {
     WDF_DRIVER_CONFIG config;
@@ -19,22 +25,35 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     VD_DRIVER_CONTEXT *ctx;
     NTSTATUS status;
 
+    status = TraceLoggingRegister(VdTraceProvider);
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+
     WDF_DRIVER_CONFIG_INIT(&config, VdEvtRootDeviceAdd);
+    config.EvtDriverUnload = VdEvtDriverUnload;
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&attributes, VD_DRIVER_CONTEXT);
     status = WdfDriverCreate(DriverObject, RegistryPath, &attributes, &config, &driver);
-    if (!NT_SUCCESS(status)) {
-        return status;
+    if (NT_SUCCESS(status)) {
+        ctx = VdDriverContext(driver); /* zeroed by WDF */
+        vd_core_init(&ctx->Core);
+        status = WdfWaitLockCreate(WDF_NO_OBJECT_ATTRIBUTES, &ctx->Lock);
     }
-
-    ctx = VdDriverContext(driver); /* zeroed by WDF */
-    vd_core_init(&ctx->Core);
-    status = WdfWaitLockCreate(WDF_NO_OBJECT_ATTRIBUTES, &ctx->Lock);
-    if (!NT_SUCCESS(status)) {
-        return status;
+    if (NT_SUCCESS(status)) {
+        ACX_DRIVER_CONFIG_INIT(&acxConfig);
+        status = AcxDriverInitialize(driver, &acxConfig);
     }
+    if (!NT_SUCCESS(status)) {
+        TraceLoggingUnregister(VdTraceProvider);
+    }
+    return status;
+}
 
-    ACX_DRIVER_CONFIG_INIT(&acxConfig);
-    return AcxDriverInitialize(driver, &acxConfig);
+static VOID VdEvtDriverUnload(WDFDRIVER Driver)
+{
+    UNREFERENCED_PARAMETER(Driver);
+
+    TraceLoggingUnregister(VdTraceProvider);
 }
 
 static NTSTATUS VdEvtRootDeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT DeviceInit)

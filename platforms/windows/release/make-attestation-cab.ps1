@@ -1,0 +1,91 @@
+<#
+.SYNOPSIS
+    Builds the .cab to submit to Microsoft's Partner Center for attestation
+    signing. Runs on the host; it signs nothing and installs nothing.
+
+.DESCRIPTION
+    1. Builds the Release driver (x64) with DriverVer's version set to -Version.
+    2. Checks the stamped INF carries that version.
+    3. Stages viaduct.inf, viaduct.sys and viaduct.pdb in one subfolder (Partner
+       Center wants no files at the cab's root, one subfolder per driver package)
+       and packs them with makecab into target\attestation\viaduct-<Version>.cab.
+
+    No catalog is made: Microsoft creates and signs it. The cab itself must then
+    be signed with the company's EV code-signing certificate before upload; the
+    script prints the signtool command, since that certificate lives on its own
+    token or service and never on this machine's build path.
+
+    Steps around it (upload, download, gate run): .ai/VM-STEPS.md, section H.
+#>
+[CmdletBinding()]
+param(
+    # The driver version, four numbers (e.g. 0.1.0.0). Raise it for every
+    # submission: Windows picks the highest DriverVer among installed packages.
+    [Parameter(Mandatory)]
+    [ValidatePattern('^\d{1,5}\.\d{1,5}\.\d{1,5}\.\d{1,5}$')]
+    [string]$Version
+)
+
+$ErrorActionPreference = 'Stop'
+$repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
+$msbuild = 'C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\amd64\MSBuild.exe'
+$driverOut = Join-Path $repo 'target\driver\x64\Release'
+$out = Join-Path $repo 'target\attestation'
+$stage = Join-Path $out 'viaduct'
+$cabName = "viaduct-$Version.cab"
+
+if (-not (Test-Path $msbuild)) { throw "Missing tool: $msbuild" }
+
+Write-Host "== Building the Release driver, version $Version"
+& $msbuild (Join-Path $repo 'platforms\windows\driver\viaduct.vcxproj') -t:Rebuild `
+    -p:Configuration=Release -p:Platform=x64 "-p:ViaductDriverVersion=$Version" -nologo -v:minimal
+if ($LASTEXITCODE -ne 0) { throw "Driver build failed (exit $LASTEXITCODE)" }
+
+$stamped = Select-String -Path (Join-Path $driverOut 'viaduct.inf') -Pattern '^\s*DriverVer\s*=\s*(.+)$'
+if ($null -eq $stamped -or $stamped.Matches[0].Groups[1].Value -notmatch ",\s*$([regex]::Escape($Version))\s*$") {
+    throw "The built INF doesn't carry version $Version ($($stamped.Line))"
+}
+Write-Host "Stamped: $($stamped.Line.Trim())"
+
+Write-Host '== Staging the package'
+if (Test-Path $out) { Remove-Item -Recurse -Force $out }
+New-Item -ItemType Directory -Force $stage | Out-Null
+foreach ($file in 'viaduct.inf', 'viaduct.sys', 'viaduct.pdb') {
+    Copy-Item (Join-Path $driverOut $file) $stage
+}
+
+Write-Host '== Packing the cab'
+$ddf = Join-Path $out 'viaduct.ddf'
+$lines = @(
+    '.OPTION EXPLICIT'
+    '.Set CabinetFileCountThreshold=0'
+    '.Set FolderFileCountThreshold=0'
+    '.Set FolderSizeThreshold=0'
+    '.Set MaxCabinetSize=0'
+    '.Set MaxDiskFileCount=0'
+    '.Set MaxDiskSize=0'
+    '.Set CompressionType=MSZIP'
+    '.Set Cabinet=on'
+    '.Set Compress=on'
+    ".Set CabinetNameTemplate=$cabName"
+    ".Set DiskDirectoryTemplate=$out"
+    '.Set DestinationDir=viaduct'
+)
+$lines += Get-ChildItem $stage | ForEach-Object { '"' + $_.FullName + '"' }
+Set-Content -Path $ddf -Value $lines -Encoding Ascii
+Push-Location $out
+try {
+    & makecab.exe /F $ddf | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "makecab failed (exit $LASTEXITCODE)" }
+} finally {
+    Pop-Location
+}
+Remove-Item (Join-Path $out 'setup.inf'), (Join-Path $out 'setup.rpt') -ErrorAction SilentlyContinue
+
+$cab = Join-Path $out $cabName
+Write-Host ''
+Write-Host "Cab ready: $cab"
+& expand.exe -D $cab | Out-Host
+Write-Host 'Next, with the EV certificate (its token or signing service), sign the cab:'
+Write-Host "  signtool sign /fd sha256 /tr http://timestamp.digicert.com /td sha256 /n `"<EV certificate subject>`" `"$cab`""
+Write-Host 'then submit it in Partner Center (.ai/VM-STEPS.md, section H).'

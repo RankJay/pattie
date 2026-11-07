@@ -187,3 +187,23 @@ fn buffer_sizes_outside_the_allowed_powers_of_two_are_rejected() {
 
     assert_eq!(results, [Some(viaduct::Error::BadBufferSize); 5]);
 }
+
+#[test]
+fn stats_report_how_much_audio_is_waiting_in_the_ring() {
+    let backend = FakeDriver::new();
+    let mic = builder(&backend).name("Agent Mic").create().unwrap();
+    let speaker = builder(&backend)
+        .name("Agent Speaker")
+        .kind(Kind::Speaker)
+        .create()
+        .unwrap();
+    let (mut tx, mut rx) = (mic.writer().unwrap(), speaker.reader().unwrap());
+    tx.write(&[0.5; 300]).unwrap();
+    backend.driver_read(mic.id(), 100); // Windows takes 100 of the mic's 300
+    backend.driver_write(speaker.id(), &[0.5; 50]);
+    rx.read(&mut [0.0; 20]).unwrap(); // the app reads 20 of the speaker's 50
+
+    let buffered = (mic.stats().buffered_frames, speaker.stats().buffered_frames);
+
+    assert_eq!(buffered, (200, 30));
+}

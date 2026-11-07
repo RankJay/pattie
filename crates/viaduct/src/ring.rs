@@ -132,6 +132,22 @@ impl RingMemory {
             )
         }
     }
+
+    /// Frames written but not yet read, whichever side writes; never more than
+    /// the capacity, whatever either counter claims.
+    pub(crate) fn buffered(&self) -> u64 {
+        let header = self.header();
+        // SAFETY: field pointers into the live header.
+        let (write, read) = unsafe {
+            (
+                self.counter(&raw mut (*header).write_frames)
+                    .load(Ordering::Acquire),
+                self.counter(&raw mut (*header).read_frames)
+                    .load(Ordering::Acquire),
+            )
+        };
+        write.saturating_sub(read).min(self.capacity())
+    }
 }
 
 impl Drop for RingMemory {

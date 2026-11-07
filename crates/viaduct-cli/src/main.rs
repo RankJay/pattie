@@ -3,6 +3,8 @@
 //!
 //!   viaduct-cli mic "Agent Mic" [--tone 440]   stream a sine tone into a microphone
 //!   viaduct-cli speaker "Agent Speaker"        show the level of what's played to it
+//!   viaduct-cli measure mic|speaker <name> [--seconds 60] [--lead-ms 20]
+//!                                              latency and glitches, WASAPI as the app
 //!
 //! Press Enter to stop: the Device is dropped and its endpoint should disappear.
 
@@ -12,12 +14,18 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
-use viaduct::{Device, Kind};
+use viaduct::{Device, Kind, Stats};
+
+#[cfg(windows)]
+mod measure;
+mod pace;
+
+use pace::Pacer;
 
 const SAMPLE_RATE: u32 = 48_000;
 /// How far ahead of real time the tone is kept: 20 ms.
 const LEAD_FRAMES: u64 = 960;
-const USAGE: &str = "usage:\n  viaduct-cli mic <name> [--tone <hz>]\n  viaduct-cli speaker <name>";
+const USAGE: &str = "usage:\n  viaduct-cli mic <name> [--tone <hz>]\n  viaduct-cli speaker <name>\n  viaduct-cli measure mic|speaker <name> [--seconds <n>] [--lead-ms <n>]";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -36,6 +44,8 @@ fn main() -> ExitCode {
             )),
         },
         ["speaker", name] => run_speaker(name),
+        ["measure", direction, name, options @ ..] => measure_options(options)
+            .and_then(|(seconds, lead_ms)| run_measure(direction, name, seconds, lead_ms)),
         _ => Err(USAGE.to_string()),
     };
     match result {
@@ -45,6 +55,43 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// `--seconds <n>` (default 60) and `--lead-ms <n>` (default 20), in any order.
+fn measure_options(options: &[&str]) -> Result<(u64, u64), String> {
+    let (mut seconds, mut lead_ms) = (60, 20);
+    for pair in options.chunks(2) {
+        let value = |what: &str, max: u64| match pair.get(1).map(|v| v.parse::<u64>()) {
+            Some(Ok(n)) if n > 0 && n <= max => Ok(n),
+            _ => Err(format!("{what} needs a whole number from 1 to {max}")),
+        };
+        match pair[0] {
+            "--seconds" => seconds = value("--seconds", 86_400)?,
+            "--lead-ms" => lead_ms = value("--lead-ms", 80)?, // the default Ring holds 85 ms
+            _ => return Err(USAGE.to_string()),
+        }
+    }
+    Ok((seconds, lead_ms))
+}
+
+#[cfg(windows)]
+fn run_measure(direction: &str, name: &str, seconds: u64, lead_ms: u64) -> Result<(), String> {
+    measure::run(direction, name, seconds, lead_ms)
+}
+
+#[cfg(not(windows))]
+fn run_measure(_: &str, _: &str, _: u64, _: u64) -> Result<(), String> {
+    Err("measure uses WASAPI and runs on Windows only".to_string())
+}
+
+/// One line of Device health: missing audio so far, and what's waiting now.
+fn health(stats: Stats) -> String {
+    format!(
+        "gap {} frames, overflow {} frames, buffered {:.1} ms",
+        stats.gap_frames,
+        stats.overflow_frames,
+        stats.buffered_frames as f64 * 1000.0 / SAMPLE_RATE as f64
+    )
 }
 
 /// A flag that turns true when the user presses Enter.
@@ -79,31 +126,34 @@ fn run_mic(name: &str, hz: f32) -> Result<(), String> {
     let step = TAU * hz / SAMPLE_RATE as f32;
     let mut next_report = Duration::from_secs(1);
     let mut chunk = Vec::new();
+    let mut pacer = Pacer::new(Duration::from_millis(20)); // a gap over the lead starves the Ring
+    println!("pacing: {}", pacer.describe());
 
     while !stop.load(Ordering::Relaxed) {
-        // Keep the Ring LEAD_FRAMES ahead of real time.
-        let due = start.elapsed().as_micros() as u64 * SAMPLE_RATE as u64 / 1_000_000 + LEAD_FRAMES;
-        if due > written {
+        pacer.tick();
+        // Top the Ring up to LEAD_FRAMES, paced by its fill level rather than by
+        // time: while nobody records, nothing more is written (no Overflow), and
+        // when recording starts the listener hears the tone 20 ms behind, not
+        // behind a Ring's worth of stale audio.
+        let buffered = mic.stats().buffered_frames;
+        if buffered < LEAD_FRAMES {
             chunk.clear();
-            for _ in written..due {
+            for _ in buffered..LEAD_FRAMES {
                 chunk.push(0.2 * phase.sin());
                 phase = (phase + step) % TAU;
             }
-            // Frames the Ring had no room for are dropped (and counted as Overflow);
-            // the tone's timeline moves on regardless, or a full Ring would make
-            // every later chunk larger.
-            tx.write(&chunk).map_err(|e| e.to_string())?;
-            written = due;
+            written += tx.write(&chunk).map_err(|e| e.to_string())? as u64;
         }
         if start.elapsed() >= next_report {
-            let stats = mic.stats();
+            let (longest, over) = pacer.gaps();
             println!(
-                "written {written} frames, gap {} frames, overflow {} frames",
-                stats.gap_frames, stats.overflow_frames
+                "written {written} frames, {}, writer gaps: longest {:.1} ms, {over} over 20 ms",
+                health(mic.stats()),
+                longest.as_secs_f64() * 1000.0
             );
             next_report += Duration::from_secs(1);
         }
-        thread::sleep(Duration::from_millis(5));
+        pacer.sleep_1ms();
     }
     println!("Stopped; removing \"{name}\".");
     Ok(())
@@ -141,7 +191,10 @@ fn run_speaker(name: &str) -> Result<(), String> {
                 0.0
             };
             let bar = "#".repeat((rms * 50.0).min(50.0) as usize);
-            println!("level {bar:<50} rms {rms:.3} peak {peak:.3} ({frames} frames)");
+            println!(
+                "level {bar:<50} rms {rms:.3} peak {peak:.3} ({frames} frames), {}",
+                health(speaker.stats())
+            );
             (peak, sum_squares, frames) = (0.0, 0.0, 0);
             last_report = Instant::now();
         }

@@ -71,7 +71,8 @@ Copy-Item (Join-Path $driverOut 'viaduct.sys'), (Join-Path $driverOut 'viaduct.i
 Copy-Item (Join-Path $cliTarget 'release\viaduct-cli.exe') $package
 Copy-Item $devgen $package
 Copy-Item (Join-Path $PSScriptRoot 'prepare-vm.ps1'), (Join-Path $PSScriptRoot 'install-in-vm.ps1'),
-    (Join-Path $PSScriptRoot 'probe-endpoint.ps1') $package
+    (Join-Path $PSScriptRoot 'probe-endpoint.ps1'), (Join-Path $PSScriptRoot 'cpu-load.ps1'),
+    (Join-Path $PSScriptRoot 'trace-run.ps1'), (Join-Path $PSScriptRoot 'many-mics.ps1') $package
 
 Write-Host '== Creating the catalog'
 Invoke-Tool 'Inf2Cat' $inf2cat @("/driver:$package", '/os:10_CO_X64', '/uselocaltime')

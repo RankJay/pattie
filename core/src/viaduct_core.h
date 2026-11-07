@@ -112,6 +112,13 @@ void vd_ring_read_pcm16(vd_ring *ring, int16_t *dst, uint32_t count);
 void vd_ring_write_pcm16(vd_ring *ring, const int16_t *src, uint32_t count);
 
 /*
+ * Microphone direction, when a recording starts (ADR 0014): drops stale audio so
+ * at most `keep_frames` of the newest stay unread. Skipped frames are not counted
+ * (not a Gap, and the driver may not store to the writer's Overflow; ADR 0007).
+ */
+void vd_ring_skip_stale(vd_ring *ring, uint32_t keep_frames);
+
+/*
  * Seam C: the clock. Frames a Device has played between two tick readings
  * the shell took (ticks at `tick_hz`), at `sample_rate` frames per second.
  */

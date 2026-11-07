@@ -58,6 +58,10 @@
     <OutDir>$(MSBuildThisFileDirectory)..\..\..\target\driver\$(Platform)\$(Configuration)\</OutDir>
     <IntDir>$(MSBuildThisFileDirectory)..\..\..\target\driver\obj\$(Platform)\$(Configuration)\</IntDir>
     <EnableInf2cat>false</EnableInf2cat>
+    <!-- DriverVer's version: a release build passes -p:ViaductDriverVersion=a.b.c.d
+         (make-attestation-cab.ps1); otherwise StampInf derives one from the build
+         time. -->
+    <ViaductDriverVersion Condition="'$(ViaductDriverVersion)' == ''">*</ViaductDriverVersion>
     <EnableDeployment>false</EnableDeployment>
   </PropertyGroup>
 
@@ -91,11 +95,15 @@
     <ClCompile Include="src\circuit.c" />
     <ClCompile Include="src\interfaces.c" />
     <ClCompile Include="src\stream.c" />
+    <ClCompile Include="src\trace.c" />
     <ClInclude Include="src\shell.h" />
   </ItemGroup>
 
   <ItemGroup Label="Package">
-    <Inf Include="viaduct.inf" />
+    <Inf Include="viaduct.inf">
+      <SpecifyDriverVerDirectiveVersion>true</SpecifyDriverVerDirectiveVersion>
+      <TimeStamp>$(ViaductDriverVersion)</TimeStamp>
+    </Inf>
   </ItemGroup>
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

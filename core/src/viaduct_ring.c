@@ -151,3 +151,17 @@ void vd_ring_write_pcm16(vd_ring *ring, const int16_t *src, uint32_t count)
     }
     vd_ring_write_done(ring, n, count);
 }
+
+void vd_ring_skip_stale(vd_ring *ring, uint32_t keep_frames)
+{
+    /* The writer counter is app-controlled: same rules as vd_ring_read. */
+    uint64_t written = vd_load_acquire_u64(&ring->shared->write_frames);
+    uint64_t keep = keep_frames < ring->capacity_frames ? keep_frames : ring->capacity_frames;
+
+    if (written < ring->read_frames || written - ring->read_frames <= keep) {
+        return; /* moved backwards, or nothing stale */
+    }
+    /* Audio written while nobody was recording: skip all but the newest `keep`. */
+    ring->read_frames = written - keep;
+    vd_store_release_u64(&ring->shared->read_frames, ring->read_frames);
+}

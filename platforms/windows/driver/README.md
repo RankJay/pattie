@@ -8,10 +8,11 @@ the core. Layout (ADR 0010, ADR 0011, ADR 0013):
 | --- | --- | --- |
 | Root ACX device | `src/driver.c` | Installed by `viaduct.inf`; parents the circuit devices |
 | Control device `\\.\Viaduct` | `src/control.c` | Owners' commands: one handle per Owner, one buffered IOCTL per command; pins Rings in the caller's context |
-| Circuit devices | `src/endpoint.c` | One raw child per Device: create, add its circuit once, name it, safe teardown |
+| Circuit devices | `src/endpoint.c` | One raw child per Device: create with a stable instance ID from kind + name (ADR 0015), add its circuit once, name it, safe teardown |
 | Circuit | `src/circuit.c` | The child's one capture or render circuit: host and bridge pins, float and PCM16 formats |
 | Interface values | `src/interfaces.c` | The audio interface values an INF would write, which a runtime child has no INF for |
 | Streaming | `src/stream.c` | One timer pass per packet, one copy between the Ring and the ACX packet (PCM16 converted) |
+| Tracing | `src/trace.c`, `src/trace.h` | The `Viaduct.Driver` ETW provider: stream format, packets, timer lateness, Gap/Overflow, Device start |
 
 ## Build (compile only)
 
@@ -30,6 +31,12 @@ Output lands in `target/driver/<platform>/<configuration>/`, with the stamped IN
 Building never signs, installs or loads anything: `SignMode` is `Off` (no test
 certificate is created), and catalog generation and deployment are disabled.
 
+`DriverVer`'s version comes from the build time unless
+`-p:ViaductDriverVersion=a.b.c.d` sets it. A release goes through
+`platforms/windows/release/make-attestation-cab.ps1 -Version a.b.c.d`, which builds
+with that version and packs the `.cab` for Microsoft's attestation signing
+(`.ai/VM-STEPS.md`, section H).
+
 ## Kernel-mode notes
 
 - `kernel-crt/` holds kernel-safe `stdint.h` and `stdbool.h`. The kernel C runtime
@@ -39,6 +46,11 @@ certificate is created), and catalog generation and deployment are disabled.
   from 16-bit PCM with integer arithmetic on their bit patterns, so the driver
   contains no floating-point code (checked by disassembly).
 - In C, `ks.h` only declares the KS GUIDs; `ksguid.lib` defines them.
+- Tracing is TraceLogging (ETW) and stays in production builds: it costs nothing
+  until a session listens. Events come only from lifecycle callbacks; the timer pass
+  just updates counters. The provider must be unregistered on every `DriverEntry`
+  failure and on unload, or the system crashes later (`src/driver.c`). Recording
+  and reading it: `.ai/VM-STEPS.md`, section G.
 
 ## Checked in the test VM (2026-11-07)
 
