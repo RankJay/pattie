@@ -86,6 +86,7 @@ pub struct ReplyEnvelope {
 
 /// Ring layout (ADR 0007): three 64-byte lines, then the frames.
 #[repr(C)]
+#[derive(Debug)]
 pub struct RingHeader {
     pub write_frames: u64,
     pub overflow_frames: u64,

@@ -238,3 +238,31 @@ fn a_ninth_live_device_is_too_many() {
 
     assert_eq!(ninth.err(), Some(viaduct::Error::TooManyDevices));
 }
+
+#[test]
+fn debug_output_names_the_device_and_its_settings() {
+    let backend = FakeDriver::new();
+    let configured = builder(&backend).name("Agent Mic").buffer_frames(256);
+    let platform = Device::builder().name("Plain");
+
+    let mic = builder(&backend).name("Agent Mic").create().unwrap();
+    let speaker = builder(&backend)
+        .name("Out")
+        .kind(Kind::Speaker)
+        .create()
+        .unwrap();
+    let (tx, rx) = (mic.writer().unwrap(), speaker.reader().unwrap());
+
+    assert_eq!(
+        format!("{configured:?}"),
+        concat!(
+            "DeviceBuilder { name: \"Agent Mic\", kind: Microphone, format: (48000, 1), ",
+            "buffer_frames: 256, transport: \"custom\" }"
+        )
+    );
+    assert!(format!("{platform:?}").contains("transport: \"platform default\""));
+    assert_eq!(format!("{mic:?}"), "Device { id: 1, kind: Microphone }");
+    assert_eq!(format!("{speaker:?}"), "Device { id: 2, kind: Speaker }");
+    assert_eq!(format!("{tx:?}"), "Writer { device: 1 }");
+    assert_eq!(format!("{rx:?}"), "Reader { device: 2 }");
+}

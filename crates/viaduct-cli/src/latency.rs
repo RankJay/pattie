@@ -6,6 +6,8 @@
 //! Times are in 100 ns units ("hns"), as WASAPI and the performance counter give
 //! them.
 
+#![forbid(unsafe_code)] // pure logic: the compiler guarantees no unsafe here
+
 use viaduct::Kind;
 
 pub const HNS_PER_SECOND: u64 = 10_000_000;

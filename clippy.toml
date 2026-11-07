@@ -1,0 +1,17 @@
+# Clippy's settings for every crate. The lint levels are in Cargo.toml
+# ([workspace.lints]); the SDK's stricter ones are at the top of
+# crates/viaduct/src/lib.rs.
+
+# "Every unsafe fn documents its contract" covers private functions too.
+check-private-items = true
+
+# Tests may unwrap, expect and panic: a failing test should stop loudly.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-print-in-tests = true
+
+disallowed-methods = [
+    { path = "std::process::exit", reason = "skips destructors, so a live Device isn't removed cleanly; return from main instead" },
+    { path = "std::thread::sleep", reason = "a 1 ms sleep can last a whole timer tick (~15.6 ms) and starve an audio loop; use pace::Pacer, or #[expect] with the reason where a coarse wait is intended" },
+]

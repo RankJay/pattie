@@ -3,6 +3,8 @@
 //! Public so test backends (the in-process fake driver) can implement it, but not
 //! part of the supported API. A connection is one Owner: one open handle.
 
+#![forbid(unsafe_code)] // pure logic: the compiler guarantees no unsafe here
+
 use crate::Error;
 
 /// Something that can open Owner connections to a driver.

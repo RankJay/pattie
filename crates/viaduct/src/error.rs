@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)] // pure logic: the compiler guarantees no unsafe here
+
 use std::fmt;
 
 /// Everything that can go wrong creating or using a Device.

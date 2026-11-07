@@ -50,12 +50,9 @@ fn ticks_for_a_frame_count_are_the_first_moment_the_clock_reaches_it() {
     // SAFETY: a pure C function of plain integers: no pointers, no state.
     let ticks = unsafe { vd_clock_ticks_for(1, QPC_HZ, 48_000) };
     // SAFETY: a pure C function of plain integers: no pointers, no state.
-    let (before, at) = unsafe {
-        (
-            vd_clock_frames(0, ticks - 1, QPC_HZ, 48_000),
-            vd_clock_frames(0, ticks, QPC_HZ, 48_000),
-        )
-    };
+    let before = unsafe { vd_clock_frames(0, ticks - 1, QPC_HZ, 48_000) };
+    // SAFETY: as above.
+    let at = unsafe { vd_clock_frames(0, ticks, QPC_HZ, 48_000) };
 
     assert_eq!((ticks, before, at), (209, 0, 1));
 }

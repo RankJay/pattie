@@ -117,8 +117,10 @@ fn new_devinfo_data() -> SP_DEVINFO_DATA {
 
 fn require_admin() -> Result<(), String> {
     let mut token = HANDLE::default();
-    // SAFETY: the pseudo-handle of this process; the token is closed below.
-    unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) }
+    // SAFETY: returns this process's pseudo-handle; nothing to free.
+    let process = unsafe { GetCurrentProcess() };
+    // SAFETY: a valid process handle and out-parameter; the token is closed below.
+    unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) }
         .map_err(|e| format!("checking for administrator rights failed: {e}"))?;
     let mut elevation = TOKEN_ELEVATION::default();
     let mut size = 0u32;

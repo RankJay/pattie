@@ -53,6 +53,12 @@ unsafe impl Send for WindowsConnection {}
 
 impl Connection for WindowsConnection {
     fn ioctl(&mut self, code: u32, input: &[u8], output: &mut [u8]) -> Result<usize, Error> {
+        // The SDK's own requests and replies are small; anything over 4 GiB is a bug.
+        let too_big = |_| Error::Protocol(crate::abi::ERR_BAD_REQUEST);
+        let (input_len, output_len) = (
+            u32::try_from(input.len()).map_err(too_big)?,
+            u32::try_from(output.len()).map_err(too_big)?,
+        );
         let mut returned = 0u32;
         // SAFETY: both buffers are valid for their lengths for the whole
         // (synchronous) call; the handle is open until Drop.
@@ -61,9 +67,9 @@ impl Connection for WindowsConnection {
                 self.0,
                 code,
                 input.as_ptr().cast(),
-                input.len() as u32,
+                input_len,
                 output.as_mut_ptr().cast(),
-                output.len() as u32,
+                output_len,
                 &mut returned,
                 null_mut(),
             )

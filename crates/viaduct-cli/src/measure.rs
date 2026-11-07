@@ -12,6 +12,15 @@
 //! click spent queued behind audio the app itself had already written (its lead):
 //! that's the brief's "added latency, app-to-device", checked against 10 ms.
 
+// Scoped exception: the WASAPI blocks below are each one conversation with
+// COM objects this module owns (create, activate, initialize, loop, release).
+// Splitting every COM call into its own block would repeat one safety argument
+// dozens of times. Pointer casts and buffer access stay separate and checked.
+#![allow(
+    clippy::multiple_unsafe_ops_per_block,
+    reason = "each block is one WASAPI/COM call sequence with a single safety argument"
+)]
+
 use crate::latency::{
     ClickDetector, HNS_PER_SECOND, Sent, frames_to_hns, pair_clicks, spread, stable_instance_id,
 };
@@ -54,11 +63,10 @@ const PKEY_ENDPOINT_DEVICE_INSTANCE: PROPERTYKEY = PROPERTYKEY {
 /// Now, in 100 ns units on the performance counter (WASAPI's QPC timestamps use the same).
 fn now_hns() -> u64 {
     let (mut counter, mut frequency) = (0i64, 0i64);
-    // SAFETY: plain out-parameters.
-    unsafe {
-        let _ = QueryPerformanceCounter(&mut counter);
-        let _ = QueryPerformanceFrequency(&mut frequency);
-    }
+    // SAFETY: a plain out-parameter.
+    let _ = unsafe { QueryPerformanceCounter(&mut counter) };
+    // SAFETY: a plain out-parameter.
+    let _ = unsafe { QueryPerformanceFrequency(&mut frequency) };
     (counter as u128 * HNS_PER_SECOND as u128 / frequency as u128) as u64
 }
 
@@ -164,6 +172,10 @@ fn find_endpoint(flow: EDataFlow, name: &str, kind: Kind) -> Result<IMMDevice, S
                 "no active endpoint {instance_suffix} (\"{name}\") after 30 s"
             ));
         }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "a coarse poll while Windows sets the endpoint up; no audio flows yet"
+        )]
         thread::sleep(Duration::from_millis(250));
     }
 }
@@ -223,13 +235,17 @@ impl Stream {
 
     /// Channel 0 of interleaved frame `frame` in a WASAPI buffer.
     fn sample(&self, data: *const u8, frame: usize) -> f32 {
-        // SAFETY: callers pass a frame index inside the buffer WASAPI handed out.
-        unsafe {
-            if self.float {
-                *(data as *const f32).add(frame * self.channels)
-            } else {
-                *(data as *const i16).add(frame * self.channels) as f32 / 32768.0
-            }
+        if self.float {
+            // SAFETY: callers pass a frame inside the buffer WASAPI handed out.
+            let at = unsafe { data.add(frame * self.channels * 4) };
+            // SAFETY: four readable bytes of that buffer; read unaligned, so no
+            // alignment is assumed of WASAPI's pointer.
+            unsafe { at.cast::<f32>().read_unaligned() }
+        } else {
+            // SAFETY: as above, two bytes per sample.
+            let at = unsafe { data.add(frame * self.channels * 2) };
+            // SAFETY: as above.
+            f32::from(unsafe { at.cast::<i16>().read_unaligned() }) / 32768.0
         }
     }
 
@@ -473,9 +489,11 @@ fn render_clicks(endpoint: SendDevice, stop: &AtomicBool, run: &Mutex<Run>) -> R
                     0.0
                 };
                 if stream.float {
-                    *(data as *mut f32).add(i) = value;
+                    data.add(i * 4).cast::<f32>().write_unaligned(value);
                 } else {
-                    *(data as *mut i16).add(i) = (value * 32767.0) as i16;
+                    data.add(i * 2)
+                        .cast::<i16>()
+                        .write_unaligned((value * 32767.0) as i16);
                 }
             }
             if click {

@@ -57,6 +57,10 @@ impl Pacer {
         {
             return;
         }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the fallback where no high-resolution timer exists"
+        )]
         std::thread::sleep(Duration::from_millis(1));
     }
 
@@ -120,21 +124,19 @@ mod win {
     pub fn wait(timer: HANDLE, duration: Duration) -> bool {
         let due = -((duration.as_nanos() / 100) as i64); // relative, 100 ns units
         // SAFETY: the timer is open for the Pacer's lifetime.
-        unsafe {
-            SetWaitableTimer(timer, &due, 0, None, None, false).is_ok()
-                && WaitForSingleObject(timer, 100) == WAIT_OBJECT_0
-        }
+        let armed = unsafe { SetWaitableTimer(timer, &due, 0, None, None, false) }.is_ok();
+        // SAFETY: as above.
+        armed && unsafe { WaitForSingleObject(timer, 100) } == WAIT_OBJECT_0
     }
 
     pub fn release(timer: Option<HANDLE>, mmcss: Option<HANDLE>) {
-        // SAFETY: both handles were created by this module and are released once.
-        unsafe {
-            if let Some(mmcss) = mmcss {
-                let _ = AvRevertMmThreadCharacteristics(mmcss);
-            }
-            if let Some(timer) = timer {
-                let _ = CloseHandle(timer);
-            }
+        if let Some(mmcss) = mmcss {
+            // SAFETY: registered by `join_pro_audio`, reverted once.
+            let _ = unsafe { AvRevertMmThreadCharacteristics(mmcss) };
+        }
+        if let Some(timer) = timer {
+            // SAFETY: created by `high_resolution_timer`, closed once.
+            let _ = unsafe { CloseHandle(timer) };
         }
     }
 }
@@ -158,6 +160,10 @@ mod tests {
     fn a_gap_over_the_limit_is_counted_and_kept_as_the_longest() {
         let mut pacer = Pacer::new(Duration::from_millis(10));
         pacer.tick();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the test needs a gap of at least 30 ms; a long sleep is fine"
+        )]
         std::thread::sleep(Duration::from_millis(30));
         pacer.tick();
         pacer.tick();

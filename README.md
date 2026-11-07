@@ -373,18 +373,32 @@ test VM):
 | `crates/viaduct-cli/src/install/setup.rs` | SetupAPI calls that change the machine | INF parsing: `install.rs`; VM for the rest |
 | `testing/fake-driver` | Test scaffolding, never shipped | The contract tests it serves |
 
-The lint rules live in the root `Cargo.toml` (`[workspace.lints]`); every crate opts
-in with `[lints] workspace = true`. To silence one in a specific place, use
-`#[expect(clippy::…, reason = "…")]`, so the reason is written down and the build
-tells you when it's no longer needed.
+### Lint rules
+
+Where they live, from widest to narrowest:
+
+| Where | Applies to | What it enforces |
+| --- | --- | --- |
+| Root `Cargo.toml`, `[workspace.lints]` | every crate (each opts in with `[lints] workspace = true`) | The `unsafe` rules below; no `dbg!`, `todo!`, `unimplemented!`; no pointer casts that hide a type or alignment change (`ptr_as_ptr`, `cast_ptr_alignment`, `transmute_ptr_to_ptr`); rustdoc links and HTML must be valid |
+| `clippy.toml` | every crate | Methods banned by name, each with its reason: `std::process::exit` (skips destructors, so a live Device isn't removed cleanly) and `std::thread::sleep` (a 1 ms sleep can last ~15.6 ms and starve an audio loop: use `pace::Pacer`). Also: the `unsafe fn` contract rule covers private functions, and tests may unwrap |
+| Top of `crates/viaduct/src/lib.rs` | the SDK only | It runs inside other people's apps: no `unwrap`/`expect`/`panic!`, no printing, no silently narrowing casts, and every public item is documented and has `Debug` |
+| `#![forbid(unsafe_code)]` at the top of a module | `cli.rs`, `latency.rs`, `error.rs`, `transport.rs` | The compiler guarantees these hold no `unsafe`, so a reviewer can skip them for memory safety |
+| `core/tests/build.rs`, `testing/fake-driver/build.rs`, `viaduct.vcxproj` | the C core (and the driver) | Warnings are errors, plus implicit narrowing and sign changes: `-Wconversion -Wsign-conversion` under clang, C4242/C4244/C4365 under MSVC |
+
+To make an exception in one place, use `#[expect(clippy::…, reason = "…")]` on that
+item or statement, never a crate-wide `allow`: the reason is written down, and the
+build fails when the exception is no longer needed. The one file-wide exception is
+`measure.rs`, whose WASAPI blocks are each one COM call sequence
+(`multiple_unsafe_ops_per_block`, with its reason at the top of the file).
 
 ### `unsafe` code
 
 Calling Windows from Rust is always `unsafe`: Windows is C, and Rust can't check the
 other side. The rules here:
 
-- keep each `unsafe` block to the call itself, with a `// SAFETY:` comment saying why
-it's correct (clippy fails the build without one: `undocumented_unsafe_blocks`);
+- keep each `unsafe` block to **one** unsafe operation, with a `// SAFETY:` comment
+saying why it's correct (clippy fails the build otherwise:
+`undocumented_unsafe_blocks`, `multiple_unsafe_ops_per_block`);
 - wrap it in a safe function or type (handles freed in `Drop`), so callers never see it;
 - shared memory with the kernel (`crates/viaduct/src/ring.rs`) is the one place that
 deserves the most care; it follows the Ring protocol exactly.

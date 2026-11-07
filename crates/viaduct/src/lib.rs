@@ -14,6 +14,21 @@
 //! # Ok::<(), viaduct::Error>(())
 //! ```
 
+// Stricter than the workspace rules (Cargo.toml): the SDK runs inside other
+// people's apps, so it must not panic, print, or narrow a number silently, and
+// its public API is documented.
+#![deny(
+    missing_docs,
+    missing_debug_implementations,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::print_stdout,
+    clippy::print_stderr,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
+
 #[doc(hidden)]
 pub mod abi;
 mod device;

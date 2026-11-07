@@ -69,8 +69,11 @@
     <ClCompile>
       <WarningLevel>Level4</WarningLevel>
       <TreatWarningAsError>true</TreatWarningAsError>
-      <!-- The kernel toolset ignores LanguageStandard_C, so pass C17 directly. -->
-      <AdditionalOptions>/std:c17 %(AdditionalOptions)</AdditionalOptions>
+      <!-- The kernel toolset ignores LanguageStandard_C, so pass C17 directly.
+           C4242/C4244 (possible loss of data) and C4365 (signed/unsigned
+           mismatch) are off by default; on, and errors, for code that parses
+           what apps send. -->
+      <AdditionalOptions>/std:c17 /w44242 /w44244 /w44365 %(AdditionalOptions)</AdditionalOptions>
       <!-- kernel-crt first: kernel-safe stdint.h/stdbool.h shadow the user-mode MSVC ones. -->
       <AdditionalIncludeDirectories>$(MSBuildThisFileDirectory)kernel-crt;$(MSBuildThisFileDirectory)..\..\..\core\include;$(MSBuildThisFileDirectory)..\..\..\core\src;$(DDK_INC_PATH)acx\km\1.1;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>ACX_VERSION_MAJOR=1;ACX_VERSION_MINOR=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>

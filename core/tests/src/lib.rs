@@ -280,6 +280,13 @@ impl RingMemory {
         );
     }
 
+    /// Frame `index` (below the checked capacity) of the frames at `frames`.
+    fn frame_at(frames: *mut f32, index: usize) -> *mut f32 {
+        // SAFETY: callers pass an index below the capacity `assert_frames_backed`
+        // checked, so the frame is inside the memory.
+        unsafe { frames.add(index) }
+    }
+
     fn frames(&mut self) -> *mut f32 {
         // SAFETY: `words` backs at least the header, so the result is in bounds or one past the end.
         unsafe {
@@ -298,8 +305,9 @@ impl RingMemory {
         let mut written = self.header().write_frames;
         let frames = self.frames();
         for &sample in samples {
-            // SAFETY: `assert_frames_backed` checked the memory holds `capacity` frames after the header, and the index is below `capacity`.
-            unsafe { *frames.add((written % capacity) as usize) = sample };
+            let frame = Self::frame_at(frames, (written % capacity) as usize);
+            // SAFETY: `frame_at` stays inside the frames `assert_frames_backed` checked.
+            unsafe { *frame = sample };
             written += 1;
         }
         self.header_mut().write_frames = written;
@@ -314,8 +322,9 @@ impl RingMemory {
         let frames = self.frames();
         let mut out = Vec::new();
         while read < written && out.len() < count {
+            let frame = Self::frame_at(frames, (read % capacity) as usize);
             // SAFETY: as in `app_write`.
-            out.push(unsafe { *frames.add((read % capacity) as usize) });
+            out.push(unsafe { *frame });
             read += 1;
         }
         self.header_mut().read_frames = read;

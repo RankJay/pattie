@@ -172,6 +172,10 @@ fn run_speaker(name: &str) -> Result<(), String> {
             (peak, sum_squares, frames) = (0.0, 0.0, 0);
             last_report = Instant::now();
         }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the level meter only needs ~10 ms polls; a late poll loses no audio (the Ring holds 85 ms)"
+        )]
         thread::sleep(Duration::from_millis(10));
     }
     println!("Stopped; removing \"{name}\".");

@@ -1,6 +1,8 @@
 //! What the command line asks for, parsed and checked before anything runs, and
 //! the one-line Device health the long-running commands print.
 
+#![forbid(unsafe_code)] // pure logic: the compiler guarantees no unsafe here
+
 use viaduct::Stats;
 
 pub const SAMPLE_RATE: u32 = 48_000;

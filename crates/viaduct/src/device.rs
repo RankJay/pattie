@@ -4,6 +4,7 @@ use crate::Error;
 use crate::abi::{self, CreateDeviceReply, CreateDeviceRequest, HelloRequest, ReplyEnvelope};
 use crate::ring::RingMemory;
 use crate::transport::{Connection, Transport};
+use std::fmt;
 use std::mem::size_of;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -12,7 +13,9 @@ use std::sync::{Arc, Mutex};
 /// speaker (others play audio the app reads).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
+    /// The app writes audio; other apps record it.
     Microphone,
+    /// Other apps play audio; the app reads it.
     Speaker,
 }
 
@@ -47,6 +50,7 @@ impl DeviceBuilder {
         self
     }
 
+    /// Microphone (the default) or Speaker.
     pub fn kind(mut self, kind: Kind) -> Self {
         self.kind = kind;
         self
@@ -100,7 +104,7 @@ impl DeviceBuilder {
             &mut [],
         )?;
 
-        let ring = RingMemory::new(self.buffer_frames);
+        let ring = RingMemory::new(self.buffer_frames)?;
         let mut request = CreateDeviceRequest {
             kind: self.kind.abi(),
             name_len: 0,
@@ -112,7 +116,8 @@ impl DeviceBuilder {
         let units: Vec<u16> = self.name.encode_utf16().collect();
         let n = units.len().min(abi::DEVICE_NAME_MAX);
         request.name[..n].copy_from_slice(&units[..n]);
-        request.name_len = units.len() as u32; // the driver rejects anything too long
+        // The driver rejects anything over 63 units; saturating keeps it rejected.
+        request.name_len = u32::try_from(units.len()).unwrap_or(u32::MAX);
 
         let mut reply = CreateDeviceReply::default();
         // SAFETY: CreateDeviceReply is a plain repr(C) struct of integers.
@@ -162,7 +167,10 @@ fn send(
     if written < envelope_len {
         return Err(Error::Protocol(abi::ERR_BAD_REQUEST));
     }
-    let status = u32::from_ne_bytes(output[..envelope_len].try_into().unwrap());
+    let status = output
+        .first_chunk::<4>()
+        .map(|bytes| u32::from_ne_bytes(*bytes))
+        .ok_or(Error::Protocol(abi::ERR_BAD_REQUEST))?;
     if status != abi::OK {
         return Err(error_from_status(status));
     }
@@ -215,7 +223,37 @@ pub struct Device {
     inner: Arc<Inner>,
 }
 
+impl fmt::Debug for Device {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Device")
+            .field("id", &self.inner.id)
+            .field("kind", &self.inner.kind)
+            .finish()
+    }
+}
+
+impl fmt::Debug for DeviceBuilder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DeviceBuilder")
+            .field("name", &self.name)
+            .field("kind", &self.kind)
+            .field("format", &self.format)
+            .field("buffer_frames", &self.buffer_frames)
+            .field(
+                "transport",
+                &if self.transport.is_some() {
+                    "custom"
+                } else {
+                    "platform default"
+                },
+            )
+            .finish()
+    }
+}
+
 impl Device {
+    /// Starts configuring a Device: a Microphone, 48 kHz mono, with a
+    /// 4,096-frame Ring, until told otherwise.
     pub fn builder() -> DeviceBuilder {
         DeviceBuilder {
             name: String::new(),
@@ -265,6 +303,14 @@ pub struct Reader {
     inner: Arc<Inner>,
 }
 
+impl fmt::Debug for Reader {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Reader")
+            .field("device", &self.inner.id)
+            .finish()
+    }
+}
+
 impl Reader {
     /// Takes up to `out.len()` 48 kHz mono samples without blocking; returns how many.
     pub fn read(&mut self, out: &mut [f32]) -> Result<usize, Error> {
@@ -295,6 +341,14 @@ pub struct Stats {
 /// Writes a Microphone's audio. Keeps the Device alive while it exists.
 pub struct Writer {
     inner: Arc<Inner>,
+}
+
+impl fmt::Debug for Writer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Writer")
+            .field("device", &self.inner.id)
+            .finish()
+    }
 }
 
 impl Writer {

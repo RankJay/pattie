@@ -17,6 +17,15 @@ fn main() {
         .std("c17")
         .warnings(true)
         .warnings_into_errors(true);
+    // Narrowing and sign changes are errors in the code that parses hostile input.
+    // clang (coverage builds) and MSVC (normal builds) name them differently.
+    let compiler = build.get_compiler();
+    if compiler.is_like_clang() || compiler.is_like_clang_cl() {
+        build.flag("-Wconversion").flag("-Wsign-conversion");
+    } else if compiler.is_like_msvc() {
+        // C4242/C4244: possible loss of data; C4365: signed/unsigned mismatch.
+        build.flag("/w44242").flag("/w44244").flag("/w44365");
+    }
     for dir in [&include, &core, &probe] {
         // Watching the folder too picks up newly added source files.
         println!("cargo:rerun-if-changed={}", dir.display());
