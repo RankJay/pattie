@@ -4,3 +4,17 @@ resolver = "3"
 
 [workspace.package]
 edition = "2024"
+
+# Lint rules for every crate (each opts in with `[lints] workspace = true`).
+# `cargo clippy --workspace --all-targets -- -D warnings` turns warnings into errors.
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"     # unsafe calls stay in explicit blocks, even in unsafe fns
+unused_unsafe = "deny"
+
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "deny" # every `unsafe { }` carries a `// SAFETY:` comment
+missing_safety_doc = "deny"         # every `unsafe fn` documents its contract
+unnecessary_safety_comment = "warn"
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"

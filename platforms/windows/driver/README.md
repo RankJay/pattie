@@ -37,6 +37,11 @@ certificate is created), and catalog generation and deployment are disabled.
 with that version and packs the `.cab` for Microsoft's attestation signing
 (`.ai/VM-STEPS.md`, section H).
 
+On a machine, the driver goes on with `viaduct-cli install <package folder>` and
+comes off with `viaduct-cli uninstall`, both as administrator (ADR 0016): install
+creates the `Root\Viaduct` device only if there is none, and doesn't replace a
+driver of the same or a newer version.
+
 ## Kernel-mode notes
 
 - `kernel-crt/` holds kernel-safe `stdint.h` and `stdbool.h`. The kernel C runtime

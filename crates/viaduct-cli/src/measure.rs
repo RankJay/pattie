@@ -12,6 +12,9 @@
 //! click spent queued behind audio the app itself had already written (its lead):
 //! that's the brief's "added latency, app-to-device", checked against 10 ms.
 
+use crate::latency::{
+    ClickDetector, HNS_PER_SECOND, Sent, frames_to_hns, pair_clicks, spread, stable_instance_id,
+};
 use crate::pace::Pacer;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -39,10 +42,6 @@ const RING_RATE: u64 = 48_000;
 const CLICK_PERIOD: Duration = Duration::from_millis(500);
 const CLICK_FRAMES: usize = 48; // 1 ms at 48 kHz
 const CLICK_LEVEL: f32 = 0.8;
-const DETECT_LEVEL: f32 = 0.3;
-const DEBOUNCE: Duration = Duration::from_millis(250);
-const MAX_LATENCY_HNS: u64 = 4_000_000; // pair clicks within 400 ms
-const HNS_PER_SECOND: u64 = 10_000_000;
 
 /// An audio endpoint's device instance path (PKEY_Device_InstanceId's endpoint
 /// counterpart, {b3f8fa53-0004-438e-9003-51a46e139bfc},2): for a Viaduct endpoint,
@@ -61,17 +60,6 @@ fn now_hns() -> u64 {
         let _ = QueryPerformanceFrequency(&mut frequency);
     }
     (counter as u128 * HNS_PER_SECOND as u128 / frequency as u128) as u64
-}
-
-fn frames_to_hns(frames: u64, rate: u64) -> u64 {
-    frames * HNS_PER_SECOND / rate
-}
-
-/// A click as sent: when, and how much audio was already queued ahead of it.
-#[derive(Clone, Copy)]
-struct Sent {
-    at_hns: u64,
-    ahead_hns: u64,
 }
 
 /// What a run collected.
@@ -107,31 +95,6 @@ pub fn run(direction: &str, name: &str, seconds: u64, lead_ms: u64) -> Result<()
     };
     report(direction, &run, stats_before, stats_after);
     Ok(())
-}
-
-/// The circuit device's stable instance ID for a Device (ADR 0015): `M` or `S`,
-/// then the 64-bit FNV-1a hash of the kind byte (1 or 2) followed by the name's
-/// UTF-16LE bytes, as 16 hex digits (the driver writes them lowercase); a hash of 0
-/// becomes 1. Must match the driver
-/// (endpoint.c). Vectors: mic "Agent Mic" → MBD5F5BFDA42F6F12, speaker
-/// "Agent Speaker" → SE4C7C9E6384B9C77.
-fn stable_instance_id(kind: Kind, name: &str) -> String {
-    let (letter, kind_byte) = match kind {
-        Kind::Microphone => ('M', 1u8),
-        Kind::Speaker => ('S', 2u8),
-    };
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    let mut feed = |byte: u8| {
-        hash ^= byte as u64;
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    };
-    feed(kind_byte);
-    for unit in name.encode_utf16() {
-        for byte in unit.to_le_bytes() {
-            feed(byte);
-        }
-    }
-    format!("{letter}{:016X}", if hash == 0 { 1 } else { hash })
 }
 
 /// Finds the active endpoint for a Device, waiting while Windows sets it up (the
@@ -375,7 +338,7 @@ fn capture_clicks(endpoint: SendDevice, stop: &AtomicBool, run: &Mutex<Run>) -> 
             .client
             .Start()
             .map_err(|e| format!("start capture: {e}"))?;
-        let mut quiet_until = 0u64;
+        let mut detector = ClickDetector::default();
         while !stop.load(Ordering::Relaxed) {
             if !stream.wait() {
                 continue;
@@ -396,10 +359,9 @@ fn capture_clicks(endpoint: SendDevice, stop: &AtomicBool, run: &Mutex<Run>) -> 
                 }
                 for frame in 0..frames as usize {
                     let at = qpc + frames_to_hns(frame as u64, stream.rate);
-                    if at >= quiet_until && stream.sample(data, frame).abs() >= DETECT_LEVEL {
+                    if detector.detect(at, stream.sample(data, frame)) {
                         run.seen_hns.push(at);
                         run.delivered_hns.push(delivered);
-                        quiet_until = at + DEBOUNCE.as_nanos() as u64 / 100;
                     }
                 }
                 drop(run);
@@ -434,7 +396,7 @@ fn measure_speaker(
     let stats_before = speaker.stats();
     let start = Instant::now();
     let mut buffer = vec![0.0f32; 4800];
-    let mut quiet_until = 0u64;
+    let mut detector = ClickDetector::default();
     // Arrival is known only to within the polling gap: report gaps over 2 ms.
     let mut pacer = Pacer::new(Duration::from_millis(2));
     println!(
@@ -447,11 +409,11 @@ fn measure_speaker(
         let count = rx.read(&mut buffer).map_err(|e| e.to_string())?;
         let read_at = now_hns();
         // Polled every millisecond: arrival is known to within ~1 ms.
-        if read_at >= quiet_until && buffer[..count].iter().any(|s| s.abs() >= DETECT_LEVEL) {
+        let loudest = buffer[..count].iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        if detector.detect(read_at, loudest) {
             let mut run = run.lock().unwrap();
             run.seen_hns.push(read_at);
             run.delivered_hns.push(read_at); // the reader is the app: seen is delivered
-            quiet_until = read_at + DEBOUNCE.as_nanos() as u64 / 100;
         }
         pacer.sleep_1ms();
     }
@@ -531,25 +493,10 @@ fn render_clicks(endpoint: SendDevice, stop: &AtomicBool, run: &Mutex<Run>) -> R
 
 /// Pairs each click seen with the latest one sent before it, then prints the spread.
 fn report(direction: &str, run: &Run, before: viaduct::Stats, after: viaduct::Stats) {
-    let ms = |hns: u64| hns as f64 / 10_000.0;
-    let (mut raw, mut added) = (Vec::new(), Vec::new());
-    let (mut raw_delivered, mut added_delivered) = (Vec::new(), Vec::new());
-    let mut used = vec![false; run.sent.len()];
-    for (&seen, &delivered) in run.seen_hns.iter().zip(&run.delivered_hns) {
-        let pick = run
-            .sent
-            .iter()
-            .enumerate()
-            .filter(|(i, s)| !used[*i] && s.at_hns <= seen && seen - s.at_hns <= MAX_LATENCY_HNS)
-            .max_by_key(|(_, s)| s.at_hns);
-        if let Some((i, sent)) = pick {
-            used[i] = true;
-            raw.push(ms(seen - sent.at_hns));
-            added.push(ms((seen - sent.at_hns).saturating_sub(sent.ahead_hns)));
-            raw_delivered.push(ms(delivered - sent.at_hns));
-            added_delivered.push(ms((delivered - sent.at_hns).saturating_sub(sent.ahead_hns)));
-        }
-    }
+    let mut latencies = pair_clicks(&run.sent, &run.seen_hns, &run.delivered_hns);
+    let (raw, added) = (&mut latencies.raw, &mut latencies.added);
+    let (raw_delivered, added_delivered) =
+        (&mut latencies.raw_delivered, &mut latencies.added_delivered);
 
     println!();
     println!(
@@ -559,14 +506,14 @@ fn report(direction: &str, run: &Run, before: viaduct::Stats, after: viaduct::St
     );
     if direction == "mic" {
         println!("by capture timestamp (how apps sync audio):");
-        println!("  raw   (ms) {}", spread(&mut raw));
-        println!("  added (ms) {}", spread(&mut added));
+        println!("  raw   (ms) {}", spread(raw));
+        println!("  added (ms) {}", spread(added));
         println!("by delivery to the app (what a live call experiences):");
     }
-    println!("  raw   (ms) {}", spread(&mut raw_delivered));
+    println!("  raw   (ms) {}", spread(raw_delivered));
     println!(
         "  added (ms) {}   <- brief's target: under 10 ms",
-        spread(&mut added_delivered)
+        spread(added_delivered)
     );
     println!(
         "glitches: {} WASAPI discontinuities, {} Gap frames, {} Overflow frames during the run",
@@ -586,48 +533,4 @@ fn report(direction: &str, run: &Run, before: viaduct::Stats, after: viaduct::St
         run.gaps_over,
         run.gap_limit.as_millis()
     );
-}
-
-fn spread(values: &mut [f64]) -> String {
-    if values.is_empty() {
-        return "no clicks matched".into();
-    }
-    values.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let at =
-        |q: f64| values[((values.len() as f64 * q).ceil() as usize).clamp(1, values.len()) - 1];
-    format!(
-        "min {:.2}  median {:.2}  p99 {:.2}  max {:.2}",
-        values[0],
-        at(0.5),
-        at(0.99),
-        values[values.len() - 1]
-    )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Vectors computed independently (a Python mirror of the spec), and confirmed
-    /// identical to the driver's own (fork 2's mirror of endpoint.c), which writes
-    /// the hex in lowercase; matching compares uppercased.
-    #[test]
-    fn stable_instance_ids_match_the_drivers_vectors() {
-        let ids = [
-            stable_instance_id(Kind::Microphone, "Agent Mic"),
-            stable_instance_id(Kind::Speaker, "Agent Speaker"),
-            stable_instance_id(Kind::Microphone, "agent mic"), // case-sensitive
-            stable_instance_id(Kind::Speaker, "Agent Mic"),    // kind is hashed first
-        ];
-
-        assert_eq!(
-            ids,
-            [
-                "MBD5F5BFDA42F6F12",
-                "SE4C7C9E6384B9C77",
-                "MA22168868E50FF12",
-                "S44E8BD5D8B4A93E3"
-            ]
-        );
-    }
 }

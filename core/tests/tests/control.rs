@@ -367,3 +367,70 @@ fn names_of_a_closed_owners_devices_are_free_again() {
 
     assert_eq!(created, Ok(2));
 }
+
+#[test]
+fn characters_just_outside_the_control_ranges_are_allowed_in_names() {
+    let (mut driver, owner) = greeted_driver();
+    // Space and '~' border the C0 range and DEL; U+00A0 and 'é' border C1.
+    let good = [
+        "Agent Mic",
+        "Agent~",
+        "Agent\u{a0}Mic",
+        "Café Mic",
+        "Mic 日本",
+    ];
+
+    let created: Vec<_> = good
+        .iter()
+        .map(|name| {
+            driver
+                .create_device(owner, VD_KIND_MICROPHONE, name)
+                .is_ok()
+        })
+        .collect();
+
+    assert_eq!(created, vec![true; good.len()]);
+}
+
+#[test]
+fn device_id_0_never_names_a_device_though_free_slots_hold_0() {
+    let (mut driver, owner) = greeted_driver();
+    // A slot this Owner freed keeps its owner but holds ID 0 again; the live
+    // Device is created first so it doesn't reuse that slot.
+    driver
+        .create_device(owner, VD_KIND_MICROPHONE, "Agent Mic")
+        .unwrap();
+    let freed = driver
+        .create_device(owner, VD_KIND_MICROPHONE, "Freed")
+        .unwrap();
+    driver.remove_device(owner, freed);
+
+    let removed = driver.remove_device(owner, 0);
+    let ring = driver.driver_read(0, 1);
+
+    assert_eq!((removed, ring), (VD_ERR_NO_SUCH_DEVICE, None));
+}
+
+#[test]
+fn a_remove_request_of_the_wrong_size_is_rejected() {
+    let (mut driver, owner) = greeted_driver();
+    let id = driver
+        .create_device(owner, VD_KIND_MICROPHONE, "Agent Mic")
+        .unwrap();
+    let request = as_bytes(&vd_remove_device_request { device_id: id }).to_vec();
+
+    let short = driver.send(owner, VD_CMD_REMOVE_DEVICE, &request[..3]).0;
+    let long = driver
+        .send(
+            owner,
+            VD_CMD_REMOVE_DEVICE,
+            &[request.as_slice(), &[0]].concat(),
+        )
+        .0;
+    let still_there = driver.driver_read(id, 1).is_some();
+
+    assert_eq!(
+        (short, long, still_there),
+        (VD_ERR_BAD_REQUEST, VD_ERR_BAD_REQUEST, true)
+    );
+}

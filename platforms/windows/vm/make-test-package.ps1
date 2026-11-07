@@ -25,7 +25,6 @@ $kit = 'C:\Program Files (x86)\Windows Kits\10'
 $kitVersion = '10.0.28000.0'
 $msbuild = 'C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\amd64\MSBuild.exe'
 $inf2cat = Join-Path $kit "bin\$kitVersion\x86\Inf2Cat.exe"
-$devgen = Join-Path $kit "Tools\$kitVersion\x64\devgen.exe"
 $package = Join-Path $repo 'target\vm-package'
 $driverOut = Join-Path $repo "target\driver\x64\$Configuration"
 
@@ -42,7 +41,7 @@ function Invoke-Tool([string]$What, [string]$Exe, [string[]]$Arguments) {
     if ($LASTEXITCODE -ne 0) { throw "$What failed (exit $LASTEXITCODE)" }
 }
 
-foreach ($tool in $msbuild, $inf2cat, $devgen) {
+foreach ($tool in $msbuild, $inf2cat) {
     if (-not (Test-Path $tool)) { throw "Missing tool: $tool" }
 }
 
@@ -69,7 +68,6 @@ if (Test-Path $package) { Remove-Item -Recurse -Force $package }
 New-Item -ItemType Directory -Force $package | Out-Null
 Copy-Item (Join-Path $driverOut 'viaduct.sys'), (Join-Path $driverOut 'viaduct.inf') $package
 Copy-Item (Join-Path $cliTarget 'release\viaduct-cli.exe') $package
-Copy-Item $devgen $package
 Copy-Item (Join-Path $PSScriptRoot 'prepare-vm.ps1'), (Join-Path $PSScriptRoot 'install-in-vm.ps1'),
     (Join-Path $PSScriptRoot 'probe-endpoint.ps1'), (Join-Path $PSScriptRoot 'cpu-load.ps1'),
     (Join-Path $PSScriptRoot 'trace-run.ps1'), (Join-Path $PSScriptRoot 'many-mics.ps1') $package

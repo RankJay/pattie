@@ -13,8 +13,11 @@ pub(crate) struct RingMemory {
     layout: Layout,
 }
 
-// SAFETY: the memory is plain bytes; concurrent access follows the Ring protocol.
+// SAFETY: the memory is plain bytes owned by this value; moving it between threads
+// moves only the pointer.
 unsafe impl Send for RingMemory {}
+// SAFETY: shared access goes through the header's atomic counters and the Ring
+// protocol (one writer, one reader, each touching only its own side's frames).
 unsafe impl Sync for RingMemory {}
 
 impl RingMemory {

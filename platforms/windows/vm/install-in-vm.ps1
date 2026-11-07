@@ -13,9 +13,9 @@
     (the "clean" snapshot). Trusts nothing; checks that the folder's catalog is
     signed by Microsoft (attestation signing) and installs its viaduct.inf.
 
-    Then, in both: adds and installs the package with pnputil, creates the root
-    device (Root\Viaduct) with devgen, and with -Verifier turns on Driver
-    Verifier for viaduct.sys (reboot needed).
+    Then, in both: installs with `viaduct-cli install` (creates the root device
+    Root\Viaduct if there is none, installs the package on it), and with
+    -Verifier turns on Driver Verifier for viaduct.sys (reboot needed).
 
     To undo, revert the VM to the snapshot it was installed on.
 #>
@@ -64,14 +64,9 @@ if ($Signed) {
     }
 }
 
-Write-Host '== Installing the driver package'
-& pnputil /add-driver (Join-Path $package 'viaduct.inf') /install
-if ($LASTEXITCODE -ne 0) { throw "pnputil failed ($LASTEXITCODE)" }
-
-Write-Host '== Creating the root device'
-# /bus ROOT: devgen's default (SWD) device disappears at the next reboot.
-& (Join-Path $here 'devgen.exe') /add /bus ROOT /hardwareid 'Root\Viaduct'
-if ($LASTEXITCODE -ne 0) { throw "devgen failed ($LASTEXITCODE)" }
+Write-Host '== Installing the driver (viaduct-cli install, ADR 0016)'
+& (Join-Path $here 'viaduct-cli.exe') install $package
+if ($LASTEXITCODE -ne 0) { throw "viaduct-cli install failed ($LASTEXITCODE)" }
 
 if ($Verifier) {
     Write-Host '== Turning on Driver Verifier for viaduct.sys'

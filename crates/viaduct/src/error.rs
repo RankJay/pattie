@@ -65,3 +65,42 @@ impl fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
+
+#[cfg(test)]
+mod tests {
+    use super::Error;
+
+    /// Every variant, so a new one without its own message fails here.
+    const ALL: [Error; 14] = [
+        Error::DriverNotInstalled,
+        Error::AccessDenied,
+        Error::NoBackend,
+        Error::VersionMismatch,
+        Error::UnsupportedFormat,
+        Error::BadBufferSize,
+        Error::BadName,
+        Error::DuplicateName,
+        Error::TooManyDevices,
+        Error::WrongKind,
+        Error::AlreadyTaken,
+        Error::System,
+        Error::Protocol(7),
+        Error::Os(5),
+    ];
+
+    #[test]
+    fn every_error_has_its_own_message() {
+        let mut messages: Vec<String> = ALL.iter().map(Error::to_string).collect();
+        messages.sort();
+        messages.dedup();
+
+        assert_eq!(messages.len(), ALL.len());
+        assert!(messages.iter().all(|m| !m.is_empty()));
+    }
+
+    #[test]
+    fn protocol_and_os_errors_show_their_code() {
+        assert!(Error::Protocol(7).to_string().contains("status 7"));
+        assert!(Error::Os(5).to_string().contains("error 5"));
+    }
+}

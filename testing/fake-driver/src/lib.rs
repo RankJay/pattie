@@ -40,7 +40,9 @@ impl Default for FakeDriver {
 
 impl FakeDriver {
     pub fn new() -> Self {
+        // SAFETY: a plain C struct of integers and pointers: all zeros is a valid value, set up by the init call next.
         let mut core = Box::new(unsafe { MaybeUninit::<vd_core>::zeroed().assume_init() });
+        // SAFETY: `core` is a live vd_core, borrowed exclusively.
         unsafe { vd_core_init(&mut *core) };
         FakeDriver {
             core: Arc::new(Mutex::new(Core(core))),
@@ -56,11 +58,13 @@ impl FakeDriver {
     /// Device has that ID.
     pub fn driver_read(&self, device_id: u32, count: usize) -> Option<Vec<f32>> {
         let mut core = self.core.lock().unwrap();
+        // SAFETY: the core lock is held; the core returns null or a Ring it keeps attached.
         let ring = unsafe { vd_core_device_ring(&mut *core.0, device_id) };
         if ring.is_null() {
             return None;
         }
         let mut out = vec![0.0f32; count];
+        // SAFETY: the core returned a non-null Ring, attached to memory the SDK keeps alive while the Device is live; the buffer goes with its length; the core lock is held.
         unsafe { vd_ring_read(ring, out.as_mut_ptr(), count as u32) };
         Some(out)
     }
@@ -68,10 +72,12 @@ impl FakeDriver {
     /// Windows plays `samples` to a Speaker. `false` if no live Device has that ID.
     pub fn driver_write(&self, device_id: u32, samples: &[f32]) -> bool {
         let mut core = self.core.lock().unwrap();
+        // SAFETY: as in `driver_read`.
         let ring = unsafe { vd_core_device_ring(&mut *core.0, device_id) };
         if ring.is_null() {
             return false;
         }
+        // SAFETY: the core returned a non-null Ring, attached to memory the SDK keeps alive while the Device is live; the buffer goes with its length; the core lock is held.
         unsafe { vd_ring_write(ring, samples.as_ptr(), samples.len() as u32) };
         true
     }
@@ -79,7 +85,9 @@ impl FakeDriver {
 
 impl Transport for FakeDriver {
     fn connect(&self) -> Result<Box<dyn Connection>, Error> {
+        // SAFETY: a plain C struct of integers and pointers: all zeros is a valid value, set up by the init call next.
         let mut owner = Box::new(unsafe { MaybeUninit::<vd_owner>::zeroed().assume_init() });
+        // SAFETY: `owner` is a live vd_owner, borrowed exclusively.
         unsafe { vd_owner_init(&mut *owner) };
         Ok(Box::new(FakeConnection {
             core: self.core.clone(),
@@ -111,6 +119,7 @@ fn ring_of(input: &[u8]) -> (*mut std::ffi::c_void, usize) {
         return (std::ptr::null_mut(), 0);
     }
     let request: vd_create_device_request =
+        // SAFETY: `input` holds at least one whole request (checked above); the read is unaligned-safe and the struct is plain integers.
         unsafe { std::ptr::read_unaligned(input.as_ptr().cast()) };
     if request.ring_address == 0
         || request.ring_bytes == 0
@@ -140,6 +149,7 @@ impl Connection for FakeConnection {
         let mut core = self.core.lock().unwrap();
         let (envelope, reply) = output.split_at_mut(envelope_len);
         let mut reply_len = 0usize;
+        // SAFETY: the core lock is held and the owner is this connection's; each buffer goes with its own length; the Ring is the app's own memory in this process, kept alive by its Device while the Device is live.
         let status = unsafe {
             vd_core_command(
                 &mut *core.0,
@@ -163,6 +173,7 @@ impl Drop for FakeConnection {
     fn drop(&mut self) {
         let mut removed = [0u32; VD_MAX_DEVICES as usize];
         let mut core = self.core.lock().unwrap();
+        // SAFETY: the core lock is held and the owner is this connection's; `removed` holds VD_MAX_DEVICES IDs, the most the core reports.
         unsafe { vd_core_owner_closed(&mut *core.0, &*self.owner, removed.as_mut_ptr()) };
     }
 }

@@ -79,6 +79,7 @@ fn ioctl_codes_match_the_c_macro() {
     ];
 
     let rust_codes = commands.map(rust::ioctl);
+    // SAFETY: a pure C function of one integer: it only computes an IOCTL code.
     let c_codes = commands.map(|command| unsafe { c::vd_probe_ioctl(command) });
 
     assert_eq!(rust_codes, c_codes);

@@ -1,10 +1,14 @@
 //! viaduct-cli: create a Viaduct Device from the command line, for testing the
 //! driver (first VM test, see platforms/windows/driver/README.md).
 //!
-//!   viaduct-cli mic "Agent Mic" [--tone 440]   stream a sine tone into a microphone
-//!   viaduct-cli speaker "Agent Speaker"        show the level of what's played to it
-//!   viaduct-cli measure mic|speaker <name> [--seconds 60] [--lead-ms 20]
-//!                                              latency and glitches, WASAPI as the app
+//! ```text
+//! viaduct-cli mic "Agent Mic" [--tone 440]   stream a sine tone into a microphone
+//! viaduct-cli speaker "Agent Speaker"        show the level of what's played to it
+//! viaduct-cli measure mic|speaker <name> [--seconds 60] [--lead-ms 20]
+//!                                            latency and glitches, WASAPI as the app
+//! viaduct-cli install <package folder or .inf>   put the driver on this machine
+//! viaduct-cli uninstall                      take it off (both as administrator)
+//! ```
 //!
 //! Press Enter to stop: the Device is dropped and its endpoint should disappear.
 
@@ -14,40 +18,37 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
-use viaduct::{Device, Kind, Stats};
+use viaduct::{Device, Kind};
 
+mod cli;
+mod install;
+#[cfg_attr(not(windows), allow(dead_code))] // used by `measure`, which is Windows-only
+mod latency;
 #[cfg(windows)]
 mod measure;
 mod pace;
 
+use cli::{Command, SAMPLE_RATE, health};
 use pace::Pacer;
 
-const SAMPLE_RATE: u32 = 48_000;
 /// How far ahead of real time the tone is kept: 20 ms.
 const LEAD_FRAMES: u64 = 960;
-const USAGE: &str = "usage:\n  viaduct-cli mic <name> [--tone <hz>]\n  viaduct-cli speaker <name>\n  viaduct-cli measure mic|speaker <name> [--seconds <n>] [--lead-ms <n>]";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let result = match args
-        .iter()
-        .map(String::as_str)
-        .collect::<Vec<_>>()
-        .as_slice()
-    {
-        ["mic", name] => run_mic(name, 440.0),
-        ["mic", name, "--tone", hz] => match hz.parse::<f32>() {
-            Ok(hz) if hz > 0.0 && hz < SAMPLE_RATE as f32 / 2.0 => run_mic(name, hz),
-            _ => Err(format!(
-                "--tone needs a frequency between 0 and {} Hz",
-                SAMPLE_RATE / 2
-            )),
-        },
-        ["speaker", name] => run_speaker(name),
-        ["measure", direction, name, options @ ..] => measure_options(options)
-            .and_then(|(seconds, lead_ms)| run_measure(direction, name, seconds, lead_ms)),
-        _ => Err(USAGE.to_string()),
-    };
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let result = cli::parse(&args).and_then(|command| match command {
+        Command::Mic { name, hz } => run_mic(name, hz),
+        Command::Speaker { name } => run_speaker(name),
+        Command::Measure {
+            direction,
+            name,
+            seconds,
+            lead_ms,
+        } => run_measure(direction, name, seconds, lead_ms),
+        Command::Install { package } => install::install(package),
+        Command::Uninstall => install::uninstall(),
+    });
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
@@ -55,23 +56,6 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
-}
-
-/// `--seconds <n>` (default 60) and `--lead-ms <n>` (default 20), in any order.
-fn measure_options(options: &[&str]) -> Result<(u64, u64), String> {
-    let (mut seconds, mut lead_ms) = (60, 20);
-    for pair in options.chunks(2) {
-        let value = |what: &str, max: u64| match pair.get(1).map(|v| v.parse::<u64>()) {
-            Some(Ok(n)) if n > 0 && n <= max => Ok(n),
-            _ => Err(format!("{what} needs a whole number from 1 to {max}")),
-        };
-        match pair[0] {
-            "--seconds" => seconds = value("--seconds", 86_400)?,
-            "--lead-ms" => lead_ms = value("--lead-ms", 80)?, // the default Ring holds 85 ms
-            _ => return Err(USAGE.to_string()),
-        }
-    }
-    Ok((seconds, lead_ms))
 }
 
 #[cfg(windows)]
@@ -82,16 +66,6 @@ fn run_measure(direction: &str, name: &str, seconds: u64, lead_ms: u64) -> Resul
 #[cfg(not(windows))]
 fn run_measure(_: &str, _: &str, _: u64, _: u64) -> Result<(), String> {
     Err("measure uses WASAPI and runs on Windows only".to_string())
-}
-
-/// One line of Device health: missing audio so far, and what's waiting now.
-fn health(stats: Stats) -> String {
-    format!(
-        "gap {} frames, overflow {} frames, buffered {:.1} ms",
-        stats.gap_frames,
-        stats.overflow_frames,
-        stats.buffered_frames as f64 * 1000.0 / SAMPLE_RATE as f64
-    )
 }
 
 /// A flag that turns true when the user presses Enter.

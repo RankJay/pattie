@@ -12,3 +12,6 @@ windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Secur
 
 [dev-dependencies]
 viaduct-fake-driver = { path = "../../testing/fake-driver" }
+
+[lints]
+workspace = true

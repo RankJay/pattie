@@ -11,3 +11,6 @@ viaduct = { path = "../../crates/viaduct" }
 [build-dependencies]
 bindgen = "0.73.2"
 cc = "1.11.0"
+
+[lints]
+workspace = true

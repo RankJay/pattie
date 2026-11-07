@@ -207,3 +207,34 @@ fn stats_report_how_much_audio_is_waiting_in_the_ring() {
 
     assert_eq!(buffered, (200, 30));
 }
+
+#[test]
+fn names_that_are_empty_too_long_or_hold_control_characters_are_rejected() {
+    let backend = FakeDriver::new();
+    let too_long = "x".repeat(64); // 63 UTF-16 units is the limit
+    let results = ["", too_long.as_str(), "Agent\nMic"]
+        .map(|name| builder(&backend).name(name).create().err());
+
+    assert_eq!(results, [Some(viaduct::Error::BadName); 3]);
+}
+
+#[test]
+fn the_longest_allowed_name_is_accepted() {
+    let backend = FakeDriver::new();
+
+    let created = builder(&backend).name("x".repeat(63)).create();
+
+    assert!(created.is_ok(), "{:?}", created.err());
+}
+
+#[test]
+fn a_ninth_live_device_is_too_many() {
+    let backend = FakeDriver::new();
+    let _live: Vec<_> = (1..=8)
+        .map(|n| builder(&backend).name(format!("Mic {n}")).create().unwrap())
+        .collect();
+
+    let ninth = builder(&backend).name("Mic 9").create();
+
+    assert_eq!(ninth.err(), Some(viaduct::Error::TooManyDevices));
+}

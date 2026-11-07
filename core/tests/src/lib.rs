@@ -25,13 +25,18 @@ pub struct OwnerRef(usize);
 /// The driver core, with storage owned the way the shell will own it.
 pub struct Driver {
     core: Box<vd_core>,
+    // Boxed on purpose: the core keeps pointers to owners, and a Vec<vd_owner>
+    // would move them when it grows.
+    #[expect(clippy::vec_box, reason = "the core holds pointers to each owner")]
     owners: Vec<Box<vd_owner>>,
     rings: HashMap<u32, RingMemory>, // stays alive like pinned memory
 }
 
 impl Driver {
     pub fn new() -> Self {
+        // SAFETY: a plain C struct of integers and pointers: all zeros is a valid value, set up by the init call next.
         let mut core = Box::new(unsafe { MaybeUninit::<vd_core>::zeroed().assume_init() });
+        // SAFETY: `core` is a live vd_core, borrowed exclusively.
         unsafe { vd_core_init(&mut *core) };
         Driver {
             core,
@@ -42,7 +47,9 @@ impl Driver {
 
     /// Opens a new Owner connection.
     pub fn connect(&mut self) -> OwnerRef {
+        // SAFETY: a plain C struct of integers and pointers: all zeros is a valid value, set up by the init call next.
         let mut owner = Box::new(unsafe { MaybeUninit::<vd_owner>::zeroed().assume_init() });
+        // SAFETY: `owner` is a live vd_owner, borrowed exclusively.
         unsafe { vd_owner_init(&mut *owner) };
         self.owners.push(owner);
         OwnerRef(self.owners.len() - 1)
@@ -68,6 +75,7 @@ impl Driver {
         };
         let mut output = vec![0u8; reply_capacity];
         let mut output_len = 0usize;
+        // SAFETY: core and owner are live and borrowed exclusively; each buffer goes with its own length. A Ring's heap buffer doesn't move when `create_device_with` stores it in `self.rings`, where it stays alive like pinned memory.
         let status = unsafe {
             vd_core_command(
                 &mut *self.core,
@@ -153,6 +161,7 @@ impl Driver {
     /// The Owner's handle closes; returns the removed Device IDs, sorted.
     pub fn close(&mut self, owner: OwnerRef) -> Vec<u32> {
         let mut removed = [0u32; VD_MAX_DEVICES as usize];
+        // SAFETY: core and owner are live; `removed` holds VD_MAX_DEVICES IDs, the most the core reports.
         let count = unsafe {
             vd_core_owner_closed(
                 &mut *self.core,
@@ -175,11 +184,13 @@ impl Driver {
     /// The shell streams from a Device, as Windows pulls Microphone audio.
     /// `None` when the core has no live Device with that ID.
     pub fn driver_read(&mut self, device_id: u32, count: usize) -> Option<Vec<f32>> {
+        // SAFETY: `core` is live; the core returns null or a Ring it keeps attached.
         let ring = unsafe { vd_core_device_ring(&mut *self.core, device_id) };
         if ring.is_null() {
             return None;
         }
         let mut out = vec![0.0f32; count];
+        // SAFETY: `ring` is non-null and attached to memory in `self.rings`; `out` holds `count` frames.
         unsafe { vd_ring_read(ring, out.as_mut_ptr(), count as u32) };
         Some(out)
     }
@@ -249,15 +260,28 @@ impl RingMemory {
     }
 
     pub fn header(&self) -> &vd_ring_header {
+        // SAFETY: `words` always backs a whole header, 8-byte aligned (`with_claim`); the header is plain integers.
         unsafe { &*self.words.as_ptr().cast::<vd_ring_header>() }
     }
 
     /// The app may scribble on the header at any time; the driver must cope.
     pub fn header_mut(&mut self) -> &mut vd_ring_header {
+        // SAFETY: as `header`, and `&mut self` makes the borrow exclusive.
         unsafe { &mut *self.words.as_mut_ptr().cast::<vd_ring_header>() }
     }
 
+    /// The app-side helpers index frames by the header's capacity: check the
+    /// memory really holds that many (a test may have changed the header).
+    fn assert_frames_backed(&self) {
+        let capacity = self.header().capacity_frames;
+        assert!(
+            capacity > 0 && Self::bytes_for(capacity) <= self.words.len() * 8,
+            "the header claims {capacity} frames, more than this memory holds"
+        );
+    }
+
     fn frames(&mut self) -> *mut f32 {
+        // SAFETY: `words` backs at least the header, so the result is in bounds or one past the end.
         unsafe {
             self.words
                 .as_mut_ptr()
@@ -269,10 +293,12 @@ impl RingMemory {
 
     /// The app appends frames, as the SDK writer does for a Microphone.
     pub fn app_write(&mut self, samples: &[f32]) {
+        self.assert_frames_backed();
         let capacity = self.header().capacity_frames as u64;
         let mut written = self.header().write_frames;
         let frames = self.frames();
         for &sample in samples {
+            // SAFETY: `assert_frames_backed` checked the memory holds `capacity` frames after the header, and the index is below `capacity`.
             unsafe { *frames.add((written % capacity) as usize) = sample };
             written += 1;
         }
@@ -281,12 +307,14 @@ impl RingMemory {
 
     /// The app takes up to `count` frames out, as the SDK reader does for a Speaker.
     pub fn app_read(&mut self, count: usize) -> Vec<f32> {
+        self.assert_frames_backed();
         let capacity = self.header().capacity_frames as u64;
         let written = self.header().write_frames;
         let mut read = self.header().read_frames;
         let frames = self.frames();
         let mut out = Vec::new();
         while read < written && out.len() < count {
+            // SAFETY: as in `app_write`.
             out.push(unsafe { *frames.add((read % capacity) as usize) });
             read += 1;
         }
@@ -316,7 +344,9 @@ impl Ring {
     /// `capacity_frames` in its header, whether or not those agree.
     pub fn attach(capacity_frames: u32, memory_len: usize) -> Result<Self, vd_status> {
         let mut memory = RingMemory::with_claim(capacity_frames, memory_len);
+        // SAFETY: a plain C struct of integers and pointers: all zeros is a valid value, set up by the init call next.
         let mut view = Box::new(unsafe { MaybeUninit::<vd_ring>::zeroed().assume_init() });
+        // SAFETY: `view` is borrowed exclusively; the pointer and length describe `memory`, whose heap buffer `Ring` keeps alive with the view.
         let status = unsafe { vd_ring_attach(&mut *view, memory.as_mut_ptr(), memory_len) };
         if status != VD_OK {
             return Err(status);
@@ -342,32 +372,38 @@ impl Ring {
 
     /// The driver puts frames in, as Windows plays audio to a Speaker.
     pub fn driver_write(&mut self, src: &[f32]) {
+        // SAFETY: `view` was attached to `self.memory`, which lives as long as it; the slice goes with its length.
         unsafe { vd_ring_write(&mut *self.view, src.as_ptr(), src.len() as u32) };
     }
 
     /// The driver takes frames out, as Windows pulls audio from a Microphone.
     pub fn driver_read(&mut self, dst: &mut [f32]) {
+        // SAFETY: `view` was attached to `self.memory`, which lives as long as it; the slice goes with its length.
         unsafe { vd_ring_read(&mut *self.view, dst.as_mut_ptr(), dst.len() as u32) };
     }
 
     /// As `driver_read`, when Windows streams the Microphone as 16-bit PCM.
     pub fn driver_read_pcm16(&mut self, dst: &mut [i16]) {
+        // SAFETY: `view` was attached to `self.memory`, which lives as long as it; the slice goes with its length.
         unsafe { vd_ring_read_pcm16(&mut *self.view, dst.as_mut_ptr(), dst.len() as u32) };
     }
 
     /// As `driver_write`, when Windows plays 16-bit PCM to a Speaker.
     pub fn driver_write_pcm16(&mut self, src: &[i16]) {
+        // SAFETY: `view` was attached to `self.memory`, which lives as long as it; the slice goes with its length.
         unsafe { vd_ring_write_pcm16(&mut *self.view, src.as_ptr(), src.len() as u32) };
     }
 
     /// A recording starts: the driver drops stale Microphone audio, keeping at
     /// most `keep_frames` of the newest (ADR 0014).
     pub fn driver_skip_stale(&mut self, keep_frames: u32) {
+        // SAFETY: `view` was attached to `self.memory`, which lives as long as it.
         unsafe { vd_ring_skip_stale(&mut *self.view, keep_frames) };
     }
 }
 
 /// The bytes of a plain C struct from the ABI, as the SDK would send them.
 pub fn as_bytes<T: Copy>(value: &T) -> &[u8] {
+    // SAFETY: callers pass ABI structs, which are plain integers without padding (the abi_mirror tests check their layout); the slice borrows `value`.
     unsafe { std::slice::from_raw_parts((value as *const T).cast(), size_of::<T>()) }
 }

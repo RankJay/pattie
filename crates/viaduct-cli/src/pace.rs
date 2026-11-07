@@ -143,6 +143,42 @@ mod win {
 mod tests {
     use super::*;
 
+    #[test]
+    fn the_first_pass_measures_no_gap() {
+        let mut pacer = Pacer::new(Duration::from_millis(10));
+
+        pacer.tick();
+
+        assert_eq!(pacer.gaps(), (Duration::ZERO, 0));
+    }
+
+    /// Not timing-sensitive: a sleep lasts at least as long as asked, and two
+    /// passes back to back are far under a 10 ms limit.
+    #[test]
+    fn a_gap_over_the_limit_is_counted_and_kept_as_the_longest() {
+        let mut pacer = Pacer::new(Duration::from_millis(10));
+        pacer.tick();
+        std::thread::sleep(Duration::from_millis(30));
+        pacer.tick();
+        pacer.tick();
+
+        let (longest, over) = pacer.gaps();
+
+        assert!(longest >= Duration::from_millis(30), "{longest:?}");
+        assert_eq!(over, 1);
+    }
+
+    #[test]
+    fn a_step_waits_and_the_pacing_is_described() {
+        let pacer = Pacer::new(Duration::from_millis(10));
+        let start = Instant::now();
+
+        pacer.sleep_1ms();
+
+        assert!(start.elapsed() >= Duration::from_micros(500));
+        assert!(!pacer.describe().is_empty());
+    }
+
     /// Timing-dependent, so opt-in: `cargo test -p viaduct-cli -- --ignored --nocapture`.
     /// On Windows the high-resolution timer should keep 200 steps near 200 ms,
     /// where plain 1 ms sleeps can take up to a timer tick (~15.6 ms) each.

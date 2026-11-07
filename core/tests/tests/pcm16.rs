@@ -4,10 +4,12 @@
 use viaduct_core_tests::ffi::*;
 
 fn to_pcm16(sample: f32) -> i16 {
+    // SAFETY: a pure C function of plain integers: no pointers, no state.
     unsafe { vd_pcm16_from_sample(sample.to_bits()) }
 }
 
 fn from_pcm16(pcm: i16) -> u32 {
+    // SAFETY: a pure C function of plain integers: no pointers, no state.
     unsafe { vd_sample_from_pcm16(pcm) }
 }
 
@@ -28,6 +30,7 @@ fn every_pcm16_value_becomes_exactly_that_value_over_32768() {
 #[test]
 fn every_pcm16_value_survives_the_round_trip_through_a_float_sample() {
     let changed: Vec<i16> = (i16::MIN..=i16::MAX)
+        // SAFETY: a pure C function of plain integers: no pointers, no state.
         .filter(|&pcm| unsafe { vd_pcm16_from_sample(from_pcm16(pcm)) } != pcm)
         .collect();
 
@@ -58,6 +61,7 @@ fn conversion_matches_a_float_reference_across_the_whole_bit_space() {
     let mismatches: Vec<u32> = spread
         .chain(near_full_scale)
         .filter(
+            // SAFETY: a pure C function of plain integers: no pointers, no state.
             |&bits| unsafe { vd_pcm16_from_sample(bits) } != reference_pcm16(f32::from_bits(bits)),
         )
         .collect();
