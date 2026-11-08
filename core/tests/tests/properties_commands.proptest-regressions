@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc d6b5c5019ba3d25f40e249c8ad667d8e880c4565bad6cdccf1f7bdbe7064ffe9 # shrinks to ops = [Connect, Connect, Close { owner: 0 }, Hello { owner: 0, major: 0, minor: 1 }, Create { owner: 0, kind: 1, name: 8, ring: Valid }, Connect, Connect, Connect, Create { owner: 32, kind: 2, name: 8, ring: Valid }]
+cc 02eaa2fa4cb91ab88fc18819bce02c6b9238b9f053068f98d77499439dc10a7f # shrinks to ops = [Connect, Hello { owner: 0, major: 0, minor: 1 }, Create { owner: 0, kind: 1, name: 0, ring: Valid }, Connect, Connect, Close { owner: 1 }, Create { owner: 92, kind: 1, name: 1, ring: Valid }, Hello { owner: 11, major: 0, minor: 1 }, Remove { owner: 7, id: 1 }]

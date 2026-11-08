@@ -167,9 +167,11 @@ mod tests {
         std::thread::sleep(Duration::from_millis(30));
         pacer.tick();
         pacer.tick();
+        pacer.tick();
 
         let (longest, over) = pacer.gaps();
 
+        // One gap over the limit and two far under it: only the long one counts.
         assert!(longest >= Duration::from_millis(30), "{longest:?}");
         assert_eq!(over, 1);
     }
@@ -182,7 +184,15 @@ mod tests {
         pacer.sleep_1ms();
 
         assert!(start.elapsed() >= Duration::from_micros(500));
-        assert!(!pacer.describe().is_empty());
+        // Windows 10 1803 and later always provide the high-resolution timer.
+        #[cfg(windows)]
+        assert!(
+            pacer.describe().starts_with("high-resolution timer"),
+            "{}",
+            pacer.describe()
+        );
+        #[cfg(not(windows))]
+        assert_eq!(pacer.describe(), "plain sleeps");
     }
 
     /// Timing-dependent, so opt-in: `cargo test -p viaduct-cli -- --ignored --nocapture`.

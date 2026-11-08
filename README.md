@@ -177,6 +177,7 @@ core/
   include/viaduct_abi.h     the SDK ↔ driver contract (the only shared header)
   src/                      pure C core: Device table, Ring, clock, PCM16 conversion
   tests/                    host tests for the core (Rust harness via bindgen + cc)
+  fuzz/                     libFuzzer + AddressSanitizer target for the core (Fuzzing the core)
 crates/
   viaduct/                  the Rust SDK (public API: Device, Writer, Reader, Stats, Error)
   viaduct-cli/              test tool: mic, speaker, measure, install, uninstall
@@ -373,6 +374,107 @@ test VM):
 | `crates/viaduct-cli/src/install/setup.rs` | SetupAPI calls that change the machine | INF parsing: `install.rs`; VM for the rest |
 | `testing/fake-driver` | Test scaffolding, never shipped | The contract tests it serves |
 
+### Property tests
+
+`core/tests/tests/properties_commands.rs` and `properties_ring.rs` run with
+`cargo test`. Instead of hand-picked cases, each states a rule and checks it against
+hundreds of random sequences (`proptest`), shrinking any failure to the smallest one:
+
+- **Commands:** random commands from several apps, well-formed or not, against a
+  model of the rules. After every step the status and the whole live Device table
+  must match the model: IDs never reused, at most 8 Devices, no duplicate name of a
+  kind, each Device owned by its app.
+- **Microphone:** an app overrunning its Ring while the driver reads (float or
+  PCM16) and skips stale audio: every frame delivered must be the model's.
+- **Speaker:** the driver writes, an honest app reads: same.
+- **Hostile Ring:** the app rewrites the header's counters and capacity between
+  driver calls. The driver must take and store exactly what the header allows,
+  count every other frame as Gap or Overflow, only move its own counters forward,
+  and never write past the Ring (guard words after it must stay intact).
+
+Each was checked by injecting bugs into the core: a duplicate check ignoring kind,
+removing another app's Device, accepting a newer ABI version, a reused ID, a missed
+overrun, trusting a writer one frame backwards, an undercounted Gap, a write past
+the end. All are caught.
+
+### Fuzzing the core
+
+`core/fuzz/fuzz_core.c` feeds random bytes to the core as a script of hostile apps
+(raw requests, Rings of every wrong size, header rewrites, closes, streaming), with
+AddressSanitizer stopping at the first out-of-bounds or use-after-free access. Every
+Ring is a `malloc` of exactly the size the driver is told, so even a one-byte read
+past it is caught. Build it (Visual Studio's clang, which ships libFuzzer and ASan):
+
+```bash
+mkdir -p target/fuzz/corpus && MSYS_NO_PATHCONV=1 "/c/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/Llvm/x64/bin/clang-cl.exe" -fsanitize=fuzzer,address /Zi /O1 /MT /W4 /WX -Wconversion -Wsign-conversion /std:c17 /Icore/include /Icore/src core/src/viaduct_core.c core/src/viaduct_ring.c core/src/viaduct_clock.c core/src/viaduct_pcm16.c core/fuzz/fuzz_core.c /Fotarget/fuzz/ /Fetarget/fuzz/fuzz_core.exe
+```
+
+Run it for as long as you like (here 10 minutes); ASan's DLL must be on the `PATH`:
+
+```bash
+PATH="/c/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/Llvm/x64/lib/clang/22/lib/windows:$PATH" target/fuzz/fuzz_core.exe -max_total_time=600 -max_len=4096 target/fuzz/corpus
+```
+
+- `/MT` matters: with `/MD` the program links the static C runtime's `malloc`
+  anyway and ASan can't see the Rings. `22` in the path is clang's major version.
+- It uses about 1 GB of memory at most (libFuzzer stops at 2 GB).
+- `target/fuzz/corpus` keeps the inputs that reached new code, so each run starts
+  where the last left off. On a finding it writes `crash-<hash>` with the input and
+  ASan's report names the line; rerun one input with
+  `target/fuzz/fuzz_core.exe crash-<hash>`. Turn each finding into a test in
+  `core/tests/` before fixing it.
+- Checked: an injected read past the end of the Ring was caught in a few seconds.
+
+### Mutation testing
+
+`cargo-mutants` makes small deliberate bugs in the Rust code (a flipped comparison,
+a function returning a default) and runs the tests against each. A bug no test
+catches is a gap coverage can't show: the line ran, but nothing checked its result.
+It skips what coverage skips (`.cargo/mutants.toml`). Once:
+
+```bash
+cargo install cargo-mutants --locked
+```
+
+Then, occasionally rather than before every commit (a full run takes a few minutes):
+
+```bash
+cargo mutants -j 4 --output target
+```
+
+`target/mutants.out/missed.txt` lists the bugs no test caught. The C core can't be
+mutated this way; its key checks get the same treatment by hand (delete the check,
+confirm a test fails), as listed under Property tests.
+
+### Miri
+
+Miri runs the Rust tests in an interpreter that checks every memory access, and
+fails on undefined behaviour the compiled tests can pass straight through: reading
+past an allocation, a misaligned or dangling pointer, a data race between threads.
+It runs on the Ring's own tests (`crates/viaduct/src/ring.rs`), which play the
+driver's side in Rust with the C core's counter protocol, two of them on a second
+thread. The SDK's other tests reach the Ring through the C fake driver, and Miri
+can't run C. Once:
+
+```bash
+rustup toolchain install nightly --profile minimal --component miri,rust-src
+```
+
+Then, after any change to `ring.rs` (each runs in seconds):
+
+```bash
+cargo +nightly miri test -p viaduct --lib
+```
+
+```bash
+MIRIFLAGS="-Zmiri-many-seeds=0..32" cargo +nightly miri test -p viaduct --lib ring::
+```
+
+The second tries 32 thread schedules, for the races only some schedules show.
+`-Zmiri-strict-provenance` and `-Zmiri-tree-borrows` (stricter pointer rules) pass
+too. Checked: a missing `Release` on the write counter, a frame address one past
+its slot and a misaligned counter all pass the normal tests, and Miri reports each.
+
 ### Lint rules
 
 Where they live, from widest to narrowest:
@@ -401,7 +503,7 @@ saying why it's correct (clippy fails the build otherwise:
 `undocumented_unsafe_blocks`, `multiple_unsafe_ops_per_block`);
 - wrap it in a safe function or type (handles freed in `Drop`), so callers never see it;
 - shared memory with the kernel (`crates/viaduct/src/ring.rs`) is the one place that
-deserves the most care; it follows the Ring protocol exactly.
+deserves the most care; it follows the Ring protocol exactly, and Miri checks it (above).
 
 ### Style
 

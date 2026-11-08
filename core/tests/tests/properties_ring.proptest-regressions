@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 50bdfbd506948ad4f6821ba56011c25d3c772b2b4ba37bff297ab3c2ecf148df # shrinks to capacity = 256, ops = [AppWrite(257), DriverRead(0)]
+cc ba518e09560d949ddad85f4a69d2e7caab7072e647b882d08b865eaa744070a2 # shrinks to capacity = 512, ops = [DriverWrite(65), DriverWrite(150), SetRead(585), DriverWrite(370), SetWrite(0), DriverWrite(512), SetRead(0), DriverWrite(0), DriverWrite(1), SetWrite(0), SetWrite(0), SetWrite(0), SetWrite(0), SetWrite(0)]

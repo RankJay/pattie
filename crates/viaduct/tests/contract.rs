@@ -34,6 +34,16 @@ fn a_duplicate_name_of_the_same_kind_is_rejected() {
 }
 
 #[test]
+fn a_microphone_and_a_speaker_may_share_a_name() {
+    let backend = FakeDriver::new();
+    let _mic = builder(&backend).name("Agent").create().unwrap();
+
+    let speaker = builder(&backend).name("Agent").kind(Kind::Speaker).create();
+
+    assert!(speaker.is_ok(), "{:?}", speaker.err());
+}
+
+#[test]
 fn dropping_a_device_frees_its_name_and_its_id_is_not_reused() {
     let backend = FakeDriver::new();
     let first = builder(&backend).name("Agent Mic").create().unwrap();
@@ -75,6 +85,35 @@ fn writing_into_a_full_ring_drops_the_excess_counted_as_overflow() {
     let accepted = tx.write(&[0.5; 300]).unwrap(); // nobody is reading
 
     assert_eq!((accepted, mic.stats().overflow_frames), (256, 44));
+}
+
+#[test]
+fn a_partly_full_ring_accepts_only_the_room_left() {
+    let backend = FakeDriver::new();
+    let mic = builder(&backend)
+        .name("Agent Mic")
+        .buffer_frames(256)
+        .create()
+        .unwrap();
+    let mut tx = mic.writer().unwrap();
+    tx.write(&[0.5; 200]).unwrap();
+    backend.driver_read(mic.id(), 50); // Windows takes 50: 150 unread, 106 free
+
+    let accepted = tx.write(&[0.5; 150]).unwrap();
+
+    assert_eq!((accepted, mic.stats().overflow_frames), (106, 44));
+}
+
+#[test]
+fn audio_windows_asks_for_and_doesnt_get_shows_up_as_gap() {
+    let backend = FakeDriver::new();
+    let mic = builder(&backend).name("Agent Mic").create().unwrap();
+    let mut tx = mic.writer().unwrap();
+    tx.write(&[0.5; 30]).unwrap();
+
+    backend.driver_read(mic.id(), 100); // 30 there, 70 missing
+
+    assert_eq!(mic.stats().gap_frames, 70);
 }
 
 #[test]
@@ -150,6 +189,19 @@ fn dropping_a_writer_lets_the_device_hand_out_another() {
     drop(mic.writer().unwrap());
 
     assert!(mic.writer().is_ok());
+}
+
+#[test]
+fn dropping_a_reader_lets_the_device_hand_out_another() {
+    let backend = FakeDriver::new();
+    let speaker = builder(&backend)
+        .name("Agent Speaker")
+        .kind(Kind::Speaker)
+        .create()
+        .unwrap();
+    drop(speaker.reader().unwrap());
+
+    assert!(speaker.reader().is_ok());
 }
 
 #[test]

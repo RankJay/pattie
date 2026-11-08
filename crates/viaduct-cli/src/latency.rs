@@ -157,6 +157,18 @@ mod tests {
     }
 
     #[test]
+    fn a_sample_exactly_at_the_detection_level_is_a_click() {
+        let mut detector = ClickDetector::default();
+
+        let hits = [
+            detector.detect(0, DETECT_LEVEL - 0.001),
+            detector.detect(MS, DETECT_LEVEL),
+        ];
+
+        assert_eq!(hits, [false, true]);
+    }
+
+    #[test]
     fn each_click_seen_pairs_with_the_latest_unused_click_sent_before_it() {
         let sent = [sent(1000, 20), sent(1500, 20), sent(2000, 0)];
         // 1540 pairs with 1500 (the latest, not 1000). 1560: the only unused click

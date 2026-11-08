@@ -196,6 +196,40 @@ impl Driver {
     }
 }
 
+impl Driver {
+    /// The core's live Devices, sorted by ID, with each Owner as its `OwnerRef`.
+    pub fn live_devices(&self) -> Vec<LiveDevice> {
+        let mut live: Vec<LiveDevice> = self
+            .core
+            .devices
+            .iter()
+            .filter(|device| device.id != 0)
+            .map(|device| LiveDevice {
+                id: device.id,
+                kind: device.kind,
+                owner: self
+                    .owners
+                    .iter()
+                    .position(|owner| ptr::eq(&**owner, device.owner))
+                    .map(OwnerRef),
+                name: device.name[..device.name_len as usize].to_vec(),
+            })
+            .collect();
+        live.sort_by_key(|device| device.id);
+        live
+    }
+}
+
+/// One live Device as the core records it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LiveDevice {
+    pub id: u32,
+    pub kind: u32,
+    /// `None` would mean the core points at an Owner the tests never opened.
+    pub owner: Option<OwnerRef>,
+    pub name: Vec<u16>,
+}
+
 impl Default for Driver {
     fn default() -> Self {
         Self::new()
@@ -219,10 +253,18 @@ pub fn create_device_request(kind: u32, name: &str) -> vd_create_device_request 
 }
 
 /// Memory the app allocated for a Ring (ADR 0006), and what the SDK does to it.
+///
+/// Guard words follow the memory the driver is told about, holding `GUARD`: a
+/// driver write past the end changes them (`guard_intact`).
 pub struct RingMemory {
     words: Vec<u64>, // u64 so the header is 8-byte aligned, like real allocations
     len: usize,
+    /// Words before the guard: the memory the app may use.
+    backed_words: usize,
 }
+
+const GUARD: u64 = 0xA5A5_A5A5_A5A5_A5A5;
+const GUARD_WORDS: usize = 8;
 
 impl RingMemory {
     /// Bytes a correctly sized Ring of `capacity_frames` needs.
@@ -238,10 +280,13 @@ impl RingMemory {
     /// `len` bytes whose header claims `capacity_frames`, agreeing or not.
     pub fn with_claim(capacity_frames: u32, len: usize) -> Self {
         // Always back at least a whole header, so the claim can be written.
-        let backing = len.max(size_of::<vd_ring_header>());
+        let backed_words = len.max(size_of::<vd_ring_header>()).div_ceil(8);
+        let mut words = vec![0u64; backed_words + GUARD_WORDS];
+        words[backed_words..].fill(GUARD);
         let mut memory = RingMemory {
-            words: vec![0u64; backing.div_ceil(8)],
+            words,
             len,
+            backed_words,
         };
         memory.header_mut().capacity_frames = capacity_frames;
         memory
@@ -257,6 +302,13 @@ impl RingMemory {
 
     pub fn is_empty(&self) -> bool {
         self.len == 0
+    }
+
+    /// Whether the guard words after the memory still hold their pattern.
+    pub fn guard_intact(&self) -> bool {
+        self.words[self.backed_words..]
+            .iter()
+            .all(|&word| word == GUARD)
     }
 
     pub fn header(&self) -> &vd_ring_header {
@@ -275,7 +327,7 @@ impl RingMemory {
     fn assert_frames_backed(&self) {
         let capacity = self.header().capacity_frames;
         assert!(
-            capacity > 0 && Self::bytes_for(capacity) <= self.words.len() * 8,
+            capacity > 0 && Self::bytes_for(capacity) <= self.backed_words * 8,
             "the header claims {capacity} frames, more than this memory holds"
         );
     }
@@ -332,6 +384,16 @@ impl RingMemory {
     }
 }
 
+/// The driver's private view of a Ring's counters (`vd_ring`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RingCounters {
+    pub capacity: u32,
+    pub read: u64,
+    pub gap: u64,
+    pub write: u64,
+    pub overflow: u64,
+}
+
 /// A standalone Ring for Seam B tests: app memory with the core attached.
 /// `app_*` methods do what the SDK does; `driver_*` methods call the core.
 pub struct Ring {
@@ -365,6 +427,22 @@ impl Ring {
 
     pub fn header(&self) -> &vd_ring_header {
         self.memory.header()
+    }
+
+    /// The driver's private counters, which the app can't touch.
+    pub fn driver_counters(&self) -> RingCounters {
+        RingCounters {
+            capacity: self.view.capacity_frames,
+            read: self.view.read_frames,
+            gap: self.view.gap_frames,
+            write: self.view.write_frames,
+            overflow: self.view.overflow_frames,
+        }
+    }
+
+    /// Whether the driver has written only inside the Ring's memory.
+    pub fn guard_intact(&self) -> bool {
+        self.memory.guard_intact()
     }
 
     pub fn app_header_mut(&mut self) -> &mut vd_ring_header {

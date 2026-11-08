@@ -1,0 +1,33 @@
+# cargo-mutants (`cargo mutants`): small deliberate bugs, each run against the
+# tests; a bug no test catches is a gap. It skips what coverage skips (README,
+# Coverage): code that only does something against a live driver, endpoint or
+# machine setup, checked in the test VM. And test code itself.
+exclude_globs = [
+    "crates/viaduct/src/windows.rs",
+    "crates/viaduct-cli/src/main.rs",
+    "crates/viaduct-cli/src/measure.rs",
+    "crates/viaduct-cli/src/install/setup.rs",
+    "testing/**",
+    "core/tests/**",
+]
+
+# Run every crate's tests against each bug, not only the bugged crate's: the SDK's
+# ABI constants are checked against the C header by core/tests (abi_mirror).
+test_workspace = true
+
+# Bugs no host test can observe, each with its reason.
+exclude_re = [
+    # Freeing memory: a leak isn't visible without an allocator that counts.
+    "<impl Drop for RingMemory>::drop",
+    # Thin wrappers around install/setup.rs, which changes the machine (VM-STEPS D.5).
+    "replace (install|uninstall) -> Result<\\(\\), String> with Ok\\(\\(\\)\\)",
+    # The Windows timer and MMCSS calls: their effect is only timing (the opt-in
+    # `steps_take_about_a_millisecond` test) and releasing OS handles.
+    "in win::",
+    "win::(high_resolution_timer|join_pro_audio|wait|release)",
+    "<impl Drop for Pacer>::drop",
+    # Equivalent: two Instants a gap apart are never exactly equal to the limit.
+    "replace > with >= in Pacer::tick",
+    # Equivalent: the IOCTL code's three bit fields don't overlap, so | and ^ agree.
+    "replace \\| with \\^ in ioctl",
+]
