@@ -154,9 +154,13 @@ in the core.
 - **The app allocates the Ring; the driver locks it.** The driver never trusts it:
 every index and size the app can touch is checked, since a hostile app controls
 every byte of the Ring.
-- **One ABI header, versioned.** `core/include/viaduct_abi.h` is the contract between SDK
+- **One ABI header, versioned (1.0).** `core/include/viaduct_abi.h` is the contract between SDK
 and driver. The SDK mirrors it in `crates/viaduct/src/abi.rs`, and a test checks
-every constant, size and offset match. Changing it means a version bump.
+every constant, size and offset match. Hello negotiates: the driver accepts any SDK
+of its major and replies with its own version, and each connection speaks the
+lower minor, so an app with a newer SDK still works on an older driver. A minor
+only adds; the spare bytes in the header are reserved for formats and timestamps
+(ADR 0017).
 - **v0 scope is fixed:** 48 kHz, mono, float, at most 8 Devices, names up to 63
 characters, case-sensitive. Windows may open the endpoint as float or 16-bit PCM;
 the driver converts, the app always sees float.
@@ -187,7 +191,9 @@ platforms/windows/
   driver/                   the ACX/KMDF driver: shell sources, viaduct.inf, project
   vm/                       scripts for the test VM (package, install, probe, trace)
   release/                  make-attestation-cab.ps1 (the .cab for Microsoft signing)
-target/                     build output (driver, VM package, attestation cab)
+target/                     build output (driver, VM package, attestation cab, CodeQL)
+clippy.toml, deny.toml      banned methods; allowed dependencies (Lint rules, Dependency checks)
+.cargo/mutants.toml         what mutation testing skips, with reasons
 ```
 
 ## Getting started
@@ -313,7 +319,8 @@ pass, and for anything subtle check that breaking the code breaks the test.
 - **Logic in the core, Windows in the shell.** New rules about Devices, names or the
 Ring go in `core/src/` with a host test in `core/tests/`. The shell stays thin.
 - **The ABI is a contract.** Change `viaduct_abi.h` and `abi.rs` together; the
-`abi_mirror` test fails if they drift.
+`abi_mirror` test fails if they drift. Within major 1, only add (a new minor),
+and use the reserved spare bytes only for what ADR 0017 placed there.
 - **Check driver changes against Microsoft's samples** (the ACX samples and SdcaVad in
 `Windows-driver-samples`) before taking them to the VM. Most hard-won fixes came
 from matching what those samples do.
@@ -332,6 +339,13 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ```bash
 cargo test --workspace
+```
+
+If you changed dependencies (`Cargo.toml` or `Cargo.lock`), check them
+(Dependency checks, below):
+
+```bash
+cargo deny check
 ```
 
 If you touched the driver, build it too (warnings are errors there), with Microsoft's
@@ -393,7 +407,8 @@ hundreds of random sequences (`proptest`), shrinking any failure to the smallest
   and never write past the Ring (guard words after it must stay intact).
 
 Each was checked by injecting bugs into the core: a duplicate check ignoring kind,
-removing another app's Device, accepting a newer ABI version, a reused ID, a missed
+removing another app's Device, accepting an older major ABI version, agreeing on a
+minor the driver doesn't speak, a reused ID, a missed
 overrun, trusting a writer one frame backwards, an undercounted Gap, a write past
 the end. All are caught.
 
@@ -474,6 +489,47 @@ The second tries 32 thread schedules, for the races only some schedules show.
 `-Zmiri-strict-provenance` and `-Zmiri-tree-borrows` (stricter pointer rules) pass
 too. Checked: a missing `Release` on the write counter, a frame address one past
 its slot and a misaligned counter all pass the normal tests, and Miri reports each.
+
+### Dependency checks
+
+`cargo deny check` (`deny.toml`) fails on a dependency with a known vulnerability,
+an unmaintained or yanked release (the RustSec database, fetched on each run), a
+licence outside the allowed list, a wildcard version, or a source other than
+crates.io. One duplicate is allowed by name: `syn` 2 and 3, an upstream split
+between the CLI's `windows` crate and bindgen, which only test builds use. Once:
+
+```bash
+cargo install cargo-deny --locked
+```
+
+### CodeQL on the driver
+
+Microsoft's driver queries (`microsoft/windows-drivers`, the "recommended" suite: 106
+checks for kernel and C bugs, a superset of what driver certification requires)
+run over everything the driver build compiles, the core included. Once, from
+Microsoft's current table (Learn: "Run CodeQL analysis on Windows driver code"):
+CodeQL CLI 2.25.5 unpacked to `D:\Tools\codeql-home\codeql`, then
+
+```bash
+/d/Tools/codeql-home/codeql/codeql.exe pack download microsoft/windows-drivers@1.10.0 microsoft/cpp-queries@0.0.5
+```
+
+After a driver change, build the database from a full rebuild, then analyze it
+(a few minutes in all):
+
+```bash
+MSYS_NO_PATHCONV=1 /d/Tools/codeql-home/codeql/codeql.exe database create target/codeql/db --language=cpp --source-root=. --overwrite --command="\"C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\amd64\MSBuild.exe\" platforms\windows\driver\viaduct.vcxproj -t:Rebuild -p:Configuration=Release -p:Platform=x64"
+```
+
+```bash
+MSYS_NO_PATHCONV=1 /d/Tools/codeql-home/codeql/codeql.exe database analyze target/codeql/db microsoft/windows-drivers:windows-driver-suites/recommended.qls microsoft/cpp-queries:AlertSuppression.ql --format=sarifv2.1.0 --output=target/codeql/viaduct.sarif
+```
+
+Want: no result without a suppression in `target/codeql/viaduct.sarif` (Visual
+Studio's or VS Code's SARIF viewer shows them). A false positive is suppressed in
+place with `/* codeql[rule-id] */` on the line above, after a comment saying why.
+There is one: the padding check on the packet array in `stream.c`, which doesn't know
+`ExAllocatePool2` zeroes memory.
 
 ### Lint rules
 

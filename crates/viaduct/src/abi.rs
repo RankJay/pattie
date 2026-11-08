@@ -7,8 +7,8 @@
 
 #![allow(dead_code)] // the mirror is complete on purpose; not every item is used yet
 
-pub const ABI_MAJOR: u16 = 0;
-pub const ABI_MINOR: u16 = 1;
+pub const ABI_MAJOR: u16 = 1;
+pub const ABI_MINOR: u16 = 0;
 
 pub type Status = u32;
 pub const OK: Status = 0;
@@ -51,6 +51,14 @@ pub const RING_MAX_BYTES: u32 = 192 + RING_MAX_FRAMES * 4;
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct HelloRequest {
+    pub major: u16,
+    pub minor: u16,
+}
+
+/// The driver's own version, in reply to Hello.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct HelloReply {
     pub major: u16,
     pub minor: u16,
 }

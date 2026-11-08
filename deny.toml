@@ -1,0 +1,39 @@
+# cargo-deny (`cargo deny check`): what this workspace may depend on.
+# Advisories: no dependency with a known vulnerability, unmaintained notice or
+# yanked release. Licenses: only these, all of which allow closed-source use.
+# Bans: no wildcard versions. Sources: crates.io only.
+
+[graph]
+all-features = true
+
+[advisories]
+yanked = "deny"
+ignore = []
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+]
+confidence-threshold = 0.9
+
+[licenses.private]
+# The workspace's own crates are unpublished (publish = false) and unlicensed.
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true # the workspace's own path dependencies
+skip = [
+    # windows' macros (the CLI) are on syn 2, bindgen (test builds only) on syn 3:
+    # an upstream split, and no shipped binary contains both.
+    { crate = "syn@2", reason = "windows-implement/windows-interface not yet on syn 3" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

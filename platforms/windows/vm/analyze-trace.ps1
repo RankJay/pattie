@@ -6,7 +6,7 @@
     Prints, using the Windows Performance Toolkit's xperf.exe (installed with the
     Driver Kit):
       1. the driver's own events ("Viaduct.Driver"): stream format, packet size,
-         and per stream the timer's late passes and lateness plus the Ring's Gap
+         and per stream the timer's late passes, stalls skipped and lateness plus the Ring's Gap
          and Overflow totals (src/trace.h);
       2. for a -cpu.etl recording, the DPC/ISR summary, with the lines for
          ntoskrnl.exe, where the stream timer's DPCs are counted.

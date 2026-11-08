@@ -12,7 +12,7 @@ pub enum Error {
     AccessDenied,
     /// No backend exists for this operating system yet.
     NoBackend,
-    /// The installed driver doesn't serve this SDK's ABI version (ADR 0003).
+    /// The installed driver serves another major ABI version than this SDK (ADR 0003).
     VersionMismatch,
     /// Only 48 kHz, mono is supported in v0 (ADR 0005).
     UnsupportedFormat,

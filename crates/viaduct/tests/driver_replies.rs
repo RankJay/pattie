@@ -1,5 +1,5 @@
-//! How the SDK reads the driver's replies when they aren't a success: statuses the
-//! real core never sends this SDK (a driver of another ABI version, Windows
+//! How the SDK reads the driver's replies beyond the everyday ones: drivers of
+//! other ABI versions, statuses the real core never sends this SDK (Windows
 //! refusing the endpoint) and malformed replies. A scripted connection stands in
 //! for the driver, answering every command with one chosen reply.
 
@@ -13,6 +13,10 @@ use viaduct::{Device, Error};
 enum Reply {
     /// This status for Hello; success for everything else.
     Hello(abi::Status),
+    /// Hello succeeds with this driver version (major, minor) in its reply.
+    DriverVersion(u16, u16),
+    /// Hello succeeds with only this many bytes.
+    ShortHello(usize),
     /// Success for Hello, this status for Create Device.
     Create(abi::Status),
     /// Success for Hello; for Create Device, only this many bytes.
@@ -32,13 +36,25 @@ struct ScriptedConnection(Reply);
 impl Connection for ScriptedConnection {
     fn ioctl(&mut self, code: u32, _input: &[u8], output: &mut [u8]) -> Result<usize, Error> {
         let hello = code == abi::ioctl(abi::CMD_HELLO);
+        let mut version = (abi::ABI_MAJOR, abi::ABI_MINOR);
         let status = match (self.0, hello) {
             (Reply::Hello(status), true) => status,
+            (Reply::DriverVersion(major, minor), true) => {
+                version = (major, minor);
+                abi::OK
+            }
+            (Reply::ShortHello(len), true) | (Reply::ShortCreate(len), false) => {
+                output[..4].copy_from_slice(&abi::OK.to_ne_bytes());
+                return Ok(len);
+            }
             (Reply::Create(status), false) => status,
-            (Reply::ShortCreate(len), false) => return Ok(len),
             _ => abi::OK,
         };
         output[..4].copy_from_slice(&status.to_ne_bytes());
+        if hello && status == abi::OK {
+            output[4..6].copy_from_slice(&version.0.to_ne_bytes());
+            output[6..8].copy_from_slice(&version.1.to_ne_bytes());
+        }
         Ok(output.len())
     }
 }
@@ -55,6 +71,28 @@ fn a_driver_of_another_abi_version_is_a_version_mismatch() {
     let result = create_with(Reply::Hello(abi::ERR_VERSION));
 
     assert_eq!(result.err(), Some(Error::VersionMismatch));
+}
+
+#[test]
+fn a_newer_driver_is_used_at_this_sdks_version() {
+    let result = create_with(Reply::DriverVersion(abi::ABI_MAJOR, abi::ABI_MINOR + 4));
+
+    assert!(result.is_ok(), "{:?}", result.err());
+}
+
+#[test]
+fn a_driver_replying_with_another_major_is_a_version_mismatch() {
+    let result = create_with(Reply::DriverVersion(abi::ABI_MAJOR + 1, 0));
+
+    assert_eq!(result.err(), Some(Error::VersionMismatch));
+}
+
+#[test]
+fn a_success_reply_too_short_for_its_contents_is_a_protocol_error() {
+    // An envelope alone, where Hello's version (or Create's Device ID) should follow.
+    let results = [Reply::ShortHello(4), Reply::ShortCreate(4)].map(|r| create_with(r).err());
+
+    assert_eq!(results, [Some(Error::Protocol(abi::ERR_BAD_REQUEST)); 2]);
 }
 
 #[test]

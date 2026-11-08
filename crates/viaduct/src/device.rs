@@ -97,12 +97,19 @@ impl DeviceBuilder {
             major: abi::ABI_MAJOR,
             minor: abi::ABI_MINOR,
         };
+        let mut reply = [0u8; size_of::<abi::HelloReply>()];
         send(
             connection.as_mut(),
             abi::CMD_HELLO,
             abi::bytes_of(&hello),
-            &mut [],
+            &mut reply,
         )?;
+        // The driver replies with its version; the connection speaks the lower
+        // minor (ADR 0003). At 1.0 there is no older minor to fall back to yet.
+        let driver_major = u16::from_ne_bytes([reply[0], reply[1]]);
+        if driver_major != abi::ABI_MAJOR {
+            return Err(Error::VersionMismatch);
+        }
 
         let ring = RingMemory::new(self.buffer_frames)?;
         let mut request = CreateDeviceRequest {
@@ -173,6 +180,9 @@ fn send(
         .ok_or(Error::Protocol(abi::ERR_BAD_REQUEST))?;
     if status != abi::OK {
         return Err(error_from_status(status));
+    }
+    if written < envelope_len + reply.len() {
+        return Err(Error::Protocol(abi::ERR_BAD_REQUEST));
     }
     reply.copy_from_slice(&output[envelope_len..envelope_len + reply.len()]);
     Ok(())

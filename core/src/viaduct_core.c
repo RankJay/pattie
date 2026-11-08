@@ -21,6 +21,7 @@ void vd_core_init(vd_core *core)
 void vd_owner_init(vd_owner *owner)
 {
     owner->greeted = false;
+    owner->minor = 0;
 }
 
 static bool is_control(uint16_t unit)
@@ -129,15 +130,24 @@ vd_status vd_core_command(vd_core *core, vd_owner *owner, uint32_t command,
 
     if (command == VD_CMD_HELLO) {
         vd_hello_request hello;
+        vd_hello_reply reply;
 
         if (input_len != sizeof hello) {
             return VD_ERR_BAD_REQUEST;
         }
         copy_bytes(&hello, input, sizeof hello);
-        if (hello.major != VIADUCT_ABI_MAJOR || hello.minor > VIADUCT_ABI_MINOR) {
+        if (hello.major != VIADUCT_ABI_MAJOR) {
             return VD_ERR_VERSION;
         }
+        if (output_cap < sizeof reply) {
+            return VD_ERR_BUFFER_TOO_SMALL;
+        }
+        reply.major = (uint16_t)VIADUCT_ABI_MAJOR;
+        reply.minor = (uint16_t)VIADUCT_ABI_MINOR;
+        copy_bytes(output, &reply, sizeof reply);
+        *output_len = sizeof reply;
         owner->greeted = true;
+        owner->minor = hello.minor < reply.minor ? hello.minor : reply.minor;
         return VD_OK;
     }
     if (!owner->greeted) {

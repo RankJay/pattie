@@ -26,3 +26,23 @@ uint64_t vd_clock_ticks_for(uint64_t frames, uint64_t tick_hz, uint32_t sample_r
 
     return seconds * tick_hz + (remainder * tick_hz + sample_rate - 1) / sample_rate;
 }
+
+bool vd_clock_next_pass(uint64_t *start_ticks, uint64_t packets_done, uint32_t packet_frames,
+                        uint32_t max_behind, uint64_t now_ticks, uint64_t tick_hz,
+                        uint32_t sample_rate, uint64_t *due_ticks)
+{
+    uint64_t next_frames = (packets_done + 1u) * packet_frames;
+    uint64_t next_ticks = vd_clock_ticks_for(next_frames, tick_hz, sample_rate);
+    /* The pass `max_behind` packets after this one: if even it is due, more than
+     * `max_behind` passes are, and the stream was stalled. */
+    uint64_t last_catchable_ticks =
+        vd_clock_ticks_for(next_frames + (uint64_t)max_behind * packet_frames, tick_hz, sample_rate);
+    uint64_t elapsed = now_ticks - *start_ticks; /* unsigned: survives tick wrap */
+    bool slipped = elapsed >= last_catchable_ticks;
+
+    if (slipped) {
+        *start_ticks = now_ticks - next_ticks;
+    }
+    *due_ticks = *start_ticks + next_ticks;
+    return slipped;
+}

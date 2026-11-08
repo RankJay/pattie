@@ -3,7 +3,8 @@
 //!
 //! After every step the core's status must be the model's, and its live Device
 //! table must equal the model's exactly: IDs never reused, at most 8 Devices, no
-//! two of one kind with the same name, each owned by the app that created it.
+//! two of one kind with the same name, each owned by the app that created it. And
+//! each connection speaks the minor version Hello agreed (ADR 0003).
 
 use proptest::prelude::*;
 use std::mem::size_of;
@@ -73,6 +74,7 @@ fn op() -> impl Strategy<Value = Op> {
                 1 => Just((VIADUCT_ABI_MAJOR as u16, 0)),
                 1 => Just((VIADUCT_ABI_MAJOR as u16, VIADUCT_ABI_MINOR as u16 + 1)),
                 1 => Just((VIADUCT_ABI_MAJOR as u16 + 1, VIADUCT_ABI_MINOR as u16)),
+                1 => Just((VIADUCT_ABI_MAJOR as u16 - 1, VIADUCT_ABI_MINOR as u16)),
                 1 => any::<(u16, u16)>(),
             ])
             .prop_map(|(owner, (major, minor))| Op::Hello { owner, major, minor }),
@@ -110,6 +112,7 @@ struct Model {
     owners: Vec<OwnerRef>,
     open: Vec<bool>,
     greeted: Vec<bool>,
+    minor: Vec<u16>,
     devices: Vec<LiveDevice>,
     next_id: u32,
 }
@@ -122,10 +125,11 @@ impl Model {
     }
 
     fn hello(&mut self, owner: usize, major: u16, minor: u16) -> vd_status {
-        if u32::from(major) != VIADUCT_ABI_MAJOR || u32::from(minor) > VIADUCT_ABI_MINOR {
+        if u32::from(major) != VIADUCT_ABI_MAJOR {
             return VD_ERR_VERSION;
         }
         self.greeted[owner] = true;
+        self.minor[owner] = minor.min(VIADUCT_ABI_MINOR as u16);
         VD_OK
     }
 
@@ -239,6 +243,17 @@ fn request_for(kind: u32, name: usize) -> (vd_create_device_request, Vec<u16>, u
     (request, units, request.name_len)
 }
 
+/// A successful Hello replies with the driver's version; nothing else here replies.
+fn expected_reply(command: u32, status: vd_status) -> Vec<u8> {
+    if command != VD_CMD_HELLO || status != VD_OK {
+        return vec![];
+    }
+    [VIADUCT_ABI_MAJOR as u16, VIADUCT_ABI_MINOR as u16]
+        .iter()
+        .flat_map(|v| v.to_le_bytes())
+        .collect()
+}
+
 fn ring_for(choice: RingChoice) -> Option<RingMemory> {
     match choice {
         RingChoice::Valid => Some(RingMemory::new(256)),
@@ -261,11 +276,14 @@ proptest! {
                     model.owners.push(driver.connect());
                     model.open.push(true);
                     model.greeted.push(false);
+                    model.minor.push(0);
                 }
                 Op::Hello { owner, major, minor } => {
                     let Some(i) = model.open_owner(owner) else { continue };
-                    let status = driver.hello(model.owners[i], major, minor);
-                    prop_assert_eq!(status, model.hello(i, major, minor), "Hello {}.{}", major, minor);
+                    let (status, reply) = driver.hello_with(model.owners[i], major, minor, 256);
+                    let expected = model.hello(i, major, minor);
+                    prop_assert_eq!(status, expected, "Hello {}.{}", major, minor);
+                    prop_assert_eq!(reply, expected_reply(VD_CMD_HELLO, status));
                 }
                 Op::Create { owner, kind, name, ring } => {
                     let Some(i) = model.open_owner(owner) else { continue };
@@ -292,10 +310,14 @@ proptest! {
                     let Some(i) = model.open_owner(owner) else { continue };
                     let (status, reply) = driver.send(model.owners[i], command, &bytes);
                     prop_assert_eq!(status, model.raw(i, command, &bytes));
-                    prop_assert!(reply.is_empty(), "no reply for command {}", command);
+                    prop_assert_eq!(reply, expected_reply(command, status), "command {}", command);
                 }
             }
             prop_assert_eq!(driver.live_devices(), model.devices.clone());
+            for (i, &owner) in model.owners.iter().enumerate() {
+                let agreed = model.greeted[i].then_some(model.minor[i]);
+                prop_assert_eq!(driver.agreed_minor(owner), agreed);
+            }
         }
     }
 }

@@ -89,6 +89,7 @@ fn ioctl_codes_match_the_c_macro() {
 fn struct_sizes_match() {
     let rust_sizes = [
         size_of::<rust::HelloRequest>(),
+        size_of::<rust::HelloReply>(),
         size_of::<rust::CreateDeviceRequest>(),
         size_of::<rust::CreateDeviceReply>(),
         size_of::<rust::RemoveDeviceRequest>(),
@@ -97,6 +98,7 @@ fn struct_sizes_match() {
     ];
     let c_sizes = [
         size_of::<c::vd_hello_request>(),
+        size_of::<c::vd_hello_reply>(),
         size_of::<c::vd_create_device_request>(),
         size_of::<c::vd_create_device_reply>(),
         size_of::<c::vd_remove_device_request>(),
@@ -111,6 +113,7 @@ fn struct_sizes_match() {
 fn field_offsets_match() {
     let rust_offsets = [
         offset_of!(rust::HelloRequest, minor),
+        offset_of!(rust::HelloReply, minor),
         offset_of!(rust::CreateDeviceRequest, name_len),
         offset_of!(rust::CreateDeviceRequest, name),
         offset_of!(rust::CreateDeviceRequest, reserved),
@@ -123,6 +126,7 @@ fn field_offsets_match() {
     ];
     let c_offsets = [
         offset_of!(c::vd_hello_request, minor),
+        offset_of!(c::vd_hello_reply, minor),
         offset_of!(c::vd_create_device_request, name_len),
         offset_of!(c::vd_create_device_request, name),
         offset_of!(c::vd_create_device_request, reserved),

@@ -23,7 +23,7 @@ typedef struct _VD_STREAM_CONTEXT {
     ULONG FirstPacketOffset;
     ULONGLONG TickHz;
     volatile BOOLEAN Running;       /* cleared before the timer stops: passes only re-arm while set */
-    ULONGLONG RunStartTicks;        /* QPC when the stream last started running */
+    ULONGLONG RunStartTicks;        /* QPC when the stream last started running; moved past a stall */
     ULONGLONG RunStartFrames;       /* position then */
     ULONGLONG PausedFrames;         /* position while not running */
     ULONGLONG PacketsSinceRun;
@@ -38,6 +38,7 @@ typedef struct _VD_STREAM_CONTEXT {
     ULONGLONG DueTicks;             /* when the armed pass should fire */
     ULONGLONG Passes;
     ULONGLONG LatePasses;           /* armed when already due: the timer fell behind */
+    ULONGLONG Stalls;               /* so far behind the schedule skipped ahead (vd_clock_next_pass) */
     ULONGLONG MaxLatenessTicks;     /* worst pass: fired this long after it was due */
     ULONGLONG TotalLatenessTicks;
 } VD_STREAM_CONTEXT;
@@ -94,6 +95,7 @@ static VOID VdTraceStreamStopped(const VD_STREAM_CONTEXT *StreamCtx, const char 
                       TraceLoggingString(Reason, "Reason"),
                       TraceLoggingUInt64(StreamCtx->Passes, "Passes"),
                       TraceLoggingUInt64(StreamCtx->LatePasses, "LatePasses"),
+                      TraceLoggingUInt64(StreamCtx->Stalls, "Stalls"),
                       TraceLoggingUInt64(VdTicksToUs(StreamCtx, StreamCtx->MaxLatenessTicks), "MaxLatenessUs"),
                       TraceLoggingUInt64(VdTicksToUs(StreamCtx, averageLatenessTicks), "AvgLatenessUs"),
                       TraceLoggingUInt64(gapFrames, "RingGapFrames"),
@@ -109,16 +111,27 @@ static ULONGLONG VdPosition(const VD_STREAM_CONTEXT *StreamCtx)
            vd_clock_frames(StreamCtx->RunStartTicks, VdNow(), StreamCtx->TickHz, VD_SAMPLE_RATE);
 }
 
-/* Arms the timer for the end of the next packet, measured from when the stream started running. */
+/*
+ * Arms the timer for the end of the next packet, measured from when the stream
+ * started running. A pass or two behind fires at once to catch up; after a stall
+ * (more passes behind than the engine's buffer holds) the core moves the start
+ * forward instead, so a sleep or a suspended VM doesn't set off a burst of
+ * passes, one per missed packet (Seam C, as Microsoft's ACX stream engine does).
+ */
 static VOID VdScheduleNextPass(VD_STREAM_CONTEXT *StreamCtx)
 {
-    ULONGLONG packetFrames = StreamCtx->PacketSize / StreamCtx->BytesPerFrame;
-    ULONGLONG due = StreamCtx->RunStartTicks +
-                    vd_clock_ticks_for((StreamCtx->PacketsSinceRun + 1) * packetFrames,
-                                       StreamCtx->TickHz, VD_SAMPLE_RATE);
+    uint64_t start = StreamCtx->RunStartTicks;
+    uint64_t due = 0;
     ULONGLONG now = VdNow();
     LONGLONG wait = -1; /* due already: fire as soon as possible */
 
+    if (vd_clock_next_pass(&start, StreamCtx->PacketsSinceRun,
+                           StreamCtx->PacketSize / StreamCtx->BytesPerFrame,
+                           StreamCtx->PacketCount, now, StreamCtx->TickHz, VD_SAMPLE_RATE,
+                           &due)) {
+        StreamCtx->RunStartTicks = start;
+        StreamCtx->Stalls++;
+    }
     StreamCtx->DueTicks = due;
     if (due <= now) {
         StreamCtx->LatePasses++;
@@ -345,6 +358,7 @@ static NTSTATUS VdEvtStreamRun(ACXSTREAM Stream)
     streamCtx->PacketsSinceRun = 0;
     streamCtx->Passes = 0;
     streamCtx->LatePasses = 0;
+    streamCtx->Stalls = 0;
     streamCtx->MaxLatenessTicks = 0;
     streamCtx->TotalLatenessTicks = 0;
     skippedFrames = VdSkipStaleCapture(streamCtx); /* before the timer is armed */
@@ -430,7 +444,13 @@ static NTSTATUS VdEvtStreamAllocateRtPackets(ACXSTREAM Stream, ULONG PacketCount
     }
     allocation = (allocation / PAGE_SIZE) * PAGE_SIZE;
 
-    packets = (PACX_RTPACKET)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(ACX_RTPACKET) * PacketCount,
+    /*
+     * CodeQL's padding check doesn't know ExAllocatePool2 zeroes the allocation
+     * (no POOL_FLAG_UNINITIALIZED), padding included; and the array goes to ACX,
+     * never to user mode. Microsoft's ACX sample allocates it the same way.
+     */
+    /* codeql[cpp/paddingbyteinformationdisclosure] */
+    packets =(PACX_RTPACKET)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(ACX_RTPACKET) * PacketCount,
                                              VD_POOL_TAG);
     if (packets == NULL) {
         return STATUS_INSUFFICIENT_RESOURCES;

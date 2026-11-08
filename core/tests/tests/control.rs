@@ -76,14 +76,28 @@ fn a_removed_or_closed_devices_ring_is_no_longer_reachable() {
     assert_eq!(reachable, (None, None));
 }
 
+/// The driver's version as Hello's reply carries it.
+fn driver_version() -> Vec<u8> {
+    [VIADUCT_ABI_MAJOR as u16, VIADUCT_ABI_MINOR as u16]
+        .iter()
+        .flat_map(|v| v.to_le_bytes())
+        .collect()
+}
+
 #[test]
-fn hello_with_matching_version_is_accepted() {
+fn hello_with_matching_version_is_accepted_and_replies_with_the_drivers_version() {
     let mut driver = Driver::new();
     let owner = driver.connect();
 
-    let status = driver.hello(owner, VIADUCT_ABI_MAJOR as u16, VIADUCT_ABI_MINOR as u16);
+    let reply = driver.hello_with(
+        owner,
+        VIADUCT_ABI_MAJOR as u16,
+        VIADUCT_ABI_MINOR as u16,
+        256,
+    );
 
-    assert_eq!(status, VD_OK);
+    assert_eq!(reply, (VD_OK, driver_version()));
+    assert_eq!(driver.agreed_minor(owner), Some(VIADUCT_ABI_MINOR as u16));
 }
 
 #[test]
@@ -91,23 +105,51 @@ fn hello_with_a_different_major_version_is_rejected() {
     let mut driver = Driver::new();
     let owner = driver.connect();
 
-    let status = driver.hello(owner, VIADUCT_ABI_MAJOR as u16 + 1, 0);
+    let statuses = [
+        driver.hello(owner, VIADUCT_ABI_MAJOR as u16 + 1, 0),
+        driver.hello(
+            owner,
+            VIADUCT_ABI_MAJOR as u16 - 1,
+            VIADUCT_ABI_MINOR as u16,
+        ),
+    ];
 
-    assert_eq!(status, VD_ERR_VERSION);
+    // Newer and older majors alike: a major change may break anything.
+    assert_eq!(statuses, [VD_ERR_VERSION; 2]);
+    assert_eq!(driver.agreed_minor(owner), None);
 }
 
 #[test]
-fn hello_from_an_sdk_newer_than_the_driver_is_rejected_and_older_is_accepted() {
+fn an_sdk_newer_than_the_driver_is_accepted_and_speaks_the_drivers_minor() {
     let mut driver = Driver::new();
-    let (newer, older) = (driver.connect(), driver.connect());
-    let major = VIADUCT_ABI_MAJOR as u16;
+    let newer = driver.connect();
 
-    let statuses = (
-        driver.hello(newer, major, VIADUCT_ABI_MINOR as u16 + 1),
-        driver.hello(older, major, VIADUCT_ABI_MINOR as u16 - 1),
+    let reply = driver.hello_with(
+        newer,
+        VIADUCT_ABI_MAJOR as u16,
+        VIADUCT_ABI_MINOR as u16 + 3,
+        256,
     );
 
-    assert_eq!(statuses, (VD_ERR_VERSION, VD_OK));
+    // The reply tells the SDK which minor to fall back to.
+    assert_eq!(reply, (VD_OK, driver_version()));
+    assert_eq!(driver.agreed_minor(newer), Some(VIADUCT_ABI_MINOR as u16));
+}
+
+#[test]
+fn hello_needs_room_for_its_reply() {
+    let mut driver = Driver::new();
+    let owner = driver.connect();
+    let major = VIADUCT_ABI_MAJOR as u16;
+
+    let short = driver.hello_with(owner, major, 0, size_of::<vd_hello_reply>() - 1);
+
+    assert_eq!(short, (VD_ERR_BUFFER_TOO_SMALL, vec![]));
+    assert_eq!(driver.agreed_minor(owner), None);
+    assert_eq!(
+        driver.create_device(owner, VD_KIND_MICROPHONE, "Agent Mic"),
+        Err(VD_ERR_HELLO_REQUIRED)
+    );
 }
 
 #[test]

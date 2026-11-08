@@ -32,6 +32,7 @@ typedef struct vd_ring {
 /* Per-Owner state. One per open handle, stored in the shell's file context. */
 typedef struct vd_owner {
     bool greeted;
+    uint16_t minor; /* the minor this connection speaks, once greeted (ADR 0003) */
 } vd_owner;
 
 /* One live Device. A slot with id 0 is free. */
@@ -130,5 +131,20 @@ uint64_t vd_clock_frames(uint64_t start_ticks, uint64_t now_ticks,
  * reaches `frames`. The shell schedules packet completions with it.
  */
 uint64_t vd_clock_ticks_for(uint64_t frames, uint64_t tick_hz, uint32_t sample_rate);
+
+/*
+ * Seam C, scheduling: when the pass completing packet `packets_done + 1` is due
+ * (*due_ticks), counted from the stream's start (*start_ticks), for packets of
+ * `packet_frames`. A stream a few passes behind catches up on its schedule. One
+ * with more than `max_behind` passes already due was stalled (a sleep, a
+ * suspended VM, a debugger): the audio it missed can't be recovered, so rather
+ * than firing a pass for every missed packet it moves *start_ticks forward so
+ * this pass is due now, as Microsoft's ACX stream engine does, and returns true.
+ * Positions counted from the moved start continue from the packets completed.
+ * Survives the tick counter wrapping.
+ */
+bool vd_clock_next_pass(uint64_t *start_ticks, uint64_t packets_done, uint32_t packet_frames,
+                        uint32_t max_behind, uint64_t now_ticks, uint64_t tick_hz,
+                        uint32_t sample_rate, uint64_t *due_ticks);
 
 #endif /* VIADUCT_CORE_H */

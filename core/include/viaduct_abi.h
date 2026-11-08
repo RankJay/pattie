@@ -3,15 +3,16 @@
  *
  * Included by the C driver and, through bindgen, by the Rust SDK. Within a major
  * version this header only grows: never change or remove what a minor version
- * shipped (ADR 0003). No Windows or WDK headers may be included here.
+ * shipped (ADR 0003). Spare bytes keep the slots ADR 0017 reserves for later
+ * minors. No Windows or WDK headers may be included here.
  */
 #ifndef VIADUCT_ABI_H
 #define VIADUCT_ABI_H
 
 #include <stdint.h>
 
-#define VIADUCT_ABI_MAJOR 0u
-#define VIADUCT_ABI_MINOR 1u
+#define VIADUCT_ABI_MAJOR 1u
+#define VIADUCT_ABI_MINOR 0u
 
 /* Result of every command. */
 typedef uint32_t vd_status;
@@ -20,7 +21,7 @@ typedef uint32_t vd_status;
 #define VD_ERR_BUFFER_TOO_SMALL 2u  /* reply buffer can't hold the reply */
 #define VD_ERR_BAD_RING 3u          /* Ring memory or header is invalid */
 #define VD_ERR_BAD_REQUEST 4u       /* unknown command, or input of the wrong size */
-#define VD_ERR_VERSION 5u           /* SDK's ABI version not served (ADR 0003) */
+#define VD_ERR_VERSION 5u           /* SDK's ABI major version not served (ADR 0003) */
 #define VD_ERR_BAD_KIND 6u          /* not a known Device kind */
 #define VD_ERR_BAD_NAME 7u          /* empty, too long, or has control characters */
 #define VD_ERR_DUPLICATE_NAME 8u    /* a live Device of this kind has that name */
@@ -28,7 +29,8 @@ typedef uint32_t vd_status;
 #define VD_ERR_NO_SUCH_DEVICE 10u   /* no live Device with that ID for this Owner */
 #define VD_ERR_SYSTEM 11u           /* Windows refused to create the Device's endpoint */
 
-/* Most Devices alive at once, across all Owners (ADR 0005). */
+/* Most Devices alive at once, across all Owners (ADR 0005): this version's limit,
+ * which a later minor may raise (ADR 0017). */
 #define VD_MAX_DEVICES 8u
 
 /* Commands an Owner can send. */
@@ -58,10 +60,21 @@ typedef struct vd_reply_envelope {
     vd_status status;
 } vd_reply_envelope;
 
+/*
+ * Hello negotiates the version (ADR 0003): the driver accepts any SDK of its own
+ * major, whatever its minor, and replies with its own version. The connection
+ * then speaks the lower of the two minors: the driver sizes and reads every later
+ * request and reply by it, and the SDK uses only what that minor offers.
+ */
 typedef struct vd_hello_request {
     uint16_t major;
     uint16_t minor;
 } vd_hello_request;
+
+typedef struct vd_hello_reply {
+    uint16_t major;
+    uint16_t minor;
+} vd_hello_reply;
 
 /* Device kinds. */
 #define VD_KIND_MICROPHONE 1u
@@ -94,7 +107,8 @@ typedef struct vd_remove_device_request {
  * own cache line. Audio frames (32-bit float, mono in v0) follow the header
  * immediately; frame n lives at index n % capacity_frames.
  */
-/* Ring capacity: a power of two within these bounds (about 5 ms to 1.4 s at 48 kHz). */
+/* Ring capacity: a power of two within these bounds (about 5 ms to 1.4 s at 48 kHz);
+ * this version's limits, which a later minor may widen (ADR 0017). */
 #define VD_RING_MIN_FRAMES 256u
 #define VD_RING_MAX_FRAMES 65536u
 
@@ -105,14 +119,14 @@ typedef struct vd_ring_header {
     /* Writer's line: only the writing side stores here. */
     uint64_t write_frames;
     uint64_t overflow_frames;
-    uint8_t writer_pad[48];
+    uint8_t writer_pad[48];   /* reserved: the writing side's clock (ADR 0017); zero */
     /* Reader's line: only the reading side stores here. */
     uint64_t read_frames;
     uint64_t gap_frames;
-    uint8_t reader_pad[48];
+    uint8_t reader_pad[48];   /* reserved: the reading side's clock (ADR 0017); zero */
     /* Fixed by the SDK before Create Device. */
     uint32_t capacity_frames;
-    uint8_t config_pad[60];
+    uint8_t config_pad[60];   /* reserved: sample rate, channels (ADR 0017); zero */
 } vd_ring_header;
 
 #endif /* VIADUCT_ABI_H */

@@ -95,12 +95,31 @@ impl Driver {
     }
 
     pub fn hello(&mut self, owner: OwnerRef, major: u16, minor: u16) -> vd_status {
-        self.send(
+        self.hello_with(owner, major, minor, 256).0
+    }
+
+    /// Sends Hello with a reply buffer of `reply_capacity` bytes; returns the
+    /// status and the reply.
+    pub fn hello_with(
+        &mut self,
+        owner: OwnerRef,
+        major: u16,
+        minor: u16,
+        reply_capacity: usize,
+    ) -> (vd_status, Vec<u8>) {
+        self.send_full(
             owner,
             VD_CMD_HELLO,
             as_bytes(&vd_hello_request { major, minor }),
+            None,
+            reply_capacity,
         )
-        .0
+    }
+
+    /// The minor version an Owner's connection speaks, once Hello succeeded.
+    pub fn agreed_minor(&self, owner: OwnerRef) -> Option<u16> {
+        let state = &self.owners[owner.0];
+        state.greeted.then_some(state.minor)
     }
 
     /// Sends Hello with the ABI version these tests were built against.

@@ -214,13 +214,19 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
         size_t output_len = 0;
 
         switch (op % 7u) {
-        case 0: { /* Hello, mostly the served version */
+        case 0: { /* Hello, mostly the served version, with a reply buffer of 0-7 bytes */
             vd_hello_request hello = {VIADUCT_ABI_MAJOR, VIADUCT_ABI_MINOR};
+            size_t cap;
             if (take_u8(&c) & 1u) {
                 take(&c, &hello, sizeof hello);
             }
-            (void)vd_core_command(&w.core, owner, VD_CMD_HELLO, &hello, sizeof hello,
-                                  NULL, 0, output, sizeof output, &output_len);
+            cap = take_u8(&c) % 8u;
+            if (vd_core_command(&w.core, owner, VD_CMD_HELLO, &hello, sizeof hello,
+                                NULL, 0, output, cap, &output_len) == VD_OK &&
+                (output_len != sizeof(vd_hello_reply) ||
+                 owner->minor > hello.minor || owner->minor > VIADUCT_ABI_MINOR)) {
+                abort(); /* a wrong reply, or a minor neither side speaks: a core bug */
+            }
             break;
         }
         case 1:

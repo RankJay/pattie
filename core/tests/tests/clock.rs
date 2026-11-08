@@ -1,6 +1,6 @@
 //! Seam C: the clock (ADR 0007, ADR 0008).
 
-use viaduct_core_tests::ffi::{vd_clock_frames, vd_clock_ticks_for};
+use viaduct_core_tests::ffi::{vd_clock_frames, vd_clock_next_pass, vd_clock_ticks_for};
 
 const QPC_HZ: u64 = 10_000_000; // the usual Windows performance-counter rate
 
@@ -65,4 +65,84 @@ fn ticks_for_1000_days_of_frames_do_not_overflow() {
     let ticks = unsafe { vd_clock_ticks_for(frames, QPC_HZ, 48_000) };
 
     assert_eq!(ticks, 1000 * 86_400 * QPC_HZ);
+}
+
+/// One 10 ms packet at 48 kHz, in ticks.
+const PACKET_TICKS: u64 = 100_000;
+/// Passes a stream may run behind and still catch up: the WaveRT buffer's two packets.
+const MAX_BEHIND: u32 = 2;
+
+/// Schedules the pass completing packet `done + 1`; returns (slipped, start, due).
+fn next_pass(start: u64, done: u64, now: u64) -> (bool, u64, u64) {
+    let (mut start, mut due) = (start, 0);
+    // SAFETY: a pure C function; both pointers are to locals that outlive the call.
+    let slipped = unsafe {
+        vd_clock_next_pass(
+            &mut start, done, 480, MAX_BEHIND, now, QPC_HZ, 48_000, &mut due,
+        )
+    };
+    (slipped, start, due)
+}
+
+#[test]
+fn a_pass_on_time_is_due_one_packet_after_the_last() {
+    let start = 7_000_000;
+
+    let pass = next_pass(start, 3, start + 3 * PACKET_TICKS + 10);
+
+    assert_eq!(pass, (false, start, start + 4 * PACKET_TICKS));
+}
+
+#[test]
+fn a_stream_a_little_behind_catches_up_on_its_schedule() {
+    let start = 7_000_000;
+    // Packets 4 and 5 are both due already: two passes behind.
+    let now = start + 5 * PACKET_TICKS;
+
+    let pass = next_pass(start, 3, now);
+
+    // Same start, so the next two passes fire at once and the clock is kept.
+    assert_eq!(pass, (false, start, start + 4 * PACKET_TICKS));
+}
+
+#[test]
+fn a_stalled_stream_skips_ahead_instead_of_catching_up_pass_by_pass() {
+    let start = 7_000_000;
+    let an_hour_later = start + 3_600 * QPC_HZ; // a sleep, a suspended VM, a debugger
+
+    let (slipped, moved, due) = next_pass(start, 3, an_hour_later);
+
+    // The missed audio can't be recovered: this pass is due now, and the stream's
+    // start moves so its position continues from the packets actually completed.
+    assert!(slipped);
+    assert_eq!(due, an_hour_later);
+    // SAFETY: a pure C function of plain integers: no pointers, no state.
+    let frames = unsafe { vd_clock_frames(moved, an_hour_later, QPC_HZ, 48_000) };
+    assert_eq!(frames, 4 * 480);
+}
+
+#[test]
+fn skipping_starts_only_when_more_passes_are_due_than_can_be_caught_up() {
+    let start = 7_000_000;
+    // Packets 4, 5 and 6 due: three passes, one more than MAX_BEHIND.
+    let three_due = start + 6 * PACKET_TICKS;
+
+    let passes = [
+        next_pass(start, 3, three_due - 1).0,
+        next_pass(start, 3, three_due).0,
+    ];
+
+    assert_eq!(passes, [false, true]);
+}
+
+#[test]
+fn skipping_ahead_works_across_the_tick_counter_wrapping() {
+    let start = u64::MAX - 50_000;
+    let an_hour_later = start.wrapping_add(3_600 * QPC_HZ);
+
+    let (slipped, moved, due) = next_pass(start, 0, an_hour_later);
+
+    assert!(slipped);
+    assert_eq!(due, an_hour_later);
+    assert_eq!(an_hour_later.wrapping_sub(moved), PACKET_TICKS);
 }
