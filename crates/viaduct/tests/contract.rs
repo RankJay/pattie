@@ -1,20 +1,103 @@
 //! The SDK contract (Seam S1, ADR 0012): what every backend must do, checked
-//! through the public API only. Today the backend is the in-process fake driver;
-//! each OS backend must pass the same suite.
+//! through the public API only. Each test runs against every backend: the
+//! in-process fake driver (the Windows driver's control path), and on Linux the
+//! real Linux transport with test-driven nodes (ADR 0018).
 
+use std::sync::Arc;
+use viaduct::transport::Transport;
 use viaduct::{Device, DeviceBuilder, Kind};
-use viaduct_fake_driver::FakeDriver;
+
+/// What the suite needs from a backend: a transport, and the system's side of
+/// each Device's Ring.
+trait Backend {
+    fn transport(&self) -> Arc<dyn Transport>;
+    /// The system pulls `count` frames of a Microphone's audio.
+    fn driver_read(&self, device_id: u32, count: usize) -> Option<Vec<f32>>;
+    /// The system plays `samples` to a Speaker.
+    fn driver_write(&self, device_id: u32, samples: &[f32]) -> bool;
+}
+
+impl Backend for viaduct_fake_driver::FakeDriver {
+    fn transport(&self) -> Arc<dyn Transport> {
+        self.transport()
+    }
+    fn driver_read(&self, device_id: u32, count: usize) -> Option<Vec<f32>> {
+        self.driver_read(device_id, count)
+    }
+    fn driver_write(&self, device_id: u32, samples: &[f32]) -> bool {
+        self.driver_write(device_id, samples)
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Backend for viaduct::transport::ManualBackend {
+    fn transport(&self) -> Arc<dyn Transport> {
+        self.transport()
+    }
+    fn driver_read(&self, device_id: u32, count: usize) -> Option<Vec<f32>> {
+        self.driver_read(device_id, count)
+    }
+    fn driver_write(&self, device_id: u32, samples: &[f32]) -> bool {
+        self.driver_write(device_id, samples)
+    }
+}
 
 /// A builder wired to `backend`.
-fn builder(backend: &FakeDriver) -> DeviceBuilder {
+fn builder(backend: &dyn Backend) -> DeviceBuilder {
     Device::builder().transport(backend.transport())
 }
 
-#[test]
-fn creating_a_microphone_gives_a_device_with_id_1() {
-    let backend = FakeDriver::new();
+/// One `#[test]` per contract test and backend: `fake::<name>`, and on Linux
+/// `linux::<name>`.
+macro_rules! contract_suite {
+    ($($test:ident),* $(,)?) => {
+        mod fake {
+            $(
+                #[test]
+                fn $test() {
+                    super::$test(&viaduct_fake_driver::FakeDriver::new());
+                }
+            )*
+        }
 
-    let mic = builder(&backend)
+        #[cfg(target_os = "linux")]
+        mod linux {
+            $(
+                #[test]
+                fn $test() {
+                    super::$test(&viaduct::transport::ManualBackend::new().unwrap());
+                }
+            )*
+        }
+    };
+}
+
+contract_suite!(
+    creating_a_microphone_gives_a_device_with_id_1,
+    a_duplicate_name_of_the_same_kind_is_rejected,
+    a_microphone_and_a_speaker_may_share_a_name,
+    dropping_a_device_frees_its_name_and_its_id_is_not_reused,
+    samples_written_to_a_microphone_reach_the_driver_unchanged,
+    writing_into_a_full_ring_drops_the_excess_counted_as_overflow,
+    a_partly_full_ring_accepts_only_the_room_left,
+    audio_windows_asks_for_and_doesnt_get_shows_up_as_gap,
+    a_speakers_reader_gets_what_was_played_to_it,
+    formats_other_than_48_khz_mono_are_rejected,
+    the_v0_format_is_accepted,
+    a_device_has_at_most_one_writer_or_reader,
+    dropping_a_writer_lets_the_device_hand_out_another,
+    dropping_a_reader_lets_the_device_hand_out_another,
+    microphones_have_writers_and_speakers_have_readers,
+    buffer_sizes_outside_the_allowed_powers_of_two_are_rejected,
+    stats_report_how_much_audio_is_waiting_in_the_ring,
+    names_that_are_empty_too_long_or_hold_control_characters_are_rejected,
+    the_longest_allowed_name_is_accepted,
+    a_ninth_live_device_is_too_many,
+    debug_output_names_the_device_and_its_settings,
+);
+
+fn creating_a_microphone_gives_a_device_with_id_1(backend: &dyn Backend) {
+    let mic = builder(backend)
         .name("Agent Mic")
         .kind(Kind::Microphone)
         .create()
@@ -23,41 +106,33 @@ fn creating_a_microphone_gives_a_device_with_id_1() {
     assert_eq!(mic.id(), 1);
 }
 
-#[test]
-fn a_duplicate_name_of_the_same_kind_is_rejected() {
-    let backend = FakeDriver::new();
-    let _first = builder(&backend).name("Agent Mic").create().unwrap();
+fn a_duplicate_name_of_the_same_kind_is_rejected(backend: &dyn Backend) {
+    let _first = builder(backend).name("Agent Mic").create().unwrap();
 
-    let second = builder(&backend).name("Agent Mic").create();
+    let second = builder(backend).name("Agent Mic").create();
 
     assert_eq!(second.err(), Some(viaduct::Error::DuplicateName));
 }
 
-#[test]
-fn a_microphone_and_a_speaker_may_share_a_name() {
-    let backend = FakeDriver::new();
-    let _mic = builder(&backend).name("Agent").create().unwrap();
+fn a_microphone_and_a_speaker_may_share_a_name(backend: &dyn Backend) {
+    let _mic = builder(backend).name("Agent").create().unwrap();
 
-    let speaker = builder(&backend).name("Agent").kind(Kind::Speaker).create();
+    let speaker = builder(backend).name("Agent").kind(Kind::Speaker).create();
 
     assert!(speaker.is_ok(), "{:?}", speaker.err());
 }
 
-#[test]
-fn dropping_a_device_frees_its_name_and_its_id_is_not_reused() {
-    let backend = FakeDriver::new();
-    let first = builder(&backend).name("Agent Mic").create().unwrap();
+fn dropping_a_device_frees_its_name_and_its_id_is_not_reused(backend: &dyn Backend) {
+    let first = builder(backend).name("Agent Mic").create().unwrap();
     drop(first);
 
-    let again = builder(&backend).name("Agent Mic").create().unwrap();
+    let again = builder(backend).name("Agent Mic").create().unwrap();
 
     assert_eq!(again.id(), 2);
 }
 
-#[test]
-fn samples_written_to_a_microphone_reach_the_driver_unchanged() {
-    let backend = FakeDriver::new();
-    let mic = builder(&backend)
+fn samples_written_to_a_microphone_reach_the_driver_unchanged(backend: &dyn Backend) {
+    let mic = builder(backend)
         .name("Agent Mic")
         .kind(Kind::Microphone)
         .create()
@@ -72,10 +147,8 @@ fn samples_written_to_a_microphone_reach_the_driver_unchanged() {
     );
 }
 
-#[test]
-fn writing_into_a_full_ring_drops_the_excess_counted_as_overflow() {
-    let backend = FakeDriver::new();
-    let mic = builder(&backend)
+fn writing_into_a_full_ring_drops_the_excess_counted_as_overflow(backend: &dyn Backend) {
+    let mic = builder(backend)
         .name("Agent Mic")
         .buffer_frames(256)
         .create()
@@ -87,10 +160,8 @@ fn writing_into_a_full_ring_drops_the_excess_counted_as_overflow() {
     assert_eq!((accepted, mic.stats().overflow_frames), (256, 44));
 }
 
-#[test]
-fn a_partly_full_ring_accepts_only_the_room_left() {
-    let backend = FakeDriver::new();
-    let mic = builder(&backend)
+fn a_partly_full_ring_accepts_only_the_room_left(backend: &dyn Backend) {
+    let mic = builder(backend)
         .name("Agent Mic")
         .buffer_frames(256)
         .create()
@@ -104,10 +175,8 @@ fn a_partly_full_ring_accepts_only_the_room_left() {
     assert_eq!((accepted, mic.stats().overflow_frames), (106, 44));
 }
 
-#[test]
-fn audio_windows_asks_for_and_doesnt_get_shows_up_as_gap() {
-    let backend = FakeDriver::new();
-    let mic = builder(&backend).name("Agent Mic").create().unwrap();
+fn audio_windows_asks_for_and_doesnt_get_shows_up_as_gap(backend: &dyn Backend) {
+    let mic = builder(backend).name("Agent Mic").create().unwrap();
     let mut tx = mic.writer().unwrap();
     tx.write(&[0.5; 30]).unwrap();
 
@@ -116,10 +185,8 @@ fn audio_windows_asks_for_and_doesnt_get_shows_up_as_gap() {
     assert_eq!(mic.stats().gap_frames, 70);
 }
 
-#[test]
-fn a_speakers_reader_gets_what_was_played_to_it() {
-    let backend = FakeDriver::new();
-    let speaker = builder(&backend)
+fn a_speakers_reader_gets_what_was_played_to_it(backend: &dyn Backend) {
+    let speaker = builder(backend)
         .name("Agent Speaker")
         .kind(Kind::Speaker)
         .create()
@@ -133,12 +200,9 @@ fn a_speakers_reader_gets_what_was_played_to_it() {
     assert_eq!(&heard[..count], &[0.125, -0.25]);
 }
 
-#[test]
-fn formats_other_than_48_khz_mono_are_rejected() {
-    let backend = FakeDriver::new();
-
+fn formats_other_than_48_khz_mono_are_rejected(backend: &dyn Backend) {
     let results = [(44_100, 1), (48_000, 2), (96_000, 1)].map(|(rate, channels)| {
-        builder(&backend)
+        builder(backend)
             .name("Agent Mic")
             .format(rate, channels)
             .create()
@@ -148,11 +212,8 @@ fn formats_other_than_48_khz_mono_are_rejected() {
     assert_eq!(results, [Some(viaduct::Error::UnsupportedFormat); 3]);
 }
 
-#[test]
-fn the_v0_format_is_accepted() {
-    let backend = FakeDriver::new();
-
-    let mic = builder(&backend)
+fn the_v0_format_is_accepted(backend: &dyn Backend) {
+    let mic = builder(backend)
         .name("Agent Mic")
         .format(48_000, 1)
         .create();
@@ -160,11 +221,9 @@ fn the_v0_format_is_accepted() {
     assert!(mic.is_ok());
 }
 
-#[test]
-fn a_device_has_at_most_one_writer_or_reader() {
-    let backend = FakeDriver::new();
-    let mic = builder(&backend).name("Agent Mic").create().unwrap();
-    let speaker = builder(&backend)
+fn a_device_has_at_most_one_writer_or_reader(backend: &dyn Backend) {
+    let mic = builder(backend).name("Agent Mic").create().unwrap();
+    let speaker = builder(backend)
         .name("Agent Speaker")
         .kind(Kind::Speaker)
         .create()
@@ -182,19 +241,15 @@ fn a_device_has_at_most_one_writer_or_reader() {
     );
 }
 
-#[test]
-fn dropping_a_writer_lets_the_device_hand_out_another() {
-    let backend = FakeDriver::new();
-    let mic = builder(&backend).name("Agent Mic").create().unwrap();
+fn dropping_a_writer_lets_the_device_hand_out_another(backend: &dyn Backend) {
+    let mic = builder(backend).name("Agent Mic").create().unwrap();
     drop(mic.writer().unwrap());
 
     assert!(mic.writer().is_ok());
 }
 
-#[test]
-fn dropping_a_reader_lets_the_device_hand_out_another() {
-    let backend = FakeDriver::new();
-    let speaker = builder(&backend)
+fn dropping_a_reader_lets_the_device_hand_out_another(backend: &dyn Backend) {
+    let speaker = builder(backend)
         .name("Agent Speaker")
         .kind(Kind::Speaker)
         .create()
@@ -204,11 +259,9 @@ fn dropping_a_reader_lets_the_device_hand_out_another() {
     assert!(speaker.reader().is_ok());
 }
 
-#[test]
-fn microphones_have_writers_and_speakers_have_readers() {
-    let backend = FakeDriver::new();
-    let mic = builder(&backend).name("Agent Mic").create().unwrap();
-    let speaker = builder(&backend)
+fn microphones_have_writers_and_speakers_have_readers(backend: &dyn Backend) {
+    let mic = builder(backend).name("Agent Mic").create().unwrap();
+    let speaker = builder(backend)
         .name("Agent Speaker")
         .kind(Kind::Speaker)
         .create()
@@ -225,12 +278,9 @@ fn microphones_have_writers_and_speakers_have_readers() {
     );
 }
 
-#[test]
-fn buffer_sizes_outside_the_allowed_powers_of_two_are_rejected() {
-    let backend = FakeDriver::new();
-
+fn buffer_sizes_outside_the_allowed_powers_of_two_are_rejected(backend: &dyn Backend) {
     let results = [0, 128, 1000, 131_072, 1 << 31].map(|frames| {
-        builder(&backend)
+        builder(backend)
             .name("Agent Mic")
             .buffer_frames(frames)
             .create()
@@ -240,11 +290,9 @@ fn buffer_sizes_outside_the_allowed_powers_of_two_are_rejected() {
     assert_eq!(results, [Some(viaduct::Error::BadBufferSize); 5]);
 }
 
-#[test]
-fn stats_report_how_much_audio_is_waiting_in_the_ring() {
-    let backend = FakeDriver::new();
-    let mic = builder(&backend).name("Agent Mic").create().unwrap();
-    let speaker = builder(&backend)
+fn stats_report_how_much_audio_is_waiting_in_the_ring(backend: &dyn Backend) {
+    let mic = builder(backend).name("Agent Mic").create().unwrap();
+    let speaker = builder(backend)
         .name("Agent Speaker")
         .kind(Kind::Speaker)
         .create()
@@ -260,45 +308,36 @@ fn stats_report_how_much_audio_is_waiting_in_the_ring() {
     assert_eq!(buffered, (200, 30));
 }
 
-#[test]
-fn names_that_are_empty_too_long_or_hold_control_characters_are_rejected() {
-    let backend = FakeDriver::new();
+fn names_that_are_empty_too_long_or_hold_control_characters_are_rejected(backend: &dyn Backend) {
     let too_long = "x".repeat(64); // 63 UTF-16 units is the limit
     let results = ["", too_long.as_str(), "Agent\nMic"]
-        .map(|name| builder(&backend).name(name).create().err());
+        .map(|name| builder(backend).name(name).create().err());
 
     assert_eq!(results, [Some(viaduct::Error::BadName); 3]);
 }
 
-#[test]
-fn the_longest_allowed_name_is_accepted() {
-    let backend = FakeDriver::new();
-
-    let created = builder(&backend).name("x".repeat(63)).create();
+fn the_longest_allowed_name_is_accepted(backend: &dyn Backend) {
+    let created = builder(backend).name("x".repeat(63)).create();
 
     assert!(created.is_ok(), "{:?}", created.err());
 }
 
-#[test]
-fn a_ninth_live_device_is_too_many() {
-    let backend = FakeDriver::new();
+fn a_ninth_live_device_is_too_many(backend: &dyn Backend) {
     let _live: Vec<_> = (1..=8)
-        .map(|n| builder(&backend).name(format!("Mic {n}")).create().unwrap())
+        .map(|n| builder(backend).name(format!("Mic {n}")).create().unwrap())
         .collect();
 
-    let ninth = builder(&backend).name("Mic 9").create();
+    let ninth = builder(backend).name("Mic 9").create();
 
     assert_eq!(ninth.err(), Some(viaduct::Error::TooManyDevices));
 }
 
-#[test]
-fn debug_output_names_the_device_and_its_settings() {
-    let backend = FakeDriver::new();
-    let configured = builder(&backend).name("Agent Mic").buffer_frames(256);
+fn debug_output_names_the_device_and_its_settings(backend: &dyn Backend) {
+    let configured = builder(backend).name("Agent Mic").buffer_frames(256);
     let platform = Device::builder().name("Plain");
 
-    let mic = builder(&backend).name("Agent Mic").create().unwrap();
-    let speaker = builder(&backend)
+    let mic = builder(backend).name("Agent Mic").create().unwrap();
+    let speaker = builder(backend)
         .name("Out")
         .kind(Kind::Speaker)
         .create()

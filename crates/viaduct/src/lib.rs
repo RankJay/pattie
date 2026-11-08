@@ -33,6 +33,8 @@
 pub mod abi;
 mod device;
 mod error;
+#[cfg(target_os = "linux")]
+mod linux;
 mod ring;
 #[doc(hidden)]
 pub mod transport;

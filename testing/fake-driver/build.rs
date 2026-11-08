@@ -16,9 +16,10 @@ fn main() {
         .warnings(true)
         .warnings_into_errors(true);
     // Narrowing and sign changes are errors in the code that parses hostile input.
-    // clang (coverage builds) and MSVC (normal builds) name them differently.
+    // clang (coverage builds), GCC (Linux) and MSVC (normal builds) name them
+    // differently.
     let compiler = build.get_compiler();
-    if compiler.is_like_clang() || compiler.is_like_clang_cl() {
+    if compiler.is_like_clang() || compiler.is_like_clang_cl() || compiler.is_like_gnu() {
         build.flag("-Wconversion").flag("-Wsign-conversion");
     } else if compiler.is_like_msvc() {
         // C4242/C4244: possible loss of data; C4365: signed/unsigned mismatch.

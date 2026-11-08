@@ -8,6 +8,9 @@ use std::fmt;
 pub enum Error {
     /// The Viaduct driver isn't installed (or isn't running).
     DriverNotInstalled,
+    /// Linux: PipeWire isn't installed or isn't running (ADR 0018). Systems on
+    /// PulseAudio alone, such as Ubuntu 22.04 by default, need PipeWire first.
+    AudioServerUnavailable,
     /// This user may not open the driver (ADR 0011).
     AccessDenied,
     /// No backend exists for this operating system yet.
@@ -40,6 +43,10 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::DriverNotInstalled => write!(f, "the Viaduct driver is not installed"),
+            Error::AudioServerUnavailable => write!(
+                f,
+                "PipeWire is not running (Viaduct needs PipeWire on Linux)"
+            ),
             Error::AccessDenied => write!(f, "access to the Viaduct driver was denied"),
             Error::NoBackend => write!(f, "Viaduct has no backend for this operating system yet"),
             Error::VersionMismatch => write!(
@@ -73,8 +80,9 @@ mod tests {
     use super::Error;
 
     /// Every variant, so a new one without its own message fails here.
-    const ALL: [Error; 14] = [
+    const ALL: [Error; 15] = [
         Error::DriverNotInstalled,
+        Error::AudioServerUnavailable,
         Error::AccessDenied,
         Error::NoBackend,
         Error::VersionMismatch,

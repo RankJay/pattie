@@ -4,6 +4,17 @@
 //! The parsing helpers are plain functions, tested on every platform; the SetupAPI
 //! calls that change the machine are Windows-only and are checked in the test VM.
 
+// Outside tests only the Windows installer (install/setup.rs) calls the helpers.
+// `allow`, not `expect`: the tests use them on every OS, so the lint fires only in
+// a non-test build elsewhere, and `expect` would fail the test build.
+#![cfg_attr(
+    not(windows),
+    allow(
+        dead_code,
+        reason = "only the Windows installer uses these outside tests"
+    )
+)]
+
 /// The root device the driver serves (viaduct.inf, ADR 0010).
 pub const ROOT_HARDWARE_ID: &str = r"Root\Viaduct";
 /// Each Device's runtime child (ADR 0013).
@@ -12,11 +23,7 @@ pub const ENDPOINT_HARDWARE_ID: &str = r"Viaduct\Endpoint";
 /// Splits a REG_MULTI_SZ value (UTF-16LE bytes) into its strings. An empty string
 /// ends the list, as in the registry.
 pub fn parse_multi_sz(bytes: &[u8]) -> Vec<String> {
-    let units: Vec<u16> = bytes
-        .chunks_exact(2)
-        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
-        .collect();
-    units
+    utf16le_units(bytes)
         .split(|&unit| unit == 0)
         .take_while(|part| !part.is_empty())
         .map(String::from_utf16_lossy)
@@ -44,16 +51,16 @@ pub fn has_hardware_id(ids: &[String], wanted: &str) -> bool {
 /// 8-bit text (INFs are ASCII or UTF-8 otherwise).
 pub fn decode_inf(bytes: &[u8]) -> String {
     match bytes {
-        [0xFF, 0xFE, rest @ ..] => {
-            let units: Vec<u16> = rest
-                .chunks_exact(2)
-                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
-                .collect();
-            String::from_utf16_lossy(&units)
-        }
+        [0xFF, 0xFE, rest @ ..] => String::from_utf16_lossy(&utf16le_units(rest)),
         _ => String::from_utf8_lossy(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes))
             .into_owned(),
     }
+}
+
+/// UTF-16LE bytes as code units; an odd trailing byte is ignored.
+fn utf16le_units(bytes: &[u8]) -> Vec<u16> {
+    let (pairs, _odd) = bytes.as_chunks::<2>();
+    pairs.iter().map(|&pair| u16::from_le_bytes(pair)).collect()
 }
 
 /// Whether an INF installs devices with `hardware_id`: a models line

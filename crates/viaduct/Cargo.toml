@@ -10,6 +10,12 @@ publish = false # the crates.io name is taken; rename before publishing (.ai/POS
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO"] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+libloading = "0.8"
+
+[build-dependencies]
+cc = "1.11.0" # compiles the C core on Linux only (build.rs, ADR 0018)
+
 [dev-dependencies]
 viaduct-fake-driver = { path = "../../testing/fake-driver" }
 

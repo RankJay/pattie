@@ -157,7 +157,9 @@ impl DeviceBuilder {
 fn default_transport() -> Result<Arc<dyn Transport>, Error> {
     #[cfg(windows)]
     return Ok(Arc::new(crate::windows::WindowsTransport));
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    return Ok(Arc::new(crate::linux::LinuxTransport::new()?));
+    #[cfg(not(any(windows, target_os = "linux")))]
     return Err(Error::NoBackend);
 }
 

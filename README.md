@@ -54,7 +54,7 @@ that talks to it over shared memory.
 | A Rust SDK: create a Device, write to its mic or read from its speaker | A meeting bot or recorder |
 | A shared-memory transport between your app and the driver | A GUI app |
 
-Long term the same API is meant to work on macOS and Linux too; v0 is Windows only.
+The same API is meant to work on Linux and macOS too. Windows is done to the v0 gate; Linux is being built (ADR 0018: PipeWire, inside the app's own process, no driver to install; Microphones and Speakers already work on a real PipeWire); macOS comes later.
 
 ## Where it stands
 
@@ -531,6 +531,42 @@ place with `/* codeql[rule-id] */` on the line above, after a comment saying why
 There is one: the padding check on the packet array in `stream.c`, which doesn't know
 `ExAllocatePool2` zeroes memory.
 
+### Linux (WSL2)
+
+The core, the SDK and the CLI also build and test on Linux, where the Linux backend
+is being built (ADR 0018). On this PC that's the WSL2 "Ubuntu" distribution. Once,
+inside it:
+
+```bash
+sudo apt-get install build-essential clang libclang-dev pkg-config pipewire pipewire-pulse wireplumber
+```
+
+```bash
+curl --proto =https --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --component clippy,rustfmt
+```
+
+Then from the checkout (`cd /mnt/d/Projects/viaduct`), with Linux build output
+kept apart from Windows' `target/` and bindgen pointed at Ubuntu's libclang:
+
+```bash
+CARGO_TARGET_DIR=~/viaduct-target LIBCLANG_PATH=/usr/lib/llvm-21/lib cargo test --workspace
+```
+
+The same with `clippy --workspace --all-targets -- -D warnings`, and with `CC=clang`
+(and its own `CARGO_TARGET_DIR`) to build the core with Clang instead of GCC. One
+test, `windows_without_driver`, runs only on Windows.
+
+The Linux backend's tests against a real PipeWire (a Microphone recorded with
+`pw-record`, a Speaker fed by `pw-play`) are opt-in, as they need PipeWire running:
+
+```bash
+CARGO_TARGET_DIR=~/viaduct-target LIBCLANG_PATH=/usr/lib/llvm-21/lib cargo test -p viaduct --test linux_pipewire -- --ignored --test-threads=1
+```
+
+One of them, `a_device_comes_back_by_itself_after_pipewire_restarts`, restarts your
+user's PipeWire service to check that a Device returns on its own (brief Goal 4).
+In WSL that's harmless; on a desktop it briefly interrupts all audio.
+
 ### Lint rules
 
 Where they live, from widest to narrowest:
@@ -574,7 +610,7 @@ the project, `platforms/windows/driver/README.md` for the driver.
 Deliberately left out, to reach the gate first: other sample rates and channel
 counts, loopback devices, renaming a live Device, volume and mute, more than 8
 Devices, latency under 10 ms, drift compensation and frame timestamps, installer
-self-heal and packaging, macOS and Linux backends, bindings for C, Node, Python and
+self-heal and packaging, the macOS backend, bindings for C, Node, Python and
 Swift.
 
 ## License

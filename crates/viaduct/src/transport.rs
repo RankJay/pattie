@@ -7,6 +7,11 @@
 
 use crate::Error;
 
+/// Linux's test backend: the real Linux transport with nodes the test drives.
+#[cfg(target_os = "linux")]
+#[doc(hidden)]
+pub use crate::linux::ManualBackend;
+
 /// Something that can open Owner connections to a driver.
 pub trait Transport: Send + Sync {
     fn connect(&self) -> Result<Box<dyn Connection>, Error>;

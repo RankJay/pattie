@@ -31,8 +31,16 @@ mod pace;
 use cli::{Command, SAMPLE_RATE, health};
 use pace::Pacer;
 
-/// How far ahead of real time the tone is kept: 20 ms.
+/// How far ahead of real time the tone is kept: at least one of the system's
+/// pulls, or each pull finds the Ring short and the rest is Gap. Windows pulls one
+/// 10 ms packet, so 20 ms there.
+#[cfg(not(target_os = "linux"))]
 const LEAD_FRAMES: u64 = 960;
+/// On Linux, PipeWire's graph pulls a whole cycle at once: 1,024 frames (21.3 ms)
+/// by default, up to 2,048 when the graph runs at its default maximum. Leading by
+/// 960 left every 1,024-frame pull 64 frames short (WSL, 2026-11-08).
+#[cfg(target_os = "linux")]
+const LEAD_FRAMES: u64 = 2048;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
