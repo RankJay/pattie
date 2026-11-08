@@ -12,19 +12,9 @@ use viaduct::{Device, Kind};
 
 const RATE: f32 = 48_000.0;
 
-/// `node.name` for a Device: the stable ID of ADR 0015 (vectors in the SDK's unit
-/// tests), so the tools can target it.
+/// `node.name` for a Device (ADR 0018), so the tools can target it.
 fn node_name(kind: Kind, name: &str) -> String {
-    let (letter, kind_byte) = match kind {
-        Kind::Microphone => ('M', 1u8),
-        Kind::Speaker => ('S', 2u8),
-    };
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in std::iter::once(kind_byte).chain(name.encode_utf16().flat_map(u16::to_le_bytes)) {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    format!("viaduct.{letter}{:016X}", if hash == 0 { 1 } else { hash })
+    format!("viaduct.{}", viaduct::stable_id(kind, name))
 }
 
 /// A 440 Hz tone at amplitude 0.5, continuing from `phase`.

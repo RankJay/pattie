@@ -21,9 +21,7 @@
     reason = "each block is one WASAPI/COM call sequence with a single safety argument"
 )]
 
-use crate::latency::{
-    ClickDetector, HNS_PER_SECOND, Sent, frames_to_hns, pair_clicks, spread, stable_instance_id,
-};
+use crate::latency::{ClickDetector, HNS_PER_SECOND, Sent, frames_to_hns, pair_clicks, spread};
 use crate::pace::Pacer;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -111,7 +109,7 @@ pub fn run(direction: &str, name: &str, seconds: u64, lead_ms: u64) -> Result<()
 /// Matched by the endpoint's device instance path, which ends in the circuit
 /// device's stable instance ID (`&M<hex>` / `&S<hex>`). The name is a fallback.
 fn find_endpoint(flow: EDataFlow, name: &str, kind: Kind) -> Result<IMMDevice, String> {
-    let instance_suffix = format!("&{}", stable_instance_id(kind, name));
+    let instance_suffix = format!("&{}", viaduct::stable_id(kind, name));
     let name_suffixes = [format!("({name})"), format!("- {name})")];
     let deadline = Instant::now() + Duration::from_secs(30);
     let started = Instant::now();

@@ -1,7 +1,8 @@
 //! How the SDK reaches a driver (ADR 0012).
 //!
-//! Public so test backends (the in-process fake driver) can implement it, but not
-//! part of the supported API. A connection is one Owner: one open handle.
+//! Public so test backends (the in-process fake driver, and Linux's
+//! `TestBackend`) can implement or use it, but not part of the supported API. A
+//! connection is one Owner: one open handle.
 
 #![forbid(unsafe_code)] // pure logic: the compiler guarantees no unsafe here
 
@@ -10,7 +11,7 @@ use crate::Error;
 /// Linux's test backend: the real Linux transport with nodes the test drives.
 #[cfg(target_os = "linux")]
 #[doc(hidden)]
-pub use crate::linux::ManualBackend;
+pub use crate::linux::TestBackend;
 
 /// Something that can open Owner connections to a driver.
 pub trait Transport: Send + Sync {

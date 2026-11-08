@@ -6,8 +6,8 @@
  * MSVC (and clang-cl): the Windows driver and the Windows host tests.
  * GCC and Clang: the Linux backend, which embeds the core (ADR 0018).
  */
-#ifndef VD_PORT_H
-#define VD_PORT_H
+#ifndef VIADUCT_PORT_H
+#define VIADUCT_PORT_H
 
 #include <stdint.h>
 
@@ -62,4 +62,4 @@ static inline void vd_store_release_u64(volatile uint64_t *p, uint64_t v)
 #error "Viaduct core needs MSVC, GCC or Clang"
 #endif
 
-#endif /* VD_PORT_H */
+#endif /* VIADUCT_PORT_H */

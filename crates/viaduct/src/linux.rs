@@ -5,20 +5,24 @@
 //! Node creation sits behind [`Nodes`], so the control path is tested without
 //! PipeWire; [`pipewire`] is the real one.
 
-mod core;
-mod manual;
+mod claim;
+mod core_ffi;
 pub(crate) mod pipewire;
+mod request;
+mod test_backend;
 
-pub use manual::ManualBackend;
+pub use test_backend::TestBackend;
 
-use crate::abi::{self, CreateDeviceRequest};
+use crate::abi;
 use crate::transport::{Connection, Transport};
 use crate::{Error, Kind};
-use core::{Core, Owner};
-use std::mem::{offset_of, size_of};
+use claim::{Claim, claim};
+use core_ffi::{Core, Owner};
+use request::{device_of, read_u32, ring_of};
+use std::mem::size_of;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
-pub(crate) use core::RingRef;
+pub(crate) use core_ffi::RingRef;
 
 /// What a Device's node needs: who it is, and the Ring to stream through.
 pub(crate) struct NodeSpec {
@@ -111,33 +115,6 @@ struct LiveDevice {
     _claim: Claim,
 }
 
-/// A Device's name, held across apps for as long as the Device lives (ADR 0018):
-/// an abstract Unix socket named after it. The kernel lets one process bind a name
-/// at a time, so two apps can't both win, and releases it the moment the process
-/// exits, crash included. The user ID is in the name, so users don't block each
-/// other.
-struct Claim {
-    /// Held, never used: binding it is the claim, and dropping it releases it.
-    _socket: std::os::unix::net::UnixListener,
-}
-
-fn claim(namespace: &str, node_name: &str) -> Result<Claim, Error> {
-    use std::os::linux::net::SocketAddrExt;
-    use std::os::unix::fs::MetadataExt;
-    use std::os::unix::net::{SocketAddr, UnixListener};
-
-    let os_error = |error: std::io::Error| Error::Os(error.raw_os_error().unwrap_or(0));
-    // /proc/self belongs to the process's effective user.
-    let uid = std::fs::metadata("/proc/self").map_err(os_error)?.uid();
-    let address = SocketAddr::from_abstract_name(format!("{namespace}/{uid}/{node_name}"))
-        .map_err(os_error)?;
-    match UnixListener::bind_addr(&address) {
-        Ok(socket) => Ok(Claim { _socket: socket }),
-        Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => Err(Error::DuplicateName),
-        Err(error) => Err(os_error(error)),
-    }
-}
-
 impl Connection for LinuxConnection {
     fn ioctl(&mut self, code: u32, input: &[u8], output: &mut [u8]) -> Result<usize, Error> {
         let command = [
@@ -206,70 +183,10 @@ impl Drop for LinuxConnection {
     }
 }
 
-fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
-    let chunk = bytes.get(offset..)?.first_chunk::<4>()?;
-    Some(u32::from_ne_bytes(*chunk))
-}
-
-fn read_u64(bytes: &[u8], offset: usize) -> Option<u64> {
-    let chunk = bytes.get(offset..)?.first_chunk::<8>()?;
-    Some(u64::from_ne_bytes(*chunk))
-}
-
-/// The Ring a Create Device request names. Its address is the SDK's own memory in
-/// this process, as the fake driver uses it; the core checks the size.
-fn ring_of(input: &[u8]) -> Option<(*mut std::ffi::c_void, usize)> {
-    let address = read_u64(input, offset_of!(CreateDeviceRequest, ring_address))?;
-    let bytes = read_u64(input, offset_of!(CreateDeviceRequest, ring_bytes))?;
-    if address == 0 || bytes == 0 || bytes > u64::from(abi::RING_MAX_BYTES) {
-        return None;
-    }
-    let address = usize::try_from(address).ok()?;
-    // Exposed provenance: the address came from this process's own pointer
-    // (`RingMemory::address`).
-    let memory = std::ptr::with_exposed_provenance_mut(address);
-    Some((memory, usize::try_from(bytes).ok()?))
-}
-
-/// The kind and name of an accepted Create Device request.
-fn device_of(input: &[u8]) -> Option<(Kind, String)> {
-    let kind = match read_u32(input, offset_of!(CreateDeviceRequest, kind))? {
-        abi::KIND_MICROPHONE => Kind::Microphone,
-        abi::KIND_SPEAKER => Kind::Speaker,
-        _ => return None,
-    };
-    let len = usize::try_from(read_u32(input, offset_of!(CreateDeviceRequest, name_len))?).ok()?;
-    let start = offset_of!(CreateDeviceRequest, name);
-    let units: Vec<u16> = input
-        .get(start..start + len.min(abi::DEVICE_NAME_MAX) * 2)?
-        .as_chunks::<2>()
-        .0
-        .iter()
-        .map(|&pair| u16::from_ne_bytes(pair))
-        .collect();
-    Some((kind, String::from_utf16_lossy(&units)))
-}
-
-/// `node.name`: `viaduct.` plus the stable ID the Windows driver gives the same
-/// Device (ADR 0015): `M` or `S`, then the 64-bit FNV-1a hash of the kind byte
-/// and the name's UTF-16LE bytes, as 16 uppercase hex digits (0 becomes 1).
+/// `node.name`: `viaduct.` plus the Device's stable identity (ADR 0015), the
+/// same ID the Windows driver gives it.
 pub(crate) fn node_name(kind: Kind, name: &str) -> String {
-    let (letter, kind_byte) = match kind {
-        Kind::Microphone => ('M', 1u8),
-        Kind::Speaker => ('S', 2u8),
-    };
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    let mut feed = |byte: u8| {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    };
-    feed(kind_byte);
-    for unit in name.encode_utf16() {
-        for byte in unit.to_le_bytes() {
-            feed(byte);
-        }
-    }
-    format!("viaduct.{letter}{:016X}", if hash == 0 { 1 } else { hash })
+    format!("viaduct.{}", crate::stable_id(kind, name))
 }
 
 #[cfg(test)]
@@ -502,24 +419,14 @@ mod tests {
         assert!(again.is_ok(), "{:?}", again.err());
     }
 
-    /// The same vectors as the Windows driver's (viaduct-cli's latency.rs).
     #[test]
-    fn node_names_match_the_windows_stable_ids() {
-        let names = [
-            node_name(Kind::Microphone, "Agent Mic"),
-            node_name(Kind::Speaker, "Agent Speaker"),
-            node_name(Kind::Microphone, "agent mic"),
-            node_name(Kind::Speaker, "Agent Mic"),
-        ];
-
+    fn a_node_is_named_viaduct_dot_its_stable_id() {
         assert_eq!(
-            names,
-            [
-                "viaduct.MBD5F5BFDA42F6F12",
-                "viaduct.SE4C7C9E6384B9C77",
-                "viaduct.MA22168868E50FF12",
-                "viaduct.S44E8BD5D8B4A93E3"
-            ]
+            node_name(Kind::Microphone, "Agent Mic"),
+            format!(
+                "viaduct.{}",
+                crate::stable_id(Kind::Microphone, "Agent Mic")
+            )
         );
     }
 }

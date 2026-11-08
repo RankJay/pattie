@@ -30,7 +30,7 @@ impl Backend for viaduct_fake_driver::FakeDriver {
 }
 
 #[cfg(target_os = "linux")]
-impl Backend for viaduct::transport::ManualBackend {
+impl Backend for viaduct::transport::TestBackend {
     fn transport(&self) -> Arc<dyn Transport> {
         self.transport()
     }
@@ -65,7 +65,7 @@ macro_rules! contract_suite {
             $(
                 #[test]
                 fn $test() {
-                    super::$test(&viaduct::transport::ManualBackend::new().unwrap());
+                    super::$test(&viaduct::transport::TestBackend::new().unwrap());
                 }
             )*
         }

@@ -164,8 +164,10 @@ only adds; the spare bytes in the header are reserved for formats and timestamps
 - **v0 scope is fixed:** 48 kHz, mono, float, at most 8 Devices, names up to 63
 characters, case-sensitive. Windows may open the endpoint as float or 16-bit PCM;
 the driver converts, the app always sees float.
-- **Same name, same endpoint.** A Device's child gets an ID derived from its kind and
-name, so Windows reuses the endpoint and keeps the user's settings for it.
+- **Same name, same endpoint.** A Device gets an ID derived from its kind and name
+(`viaduct::stable_id`), so the system reuses the endpoint and keeps the user's
+settings for it: the circuit device's instance ID on Windows, the PipeWire
+`node.name` on Linux.
 - **Any interactive user's app may create a Device, without elevation.** Sandboxed
 Store apps may not. Abuse protections are post-v0.
 - **Installing is a separate admin step,** done once: `viaduct-cli install`. The SDK
@@ -180,10 +182,12 @@ there.
 core/
   include/viaduct_abi.h     the SDK ↔ driver contract (the only shared header)
   src/                      pure C core: Device table, Ring, clock, PCM16 conversion
+                            (run by the Windows driver and, embedded, by the Linux backend)
   tests/                    host tests for the core (Rust harness via bindgen + cc)
   fuzz/                     libFuzzer + AddressSanitizer target for the core (Fuzzing the core)
 crates/
-  viaduct/                  the Rust SDK (public API: Device, Writer, Reader, Stats, Error)
+  viaduct/                  the Rust SDK (public API: Device, Writer, Reader, Stats, Error,
+                            stable_id); backends in src/windows.rs and src/linux.rs + src/linux/
   viaduct-cli/              test tool: mic, speaker, measure, install, uninstall
 testing/
   fake-driver/              the real C core behind the SDK, in-process, for SDK tests
@@ -576,7 +580,7 @@ Where they live, from widest to narrowest:
 | Root `Cargo.toml`, `[workspace.lints]` | every crate (each opts in with `[lints] workspace = true`) | The `unsafe` rules below; no `dbg!`, `todo!`, `unimplemented!`; no pointer casts that hide a type or alignment change (`ptr_as_ptr`, `cast_ptr_alignment`, `transmute_ptr_to_ptr`); rustdoc links and HTML must be valid |
 | `clippy.toml` | every crate | Methods banned by name, each with its reason: `std::process::exit` (skips destructors, so a live Device isn't removed cleanly) and `std::thread::sleep` (a 1 ms sleep can last ~15.6 ms and starve an audio loop: use `pace::Pacer`). Also: the `unsafe fn` contract rule covers private functions, and tests may unwrap |
 | Top of `crates/viaduct/src/lib.rs` | the SDK only | It runs inside other people's apps: no `unwrap`/`expect`/`panic!`, no printing, no silently narrowing casts, and every public item is documented and has `Debug` |
-| `#![forbid(unsafe_code)]` at the top of a module | `cli.rs`, `latency.rs`, `error.rs`, `transport.rs` | The compiler guarantees these hold no `unsafe`, so a reviewer can skip them for memory safety |
+| `#![forbid(unsafe_code)]` at the top of a module | `cli.rs`, `latency.rs`, `error.rs`, `identity.rs`, `transport.rs` | The compiler guarantees these hold no `unsafe`, so a reviewer can skip them for memory safety |
 | `core/tests/build.rs`, `testing/fake-driver/build.rs`, `viaduct.vcxproj` | the C core (and the driver) | Warnings are errors, plus implicit narrowing and sign changes: `-Wconversion -Wsign-conversion` under clang, C4242/C4244/C4365 under MSVC |
 
 To make an exception in one place, use `#[expect(clippy::…, reason = "…")]` on that

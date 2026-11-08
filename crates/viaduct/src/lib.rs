@@ -33,6 +33,7 @@
 pub mod abi;
 mod device;
 mod error;
+mod identity;
 #[cfg(target_os = "linux")]
 mod linux;
 mod ring;
@@ -43,3 +44,4 @@ mod windows;
 
 pub use device::{Device, DeviceBuilder, Kind, Reader, Stats, Writer};
 pub use error::Error;
+pub use identity::stable_id;

@@ -20,34 +20,34 @@ type Rings = Arc<Mutex<HashMap<u32, RingRef>>>;
 
 /// The Linux transport with test-driven nodes. Each backend is its own app: its
 /// own core, and its own claim namespace, so parallel tests don't collide.
-pub struct ManualBackend {
+pub struct TestBackend {
     transport: Arc<dyn Transport>,
     rings: Rings,
 }
 
-impl std::fmt::Debug for ManualBackend {
+impl std::fmt::Debug for TestBackend {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let live = self
             .rings
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .len();
-        f.debug_struct("ManualBackend")
+        f.debug_struct("TestBackend")
             .field("live_devices", &live)
             .finish()
     }
 }
 
-struct ManualNodes(Rings);
+struct TestNodes(Rings);
 
-struct ManualNode {
+struct TestNode {
     id: u32,
     rings: Rings,
 }
 
-impl Node for ManualNode {}
+impl Node for TestNode {}
 
-impl Drop for ManualNode {
+impl Drop for TestNode {
     fn drop(&mut self) {
         self.rings
             .lock()
@@ -56,26 +56,26 @@ impl Drop for ManualNode {
     }
 }
 
-impl Nodes for ManualNodes {
+impl Nodes for TestNodes {
     fn create(&self, spec: NodeSpec) -> Result<Box<dyn Node>, Error> {
         self.0
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .insert(spec.id, spec.ring);
-        Ok(Box::new(ManualNode {
+        Ok(Box::new(TestNode {
             id: spec.id,
             rings: self.0.clone(),
         }))
     }
 }
 
-impl ManualBackend {
+impl TestBackend {
     /// A fresh backend: a new app, as far as names and IDs go.
     ///
     /// # Errors
     ///
     /// `Error::Os` if the core's state can't be allocated.
-    pub fn new() -> Result<ManualBackend, Error> {
+    pub fn new() -> Result<TestBackend, Error> {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let namespace = format!(
             "viaduct-test-{}-{}",
@@ -83,8 +83,8 @@ impl ManualBackend {
             NEXT.fetch_add(1, Ordering::Relaxed)
         );
         let rings = Rings::default();
-        let nodes = Arc::new(ManualNodes(rings.clone()));
-        Ok(ManualBackend {
+        let nodes = Arc::new(TestNodes(rings.clone()));
+        Ok(TestBackend {
             transport: Arc::new(LinuxTransport::with_nodes(nodes, &namespace)?),
             rings,
         })

@@ -8,8 +8,6 @@
 
 #![forbid(unsafe_code)] // pure logic: the compiler guarantees no unsafe here
 
-use viaduct::Kind;
-
 pub const HNS_PER_SECOND: u64 = 10_000_000;
 /// A sample at least this loud (either sign) is a click.
 pub const DETECT_LEVEL: f32 = 0.3;
@@ -103,30 +101,6 @@ pub fn spread(values: &mut [f64]) -> String {
         at(0.99),
         values[values.len() - 1]
     )
-}
-
-/// The circuit device's stable instance ID for a Device (ADR 0015): `M` or `S`,
-/// then the 64-bit FNV-1a hash of the kind byte (1 or 2) followed by the name's
-/// UTF-16LE bytes, as 16 hex digits (the driver writes them lowercase); a hash of 0
-/// becomes 1. Must match the driver (endpoint.c). Used to find a Device's endpoint
-/// by its instance path.
-pub fn stable_instance_id(kind: Kind, name: &str) -> String {
-    let (letter, kind_byte) = match kind {
-        Kind::Microphone => ('M', 1u8),
-        Kind::Speaker => ('S', 2u8),
-    };
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    let mut feed = |byte: u8| {
-        hash ^= byte as u64;
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    };
-    feed(kind_byte);
-    for unit in name.encode_utf16() {
-        for byte in unit.to_le_bytes() {
-            feed(byte);
-        }
-    }
-    format!("{letter}{:016X}", if hash == 0 { 1 } else { hash })
 }
 
 #[cfg(test)]
@@ -226,28 +200,5 @@ mod tests {
     fn frames_convert_to_hns_at_the_stream_rate() {
         assert_eq!(frames_to_hns(480, 48_000), 10 * MS);
         assert_eq!(frames_to_hns(441, 44_100), 10 * MS);
-    }
-
-    /// Vectors computed independently (a Python mirror of the spec), and confirmed
-    /// identical to the driver's own (a mirror of endpoint.c), which writes the hex
-    /// in lowercase; matching compares uppercased.
-    #[test]
-    fn stable_instance_ids_match_the_drivers_vectors() {
-        let ids = [
-            stable_instance_id(Kind::Microphone, "Agent Mic"),
-            stable_instance_id(Kind::Speaker, "Agent Speaker"),
-            stable_instance_id(Kind::Microphone, "agent mic"), // case-sensitive
-            stable_instance_id(Kind::Speaker, "Agent Mic"),    // kind is hashed first
-        ];
-
-        assert_eq!(
-            ids,
-            [
-                "MBD5F5BFDA42F6F12",
-                "SE4C7C9E6384B9C77",
-                "MA22168868E50FF12",
-                "S44E8BD5D8B4A93E3"
-            ]
-        );
     }
 }
