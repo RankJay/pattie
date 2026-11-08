@@ -1,0 +1,17 @@
+<!--
+  Opt-in: build against the WDK and SDK NuGet packages instead of an installed
+  WDK (CI; GitHub's Windows images don't reliably ship the WDK). Restore them first
+  (packages.config), then build with -p:ViaductWdkNuGet=true. Without the flag
+  this file does nothing and the installed WDK is used, as before.
+-->
+<Project>
+  <PropertyGroup>
+    <ViaductKitVersion>10.0.28000.2526</ViaductKitVersion>
+    <ViaductNuGetDir>$(MSBuildThisFileDirectory)..\..\..\target\nuget\</ViaductNuGetDir>
+  </PropertyGroup>
+  <ImportGroup Condition="'$(ViaductWdkNuGet)' == 'true'">
+    <Import Project="$(ViaductNuGetDir)Microsoft.Windows.SDK.CPP.$(ViaductKitVersion)\build\native\Microsoft.Windows.SDK.cpp.props" />
+    <Import Project="$(ViaductNuGetDir)Microsoft.Windows.SDK.CPP.x64.$(ViaductKitVersion)\build\native\Microsoft.Windows.SDK.cpp.x64.props" />
+    <Import Project="$(ViaductNuGetDir)Microsoft.Windows.WDK.x64.$(ViaductKitVersion)\build\native\Microsoft.Windows.WDK.x64.props" />
+  </ImportGroup>
+</Project>

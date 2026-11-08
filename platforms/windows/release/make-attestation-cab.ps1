@@ -23,22 +23,33 @@ param(
     # submission: Windows picks the highest DriverVer among installed packages.
     [Parameter(Mandatory)]
     [ValidatePattern('^\d{1,5}\.\d{1,5}\.\d{1,5}\.\d{1,5}$')]
-    [string]$Version
+    [string]$Version,
+
+    # Build against the WDK NuGet packages (restored into target\nuget from
+    # platforms\windows\driver\packages.config) instead of an installed WDK: CI.
+    [switch]$WdkNuGet
 )
 
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
-$msbuild = 'C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\amd64\MSBuild.exe'
 $driverOut = Join-Path $repo 'target\driver\x64\Release'
 $out = Join-Path $repo 'target\attestation'
 $stage = Join-Path $out 'viaduct'
 $cabName = "viaduct-$Version.cab"
 
-if (-not (Test-Path $msbuild)) { throw "Missing tool: $msbuild" }
+# MSBuild from the newest Visual Studio, whichever edition (vswhere ships with the
+# Visual Studio Installer).
+$vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+if (-not (Test-Path $vswhere)) { throw "Missing tool: $vswhere (installed with Visual Studio)" }
+$msbuild = & $vswhere -latest -prerelease -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\amd64\MSBuild.exe' |
+    Select-Object -First 1
+if (-not $msbuild) { throw 'No Visual Studio with MSBuild found' }
+$nugetArgs = @() # an explicit array: splatting a lone string would pass its characters
+if ($WdkNuGet) { $nugetArgs += '-p:ViaductWdkNuGet=true' }
 
 Write-Host "== Building the Release driver, version $Version"
 & $msbuild (Join-Path $repo 'platforms\windows\driver\viaduct.vcxproj') -t:Rebuild `
-    -p:Configuration=Release -p:Platform=x64 "-p:ViaductDriverVersion=$Version" -nologo -v:minimal
+    -p:Configuration=Release -p:Platform=x64 "-p:ViaductDriverVersion=$Version" @nugetArgs -nologo -v:minimal
 if ($LASTEXITCODE -ne 0) { throw "Driver build failed (exit $LASTEXITCODE)" }
 
 $stamped = Select-String -Path (Join-Path $driverOut 'viaduct.inf') -Pattern '^\s*DriverVer\s*=\s*(.+)$'

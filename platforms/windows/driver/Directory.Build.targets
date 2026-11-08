@@ -1,0 +1,6 @@
+<!-- The SDK NuGet package's targets, for -p:ViaductWdkNuGet=true (see Directory.Build.props). -->
+<Project>
+  <ImportGroup Condition="'$(ViaductWdkNuGet)' == 'true'">
+    <Import Project="$(ViaductNuGetDir)Microsoft.Windows.SDK.CPP.$(ViaductKitVersion)\build\native\Microsoft.Windows.SDK.cpp.targets" />
+  </ImportGroup>
+</Project>

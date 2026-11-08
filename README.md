@@ -197,6 +197,7 @@ platforms/windows/
   release/                  make-attestation-cab.ps1 (the .cab for Microsoft signing)
 target/                     build output (driver, VM package, attestation cab, CodeQL)
 clippy.toml, deny.toml      banned methods; allowed dependencies (Lint rules, Dependency checks)
+.github/workflows/          CI, nightly checks and releases (Continuous integration)
 .cargo/mutants.toml         what mutation testing skips, with reasons
 ```
 
@@ -358,6 +359,37 @@ code analysis:
 ```bash
 "/c/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" platforms/windows/driver/viaduct.vcxproj -p:Configuration=Release -p:Platform=x64 -p:RunCodeAnalysis=true
 ```
+
+### Continuous integration
+
+Three workflows in `.github/workflows/` run on GitHub's hosted runners (Windows
+Server 2025 with Visual Studio 2026, and Ubuntu 24.04):
+
+| Workflow | When | What |
+| --- | --- | --- |
+| `ci.yml` | every push to `main`/`master`, every pull request | fmt, clippy, docs and tests on Windows and on Linux (GCC and Clang); the Linux backend's tests on a headless PipeWire (all but the restart test); cargo-deny; the driver build with Microsoft's code analysis; Miri on the Ring; a 60 s fuzz run |
+| `nightly.yml` | daily at 03:17 UTC, or by hand | CodeQL with Microsoft's driver queries (fails on any result without a suppression; SARIF uploaded); cargo-mutants (Windows); coverage summary (Linux, with the Clang matching rustc's LLVM); a 10 min fuzz run keeping its corpus |
+| `release.yml` | a tag `v<a.b.c.d>` (the driver version), or by hand | the unsigned driver package, the attestation cab, and `viaduct-cli` for Windows and Linux, attached to a **draft** Release |
+
+Still by hand: anything that loads the driver (the VM steps, the gate run), signing
+the cab with the EV certificate and submitting it, the real-desktop Linux checks
+(Zoom, browsers), and the PipeWire restart test.
+
+The runners' own WDK isn't reliable, so CI builds the driver against the WDK and SDK
+NuGet packages (`platforms/windows/driver/packages.config`, version 10.0.28000.2526,
+matching the installed kit). Local builds keep using the installed WDK; to build the
+way CI does:
+
+```bash
+nuget restore platforms/windows/driver/packages.config -PackagesDirectory target/nuget
+```
+
+```bash
+"/c/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" platforms/windows/driver/viaduct.vcxproj -p:Configuration=Release -p:Platform=x64 -p:RunCodeAnalysis=true -p:ViaductWdkNuGet=true
+```
+
+`make-attestation-cab.ps1 -WdkNuGet` does the same for the cab, and finds MSBuild
+with `vswhere`, so it works with any Visual Studio edition.
 
 ### Coverage
 
