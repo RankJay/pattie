@@ -178,6 +178,8 @@ static VOID VdEvtStreamTimer(WDFTIMER Timer)
         } else {
             vd_ring_write(device->Ring, (const float *)packet, frames);
         }
+        /* Wake the app's paced writer, reader or playout (ADR 0021). */
+        (void)KeSetEvent(device->WakeEvent, IO_NO_INCREMENT, FALSE);
         ExReleaseRundownProtection(&device->Rundown);
     } else if (device->Kind == VD_KIND_MICROPHONE) {
         RtlZeroMemory(packet, streamCtx->PacketSize); /* Device removed: silence */

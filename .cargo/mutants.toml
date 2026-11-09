@@ -26,13 +26,11 @@ exclude_re = [
     "<impl Drop for RingMemory>::drop",
     # Thin wrappers around install/setup.rs, which changes the machine (VM-STEPS D.5).
     "replace (install|uninstall) -> Result<\\(\\), String> with Ok\\(\\(\\)\\)",
-    # The Windows timer and MMCSS calls: their effect is only timing (the opt-in
-    # `steps_take_about_a_millisecond` test) and releasing OS handles.
-    "in win::",
-    "win::(high_resolution_timer|join_pro_audio|wait|release)",
-    "<impl Drop for Pacer>::drop",
+    # MMCSS "Pro Audio": its effect is only scheduling priority under load (the
+    # VM's cpu-load runs), and reverting it releases an OS registration.
+    "<impl Drop for ProAudio>::drop",
     # Equivalent: two Instants a gap apart are never exactly equal to the limit.
-    "replace > with >= in Pacer::tick",
+    "replace > with >= in GapMeter::tick",
     # Equivalent: the IOCTL code's three bit fields don't overlap, so | and ^ agree.
     "replace \\| with \\^ in ioctl",
 ]

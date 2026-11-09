@@ -30,6 +30,11 @@ pub(super) fn ring_of(input: &[u8]) -> Option<(*mut std::ffi::c_void, usize)> {
     Some((memory, usize::try_from(bytes).ok()?))
 }
 
+/// The doorbell a Create Device request names (`Doorbell::raw`).
+pub(super) fn wake_of(input: &[u8]) -> Option<u64> {
+    read_u64(input, offset_of!(CreateDeviceRequest, wake_event))
+}
+
 /// The kind and name of an accepted Create Device request.
 pub(super) fn device_of(input: &[u8]) -> Option<(Kind, String)> {
     let kind = match read_u32(input, offset_of!(CreateDeviceRequest, kind))? {

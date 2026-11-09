@@ -72,6 +72,9 @@ pub struct CreateDeviceRequest {
     pub reserved: u16,
     pub ring_address: u64,
     pub ring_bytes: u64,
+    /// The Device's doorbell (`doorbell.rs`): an event handle on Windows, an
+    /// eventfd on Linux.
+    pub wake_event: u64,
 }
 
 #[repr(C)]

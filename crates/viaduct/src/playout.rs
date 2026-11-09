@@ -8,14 +8,13 @@
 use crate::Error;
 use crate::convert::{Converter, Format};
 use crate::device::{Inner, Kind, V0_FORMAT};
-use crate::pacing::{self, Step};
-use crate::timer::Waiter;
+use crate::mmcss::ProAudio;
 use std::collections::VecDeque;
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 /// The most audio the queue holds: 10 minutes at 48 kHz. Only a runaway producer
 /// reaches it; `push` then accepts no more.
@@ -27,8 +26,8 @@ pub struct Playout {
     /// Converts what `push_bytes` is given (the playout's input format) to the
     /// Device's 48 kHz mono float, keeping its state from one push to the next.
     converter: Mutex<Converter>,
-    /// The thread that tops the Ring up every millisecond; `None` for the tests'
-    /// hand-driven playouts.
+    /// The thread that tops the Ring up each time the system's side rings the
+    /// Device's doorbell; `None` for the tests' hand-driven playouts.
     feeder: Option<JoinHandle<()>>,
 }
 
@@ -36,6 +35,9 @@ pub struct Playout {
 struct Shared {
     inner: Arc<Inner>,
     state: Mutex<State>,
+    /// Notified after each feeding pass, for `wait_idle`: the feeder is the
+    /// doorbell's one waiter.
+    progress: Condvar,
     /// Set when the playout is dropped: the feeder stops.
     stop: AtomicBool,
 }
@@ -99,18 +101,18 @@ impl fmt::Debug for Playout {
 }
 
 impl Playout {
-    /// A playout with its feeder running: a thread with the high-resolution timer
-    /// and MMCSS "Pro Audio" (its own thread, so registered for its lifetime).
+    /// A playout with its feeder running: a thread registered with MMCSS "Pro
+    /// Audio" (its own, so for its lifetime) that wakes on the Device's doorbell.
     pub(crate) fn start(inner: Arc<Inner>, input: Format) -> Result<Playout, Error> {
         let mut playout = Playout::manual(inner, input)?;
         let shared = playout.shared.clone();
         let feeder = std::thread::Builder::new()
             .name("viaduct-playout".to_string())
             .spawn(move || {
-                let waiter = Waiter::new();
+                let _pro_audio = ProAudio::register();
                 while !shared.stop.load(Ordering::Acquire) {
-                    let pause = shared.pump();
-                    waiter.wait(pause);
+                    shared.pump();
+                    shared.inner.doorbell.wait(None);
                 }
             })
             // Dropping `playout` releases the writer slot again.
@@ -128,6 +130,7 @@ impl Playout {
             shared: Arc::new(Shared {
                 inner,
                 state: Mutex::new(State::default()),
+                progress: Condvar::new(),
                 stop: AtomicBool::new(false),
             }),
             feeder: None,
@@ -192,20 +195,22 @@ impl Playout {
     /// Waits until everything pushed has been taken by the system: true then,
     /// false if `deadline` passed first. For "speak, then wait until it's heard".
     pub fn wait_idle(&self, deadline: Instant) -> bool {
-        let waiter = Waiter::new();
+        let mut state = self.shared.lock();
         loop {
-            {
-                let mut state = self.shared.lock();
-                self.shared.end_reply_if_played(&mut state);
-                if state.queue.is_empty() && state.reply.is_none() {
-                    return true;
-                }
+            self.shared.end_reply_if_played(&mut state);
+            if state.queue.is_empty() && state.reply.is_none() {
+                return true;
             }
             let now = Instant::now();
             if now >= deadline {
                 return false;
             }
-            waiter.wait(Duration::from_millis(1).min(deadline - now));
+            state = self
+                .shared
+                .progress
+                .wait_timeout(state, deadline - now)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
         }
     }
 }
@@ -227,15 +232,18 @@ impl Shared {
         }
     }
 
-    /// One feeding pass: tops the Ring up to the lead; returns how long until the
-    /// next pass is worth making.
-    fn pump(&self) -> Duration {
-        let mut state = self.lock();
+    /// One feeding pass: tops the Ring up to the lead, then tells `wait_idle`.
+    fn pump(&self) {
+        self.fill(&mut self.lock());
+        self.progress.notify_all();
+    }
+
+    fn fill(&self, state: &mut State) {
         let ring = &self.inner.ring;
-        let room = match pacing::step(ring.buffered(), self.inner.lead_frames, V0_FORMAT.0) {
-            Step::Write(room) => usize::try_from(room).unwrap_or(usize::MAX),
-            Step::Wait(pause) => return pause,
-        };
+        let room = self.inner.room_below_lead();
+        if room == 0 {
+            return;
+        }
         let take = room.min(state.queue.len());
         if take > 0
             && let Some(reply) = state.reply.as_mut()
@@ -247,7 +255,6 @@ impl Shared {
         // counting Gap, so Gap means only real starvation.
         audio.resize(room, 0.0);
         ring.write(&audio);
-        Duration::from_millis(1)
     }
 }
 
@@ -255,8 +262,9 @@ impl Drop for Playout {
     fn drop(&mut self) {
         self.shared.stop.store(true, Ordering::Release);
         if let Some(feeder) = self.feeder.take() {
-            // It stops within one pass (at most 10 ms); a panicked feeder has
-            // nothing left to clean up.
+            // The ring wakes it (or, if it isn't waiting yet, is kept until it
+            // does), and it stops; a panicked feeder has nothing left to clean up.
+            self.shared.inner.doorbell.ring();
             let _ = feeder.join();
         }
         self.shared.inner.release_endpoint();
@@ -318,7 +326,7 @@ mod tests {
     }
 
     /// The system takes `frames` in 10 ms packets, the feeder topping up after
-    /// each, as the real feeder does every millisecond. Returns what was taken.
+    /// each, as the real feeder does when the doorbell rings. Returns what was taken.
     #[expect(
         clippy::unwrap_used,
         reason = "a test helper: a failure should stop the test loudly"

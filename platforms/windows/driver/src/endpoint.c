@@ -97,7 +97,8 @@ static NTSTATUS VdChildIdClaim(VD_DRIVER_CONTEXT *Ctx, ULONG64 Id)
 
 _Use_decl_annotations_
 NTSTATUS VdCircuitDeviceAdd(VD_DRIVER_CONTEXT *Ctx, UINT32 DeviceId,
-                            const vd_create_device_request *Request, WDFDEVICE *CircuitDevice)
+                            const vd_create_device_request *Request, PKEVENT WakeEvent,
+                            WDFDEVICE *CircuitDevice)
 {
     PWDFDEVICE_INIT init;
     ACX_DEVICEINIT_CONFIG acxInitConfig;
@@ -183,6 +184,7 @@ NTSTATUS VdCircuitDeviceAdd(VD_DRIVER_CONTEXT *Ctx, UINT32 DeviceId,
     deviceCtx->DeviceId = DeviceId;
     deviceCtx->Kind = Request->kind;
     deviceCtx->Ring = vd_core_device_ring(&Ctx->Core, DeviceId);
+    deviceCtx->WakeEvent = WakeEvent; /* the slot holds the reference */
     ExInitializeRundownProtection(&deviceCtx->Rundown);
     RtlCopyMemory(deviceCtx->NameBuffer, Request->name, name.Length);
     deviceCtx->Name.Buffer = deviceCtx->NameBuffer;
@@ -229,9 +231,13 @@ VOID VdDeviceTeardown(VD_DRIVER_CONTEXT *Ctx, UINT32 DeviceId)
             /* 1. No new stream access; wait out any in-flight timer callback. */
             ExWaitForRundownProtectionRelease(&VdCircuitDeviceContext(slot->CircuitDevice)->Rundown);
         }
-        /* 2. Unpin before the app's process can finish exiting. */
+        /* 2. Unpin before the app's process can finish exiting, and let go of its
+         *    doorbell: no timer callback can set it any more. */
         if (slot->Mdl != NULL) {
             VdUnpinRing(slot->Mdl);
+        }
+        if (slot->WakeEvent != NULL) {
+            ObDereferenceObject(slot->WakeEvent);
         }
         /* 3. Ask Windows to remove the endpoint (asynchronous), unless it already did. */
         if (slot->CircuitDevice != NULL) {

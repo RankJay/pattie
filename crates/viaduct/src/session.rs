@@ -49,12 +49,15 @@ impl Session {
 
     /// Creates a Device of `kind` (`abi::KIND_*`) named `name`, its audio in
     /// `ring`, which must outlive this session (the Backend uses it until the
-    /// session closes). Returns the Device ID.
+    /// session closes). The system's side rings `wake` (a `Doorbell`'s raw value,
+    /// which must also outlive this session) after each pass over the Ring.
+    /// Returns the Device ID.
     pub(crate) fn create_device(
         &mut self,
         kind: u32,
         name: &str,
         ring: &RingMemory,
+        wake: u64,
     ) -> Result<u32, Error> {
         let mut request = CreateDeviceRequest {
             kind,
@@ -63,6 +66,7 @@ impl Session {
             reserved: 0,
             ring_address: ring.address(),
             ring_bytes: ring.len() as u64,
+            wake_event: wake,
         };
         let units: Vec<u16> = name.encode_utf16().collect();
         let n = units.len().min(abi::DEVICE_NAME_MAX);

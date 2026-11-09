@@ -35,15 +35,15 @@ mod convert;
 #[cfg(any(target_os = "linux", feature = "test-backend"))]
 mod core_host;
 mod device;
+mod doorbell;
 mod error;
 mod identity;
 #[cfg(target_os = "linux")]
 mod linux;
-mod pacing;
+mod mmcss;
 mod playout;
 mod ring;
 mod session;
-mod timer;
 #[doc(hidden)]
 pub mod transport;
 #[cfg(windows)]

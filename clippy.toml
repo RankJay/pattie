@@ -13,5 +13,5 @@ allow-print-in-tests = true
 
 disallowed-methods = [
     { path = "std::process::exit", reason = "skips destructors, so a live Device isn't removed cleanly; return from main instead" },
-    { path = "std::thread::sleep", reason = "a 1 ms sleep can last a whole timer tick (~15.6 ms) and starve an audio loop; use the SDK's Writer::write_paced (or the CLI's pace::Pacer for its paced reader), or #[expect] with the reason where a coarse wait is intended" },
+    { path = "std::thread::sleep", reason = "a 1 ms sleep can last a whole timer tick (~15.6 ms) and starve an audio loop; use the SDK's Writer::write_paced or Reader::read_paced, or #[expect] with the reason where a coarse wait is intended" },
 ]

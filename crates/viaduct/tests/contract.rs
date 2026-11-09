@@ -82,6 +82,8 @@ contract_suite!(
     interrupt_stops_a_reply_with_at_most_the_lead_still_playing,
     a_playout_holds_the_writer_slot_until_dropped,
     wait_idle_is_true_once_a_reply_has_played,
+    read_paced_returns_as_soon_as_the_system_plays_audio,
+    read_paced_returns_nothing_once_its_deadline_passes,
 );
 
 fn creating_a_microphone_gives_a_device_with_id_1(backend: &dyn Backend) {
@@ -539,4 +541,46 @@ fn wait_idle_is_true_once_a_reply_has_played(backend: &dyn Backend) {
 )]
 fn sleep_ms(ms: u64) {
     std::thread::sleep(Duration::from_millis(ms));
+}
+
+fn read_paced_returns_as_soon_as_the_system_plays_audio(backend: &dyn Backend) {
+    let speaker = builder(backend)
+        .name("Agent Speaker")
+        .kind(Kind::Speaker)
+        .create()
+        .unwrap();
+    let mut rx = speaker.reader().unwrap();
+    let mut out = [0.0f32; 960];
+    let started = Instant::now();
+
+    // A long deadline: only the doorbell the system rings can end the wait early.
+    let got = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            sleep_ms(50);
+            backend.driver_write(speaker.id(), &[0.25; 480]);
+        });
+        rx.read_paced(&mut out, started + Duration::from_secs(10))
+            .unwrap()
+    });
+
+    assert_eq!(got, 480);
+    assert!(out[..480].iter().all(|&s| s == 0.25));
+    assert!(started.elapsed() < Duration::from_secs(5));
+}
+
+fn read_paced_returns_nothing_once_its_deadline_passes(backend: &dyn Backend) {
+    let speaker = builder(backend)
+        .name("Agent Speaker")
+        .kind(Kind::Speaker)
+        .create()
+        .unwrap();
+    let mut rx = speaker.reader().unwrap();
+    let started = Instant::now();
+
+    let got = rx
+        .read_paced(&mut [0.0; 480], started + Duration::from_millis(30))
+        .unwrap();
+
+    assert_eq!(got, 0);
+    assert!(started.elapsed() >= Duration::from_millis(14)); // a timer tick early at most
 }

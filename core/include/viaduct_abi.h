@@ -90,6 +90,13 @@ typedef struct vd_create_device_request {
     uint16_t reserved;                  /* must be zero */
     uint64_t ring_address;              /* the app's Ring memory (ADR 0006) */
     uint64_t ring_bytes;                /* its size; the driver pins exactly this */
+    /*
+     * The Device's doorbell (ADR 0021): an OS wait object of the app's that the
+     * system's side sets after each pass over the Ring. Windows: an event handle
+     * (the shell references it, with modify access, in the caller's context);
+     * Linux: an eventfd. Opaque to the core.
+     */
+    uint64_t wake_event;
 } vd_create_device_request;
 
 /* Device IDs start at 1; 0 never names a Device. */

@@ -9,6 +9,7 @@
 mod ffi;
 
 use crate::core_host::{Node, NodeSpec, Nodes, RingRef};
+use crate::doorbell::Ringer;
 use crate::{Error, Kind};
 use ffi::{
     Api, DIRECTION_INPUT, DIRECTION_OUTPUT, FORMAT, ID_ANY, STATE_ERROR, STATE_PAUSED,
@@ -78,6 +79,8 @@ struct Shared {
     wake: Condvar,
     /// Used only by the audio callback, on PipeWire's data thread.
     ring: UnsafeCell<RingRef>,
+    /// The Device's doorbell, rung after each cycle's pass over the Ring.
+    doorbell: Ringer,
 }
 
 #[derive(Default)]
@@ -128,6 +131,7 @@ impl PipeWireNode {
             watch: Mutex::new(Watch::default()),
             wake: Condvar::new(),
             ring: UnsafeCell::new(spec.ring),
+            doorbell: spec.wake,
         });
         // Built before anything can fail, so `Drop` undoes whatever was done.
         let mut node = PipeWireNode {
@@ -362,6 +366,8 @@ unsafe extern "C" fn on_process(data: *mut c_void) {
     }
     // SAFETY: the buffer was dequeued from this stream above.
     unsafe { (shared.api.stream_queue_buffer)(stream, buffer) };
+    // One write to an eventfd: no lock, safe on PipeWire's real-time thread.
+    shared.doorbell.ring();
 }
 
 /// Microphone: fills the block from the Ring (silence and Gap for what's missing).

@@ -3,11 +3,11 @@
 use crate::Error;
 use crate::abi;
 use crate::convert::Format;
-use crate::pacing::{self, Step};
+use crate::doorbell::Doorbell;
+use crate::mmcss::ProAudio;
 use crate::playout::Playout;
 use crate::ring::RingMemory;
 use crate::session::Session;
-use crate::timer::Waiter;
 use crate::transport::Transport;
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -99,12 +99,14 @@ impl DeviceBuilder {
         let lead_frames = u64::from(transport.lead_frames());
         let mut session = Session::open(transport.as_ref())?;
         let ring = RingMemory::new(self.buffer_frames)?;
-        let id = session.create_device(self.kind.abi(), &self.name, &ring)?;
+        let doorbell = Doorbell::new()?;
+        let id = session.create_device(self.kind.abi(), &self.name, &ring, doorbell.raw())?;
 
         Ok(Device {
             inner: Arc::new(Inner {
                 _session: Mutex::new(session),
                 ring,
+                doorbell,
                 id,
                 kind: self.kind,
                 lead_frames,
@@ -126,10 +128,13 @@ fn default_transport() -> Result<Arc<dyn Transport>, Error> {
 
 /// What a Device's handle and Ring share with its writer, reader or playout.
 pub(crate) struct Inner {
-    // Field order matters: the session closes (the driver unpins the Ring)
-    // before the Ring's memory is freed.
+    // Field order matters: the session closes (the driver unpins the Ring and
+    // lets go of the doorbell) before the Ring's memory is freed and the doorbell
+    // closed.
     _session: Mutex<Session>,
     pub(crate) ring: RingMemory,
+    /// Rung by the system's side after each pass over the Ring.
+    pub(crate) doorbell: Doorbell,
     pub(crate) id: u32,
     kind: Kind,
     /// How far ahead `Writer::write_paced` keeps the Ring filled (the Backend's).
@@ -139,6 +144,12 @@ pub(crate) struct Inner {
 }
 
 impl Inner {
+    /// How much a paced writer may add now: what tops the Ring up to the lead
+    /// (ADR 0020), so it never holds more than the system's next pull or two.
+    pub(crate) fn room_below_lead(&self) -> usize {
+        usize::try_from(self.lead_frames.saturating_sub(self.ring.buffered())).unwrap_or(usize::MAX)
+    }
+
     /// Claims the app side of the Ring for a `kind` Device's writer or reader.
     pub(crate) fn take_endpoint(&self, kind: Kind) -> Result<(), Error> {
         if self.kind != kind {
@@ -275,6 +286,26 @@ impl Reader {
     pub fn read(&mut self, out: &mut [f32]) -> Result<usize, Error> {
         Ok(self.inner.ring.read(out))
     }
+
+    /// Takes up to `out.len()` samples, blocking until there are some: returns
+    /// as soon as the system has played audio to this Speaker (it wakes once per
+    /// pass the system makes, not by polling), or 0 once `deadline` passes.
+    pub fn read_paced(&mut self, out: &mut [f32], deadline: Instant) -> Result<usize, Error> {
+        // As for `write_paced`: once rung, the thread runs at once, even while the
+        // audio engine's own MMCSS threads are busy with the same packet.
+        let _pro_audio = ProAudio::register();
+        loop {
+            let read = self.inner.ring.read(out);
+            if read > 0 || out.is_empty() {
+                return Ok(read);
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return Ok(0);
+            }
+            self.inner.doorbell.wait(Some(deadline - now));
+        }
+    }
 }
 
 impl Drop for Reader {
@@ -322,28 +353,21 @@ impl Writer {
     /// left to cut (ADR 0020). Returns how many samples went in: all of them,
     /// unless `deadline` passed first.
     pub fn write_paced(&mut self, samples: &[f32], deadline: Instant) -> Result<usize, Error> {
-        let waiter = Waiter::new();
+        let _pro_audio = ProAudio::register();
         let mut written = 0;
         while written < samples.len() {
-            match pacing::step(
-                self.inner.ring.buffered(),
-                self.inner.lead_frames,
-                V0_FORMAT.0,
-            ) {
-                Step::Write(room) => {
-                    let end = samples
-                        .len()
-                        .min(written + usize::try_from(room).unwrap_or(usize::MAX));
-                    written += self.inner.ring.write(&samples[written..end]);
-                }
-                Step::Wait(pause) => {
-                    let now = Instant::now();
-                    if now >= deadline {
-                        break;
-                    }
-                    waiter.wait(pause.min(deadline - now));
-                }
+            let room = self.inner.room_below_lead();
+            if room > 0 {
+                let end = samples.len().min(written + room);
+                written += self.inner.ring.write(&samples[written..end]);
+                continue;
             }
+            let now = Instant::now();
+            if now >= deadline {
+                break;
+            }
+            // The system rings after each pull, which is what makes room.
+            self.inner.doorbell.wait(Some(deadline - now));
         }
         Ok(written)
     }
@@ -351,20 +375,15 @@ impl Writer {
     /// Waits until the system has taken everything written so far (the Ring is
     /// empty): true then, false if `deadline` passed first.
     pub fn wait_for_playout(&self, deadline: Instant) -> bool {
-        let waiter = Waiter::new();
         loop {
-            let buffered = self.inner.ring.buffered();
-            if buffered == 0 {
+            if self.inner.ring.buffered() == 0 {
                 return true;
             }
             let now = Instant::now();
             if now >= deadline {
                 return false;
             }
-            // A lead of zero: how long until it has all drained, within limits.
-            if let Step::Wait(pause) = pacing::step(buffered, 0, V0_FORMAT.0) {
-                waiter.wait(pause.min(deadline - now));
-            }
+            self.inner.doorbell.wait(Some(deadline - now));
         }
     }
 

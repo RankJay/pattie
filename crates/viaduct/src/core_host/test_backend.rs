@@ -9,6 +9,7 @@
 
 use super::{HostTransport, Node, NodeSpec, Nodes, RingRef};
 use crate::Error;
+use crate::doorbell::Ringer;
 use crate::transport::Transport;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -22,10 +23,10 @@ const LEAD_FRAMES: u32 = if cfg!(target_os = "linux") {
     960
 };
 
-/// The live Devices' Rings, by Device ID. A node's entry is removed when the node
-/// is dropped, before the core lets go of the Device, and every use holds the
-/// lock, so a Ring is never used after its Device is removed.
-type Rings = Arc<Mutex<HashMap<u32, RingRef>>>;
+/// The live Devices' Rings and doorbells, by Device ID. A node's entry is removed
+/// when the node is dropped, before the core lets go of the Device, and every use
+/// holds the lock, so neither is used after its Device is removed.
+type Rings = Arc<Mutex<HashMap<u32, (RingRef, Ringer)>>>;
 
 /// The Linux transport with test-driven nodes. Each backend is its own app: its
 /// own core, and its own claim namespace, so parallel tests don't collide.
@@ -70,7 +71,7 @@ impl Nodes for TestNodes {
         self.0
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .insert(spec.id, spec.ring);
+            .insert(spec.id, (spec.ring, spec.wake));
         Ok(Box::new(TestNode {
             id: spec.id,
             rings: self.0.clone(),
@@ -108,22 +109,24 @@ impl TestBackend {
     /// Device has that ID.
     pub fn driver_read(&self, device_id: u32, count: usize) -> Option<Vec<f32>> {
         let mut rings = self.rings.lock().unwrap_or_else(PoisonError::into_inner);
-        let ring = rings.get_mut(&device_id)?;
+        let (ring, wake) = rings.get_mut(&device_id)?;
         let mut out = vec![0.0f32; count];
         // SAFETY: the entry exists, so the Device is live, and the lock makes this
         // the Ring's only user.
         unsafe { ring.read(&mut out) };
+        wake.ring();
         Some(out)
     }
 
     /// Audio played to a Speaker. `false` if no live Device has that ID.
     pub fn driver_write(&self, device_id: u32, samples: &[f32]) -> bool {
         let mut rings = self.rings.lock().unwrap_or_else(PoisonError::into_inner);
-        let Some(ring) = rings.get_mut(&device_id) else {
+        let Some((ring, wake)) = rings.get_mut(&device_id) else {
             return false;
         };
         // SAFETY: as in `driver_read`.
         unsafe { ring.write(samples) };
+        wake.ring();
         true
     }
 }

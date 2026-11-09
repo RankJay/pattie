@@ -139,6 +139,31 @@ static PMDL VdTryPinRing(WDFREQUEST Request)
     return mdl;
 }
 
+/*
+ * References the doorbell event a Create Device request names (ADR 0021), as
+ * Microsoft's event sample does: only an event, only with the right to set it,
+ * checked against the caller's own handle table. NULL if it isn't one; Create
+ * Device then fails with "bad request".
+ */
+static PKEVENT VdTryReferenceWake(WDFREQUEST Request)
+{
+    vd_create_device_request *request;
+    size_t length;
+    PKEVENT event;
+
+    if (!NT_SUCCESS(WdfRequestRetrieveInputBuffer(Request, sizeof *request, (PVOID *)&request, &length))) {
+        return NULL;
+    }
+    if (request->wake_event == 0 ||
+        !NT_SUCCESS(ObReferenceObjectByHandle((HANDLE)(ULONG_PTR)request->wake_event,
+                                              EVENT_MODIFY_STATE, *ExEventObjectType,
+                                              WdfRequestGetRequestorMode(Request),
+                                              (PVOID *)&event, NULL))) {
+        return NULL;
+    }
+    return event;
+}
+
 static VOID VdEvtIoInCallerContext(WDFDEVICE Device, WDFREQUEST Request)
 {
     WDF_REQUEST_PARAMETERS params;
@@ -149,6 +174,7 @@ static VOID VdEvtIoInCallerContext(WDFDEVICE Device, WDFREQUEST Request)
     if (params.Type == WdfRequestTypeDeviceControl &&
         params.Parameters.DeviceIoControl.IoControlCode == VD_IOCTL(VD_CMD_CREATE_DEVICE)) {
         VdRequestContext(Request)->Mdl = VdTryPinRing(Request);
+        VdRequestContext(Request)->WakeEvent = VdTryReferenceWake(Request);
     }
 
     status = WdfDeviceEnqueueRequest(Device, Request);
@@ -164,6 +190,10 @@ static VOID VdEvtRequestCleanup(WDFOBJECT Object)
     if (requestCtx->Mdl != NULL) {
         VdUnpinRing(requestCtx->Mdl);
         requestCtx->Mdl = NULL;
+    }
+    if (requestCtx->WakeEvent != NULL) {
+        ObDereferenceObject(requestCtx->WakeEvent);
+        requestCtx->WakeEvent = NULL;
     }
 }
 
@@ -184,8 +214,8 @@ static BOOLEAN VdCommandFromIoctl(ULONG IoControlCode, uint32_t *Command)
 
 /* Runs Create Device and, if the core accepted it, gives it a circuit device. */
 static vd_status VdCreateDevice(VD_DRIVER_CONTEXT *ctx, vd_owner *owner, const UCHAR *input,
-                                size_t inputLength, PMDL *mdl, UCHAR *reply, size_t replyCap,
-                                size_t *replyLength)
+                                size_t inputLength, PMDL *mdl, PKEVENT *wake, UCHAR *reply,
+                                size_t replyCap, size_t *replyLength)
 {
     vd_create_device_request request;
     vd_create_device_reply created;
@@ -197,6 +227,10 @@ static vd_status VdCreateDevice(VD_DRIVER_CONTEXT *ctx, vd_owner *owner, const U
 
     if (ctx->Root == NULL) {
         return VD_ERR_SYSTEM; /* the root device is going away */
+    }
+    /* Opaque to the core (ADR 0021): the shell alone needs a doorbell it can set. */
+    if (*wake == NULL) {
+        return VD_ERR_BAD_REQUEST;
     }
     /* Claim the shell's slot first, so an accepted Device always has one. Slots
      * mirror the core's VD_MAX_DEVICES, so this only fails when the core would. */
@@ -221,7 +255,7 @@ static vd_status VdCreateDevice(VD_DRIVER_CONTEXT *ctx, vd_owner *owner, const U
 
     RtlCopyMemory(&request, input, sizeof request); /* the core validated it */
     RtlCopyMemory(&created, reply, sizeof created);
-    if (!NT_SUCCESS(VdCircuitDeviceAdd(ctx, created.device_id, &request, &circuitDevice))) {
+    if (!NT_SUCCESS(VdCircuitDeviceAdd(ctx, created.device_id, &request, *wake, &circuitDevice))) {
         /* Undo through the core's own Remove Device, then report the failure. */
         vd_remove_device_request undo = { created.device_id };
         size_t ignored;
@@ -236,8 +270,10 @@ static vd_status VdCreateDevice(VD_DRIVER_CONTEXT *ctx, vd_owner *owner, const U
     WdfObjectReference(circuitDevice);
     slot->DeviceId = created.device_id;
     slot->Mdl = *mdl;
+    slot->WakeEvent = *wake;
     slot->CircuitDevice = circuitDevice;
     *mdl = NULL; /* the slot owns the pinned Ring now */
+    *wake = NULL; /* and the doorbell's reference */
     return VD_OK;
 }
 
@@ -279,8 +315,8 @@ static VOID VdEvtIoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request, size_t Outp
     WdfWaitLockAcquire(ctx->Lock, NULL);
     if (command == VD_CMD_CREATE_DEVICE) {
         envelope.status = VdCreateDevice(ctx, owner, input, InputBufferLength, &requestCtx->Mdl,
-                                         output + sizeof envelope, length - sizeof envelope,
-                                         &replyLength);
+                                         &requestCtx->WakeEvent, output + sizeof envelope,
+                                         length - sizeof envelope, &replyLength);
     } else {
         envelope.status = vd_core_command(&ctx->Core, owner, command, input, InputBufferLength,
                                           NULL, 0, output + sizeof envelope,

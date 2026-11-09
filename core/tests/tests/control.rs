@@ -30,6 +30,24 @@ fn create_device_without_a_ring_is_rejected() {
 }
 
 #[test]
+fn the_wake_event_is_the_shells_business_and_never_refuses_a_create() {
+    // Opaque to the core (ADR 0021): only the Windows shell interprets it.
+    let (mut driver, owner) = greeted_driver();
+    let ids: Vec<_> = [0, 7, u64::MAX]
+        .into_iter()
+        .zip(["Zero", "Seven", "Max"])
+        .map(|(wake, name)| {
+            let mut request = create_device_request(VD_KIND_MICROPHONE, name);
+            request.wake_event = wake;
+            let ring = RingMemory::new(DEFAULT_RING_FRAMES);
+            driver.create_device_with(owner, request, Some(ring), 256)
+        })
+        .collect();
+
+    assert_eq!(ids, [Ok(1), Ok(2), Ok(3)]);
+}
+
+#[test]
 fn a_bad_ring_rejects_the_create_without_using_up_an_id() {
     let (mut driver, owner) = greeted_driver();
     let request = create_device_request(VD_KIND_MICROPHONE, "Agent Mic");

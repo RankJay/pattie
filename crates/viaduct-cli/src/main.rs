@@ -147,7 +147,10 @@ fn run_speaker(name: &str) -> Result<(), String> {
     let mut last_report = Instant::now();
 
     while !stop.load(Ordering::Relaxed) {
-        let count = rx.read(&mut buffer).map_err(|e| e.to_string())?;
+        // Wakes as soon as the system plays to it; looks at `stop` at least every 100 ms.
+        let count = rx
+            .read_paced(&mut buffer, Instant::now() + Duration::from_millis(100))
+            .map_err(|e| e.to_string())?;
         for &sample in &buffer[..count] {
             peak = peak.max(sample.abs());
             sum_squares += (sample as f64) * (sample as f64);
@@ -167,11 +170,6 @@ fn run_speaker(name: &str) -> Result<(), String> {
             (peak, sum_squares, frames) = (0.0, 0.0, 0);
             last_report = Instant::now();
         }
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "the level meter only needs ~10 ms polls; a late poll loses no audio (the Ring holds 85 ms)"
-        )]
-        thread::sleep(Duration::from_millis(10));
     }
     println!("Stopped; removing \"{name}\".");
     Ok(())

@@ -148,10 +148,12 @@ fn a_speaker_hands_the_app_what_is_played_to_it() {
         .unwrap();
     let started = Instant::now();
     let mut buffer = [0.0f32; 1024];
-    while started.elapsed() < Duration::from_secs(4) {
-        let count = reader.read(&mut buffer).unwrap();
+    // Woken by PipeWire's callback ringing the doorbell: without it, the only
+    // wake-up would be the deadline, and nothing would be heard.
+    let until = started + Duration::from_secs(4);
+    while Instant::now() < until {
+        let count = reader.read_paced(&mut buffer, until).unwrap();
         heard.extend_from_slice(&buffer[..count]);
-        pause(5);
     }
     let _ = player.wait();
     let _ = std::fs::remove_file(&file);

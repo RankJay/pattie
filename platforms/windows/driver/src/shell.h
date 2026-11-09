@@ -22,7 +22,9 @@
  * Lifetime rule: everything touching a Device's Ring from the streaming timer
  * holds the circuit device's rundown protection. Removal runs it down, then
  * unpins the Ring, all under the driver lock, so no Ring memory is touched after
- * it is unpinned and no core slot is reused mid-removal.
+ * it is unpinned and no core slot is reused mid-removal. The Device's doorbell
+ * event (ADR 0021) follows the same rule: set only under rundown, dereferenced
+ * only after it.
  */
 #ifndef VIADUCT_SHELL_H
 #define VIADUCT_SHELL_H
@@ -60,7 +62,8 @@ typedef struct _VD_CIRCUIT_DEVICE_CONTEXT {
     UINT32 DeviceId;
     UINT32 Kind;                    /* VD_KIND_MICROPHONE or VD_KIND_SPEAKER */
     vd_ring *Ring;                  /* in the core's table; only under Rundown */
-    EX_RUNDOWN_REF Rundown;         /* streaming access to Ring */
+    EX_RUNDOWN_REF Rundown;         /* streaming access to Ring and WakeEvent */
+    PKEVENT WakeEvent;              /* the app's doorbell (ADR 0021); only under Rundown */
     volatile LONG Deleted;          /* set once Windows starts deleting the device */
     ULONG64 ChildId;                /* stable ID from kind + name; 0 once released */
     ACXCIRCUIT Circuit;             /* created with the device, kept until it is deleted */
@@ -74,6 +77,7 @@ WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(VD_CIRCUIT_DEVICE_CONTEXT, VdCircuitDeviceCon
 typedef struct _VD_SLOT {
     UINT32 DeviceId;                /* 0: unused */
     PMDL Mdl;                       /* the pinned Ring (ADR 0006) */
+    PKEVENT WakeEvent;              /* referenced doorbell event (ADR 0021) */
     WDFDEVICE CircuitDevice;        /* referenced by the slot until teardown */
 } VD_SLOT;
 
@@ -101,6 +105,7 @@ WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(VD_FILE_CONTEXT, VdFileContext)
 /* Per request on the control device: a Ring pinned in the caller's context. */
 typedef struct _VD_REQUEST_CONTEXT {
     PMDL Mdl;
+    PKEVENT WakeEvent;              /* referenced in the caller's context too */
 } VD_REQUEST_CONTEXT;
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(VD_REQUEST_CONTEXT, VdRequestContext)
 
@@ -114,7 +119,7 @@ VOID VdUnpinRing(_In_ PMDL Mdl);
 /* endpoint.c */
 NTSTATUS VdCircuitDeviceAdd(_In_ VD_DRIVER_CONTEXT *Ctx, _In_ UINT32 DeviceId,
                             _In_ const vd_create_device_request *Request,
-                            _Out_ WDFDEVICE *CircuitDevice);
+                            _In_ PKEVENT WakeEvent, _Out_ WDFDEVICE *CircuitDevice);
 VOID VdDeviceTeardown(_In_ VD_DRIVER_CONTEXT *Ctx, _In_ UINT32 DeviceId);
 
 /* circuit.c */

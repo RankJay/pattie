@@ -18,12 +18,13 @@ mod test_backend;
 pub use test_backend::TestBackend;
 
 use crate::abi;
+use crate::doorbell::Ringer;
 use crate::transport::{Connection, Transport};
 use crate::{Error, Kind};
 #[cfg(target_os = "linux")]
 use claim::{Claim, claim};
 use core_ffi::{Core, Owner};
-use request::{device_of, read_u32, ring_of};
+use request::{device_of, read_u32, ring_of, wake_of};
 use std::mem::size_of;
 #[cfg(target_os = "linux")]
 use std::sync::OnceLock;
@@ -47,6 +48,8 @@ pub(crate) struct NodeSpec {
     /// The stable identity (`node.name`, ADR 0015).
     pub(crate) node_name: String,
     pub(crate) ring: RingRef,
+    /// Rung after each pass over the Ring.
+    pub(crate) wake: Ringer,
 }
 
 /// Creates the system-visible node for a Device.
@@ -190,12 +193,17 @@ impl Connection for HostConnection {
                 .device_ring(id)
                 .ok_or(Error::Protocol(abi::ERR_BAD_REQUEST))?;
             let (kind, name) = device_of(input).ok_or(Error::Protocol(abi::ERR_BAD_REQUEST))?;
+            let wake = wake_of(input).ok_or(Error::Protocol(abi::ERR_BAD_REQUEST))?;
+            // SAFETY: the doorbell is the SDK's own (`device::Inner`), which, like
+            // the Ring, outlives this connection and so this Device's node.
+            let wake = unsafe { Ringer::from_raw(wake) };
             let spec = NodeSpec {
                 id,
                 kind,
                 node_name: node_name(kind, &name),
                 name,
                 ring,
+                wake,
             };
             // No node, no Device: on an error the SDK drops this connection, and
             // closing the Owner removes the Device from the core, freeing its name.

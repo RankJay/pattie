@@ -264,6 +264,7 @@ pub fn create_device_request(kind: u32, name: &str) -> vd_create_device_request 
         reserved: 0,
         ring_address: 0,
         ring_bytes: 0,
+        wake_event: 0,
     };
     let units: Vec<u16> = name.encode_utf16().collect();
     request.name[..units.len()].copy_from_slice(&units);

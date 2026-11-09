@@ -22,7 +22,7 @@
 )]
 
 use crate::latency::{ClickDetector, HNS_PER_SECOND, Sent, frames_to_hns, pair_clicks, spread};
-use crate::pace::{GapMeter, Pacer};
+use crate::pace::GapMeter;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -417,25 +417,27 @@ fn measure_speaker(
     let start = Instant::now();
     let mut buffer = vec![0.0f32; 4800];
     let mut detector = ClickDetector::default();
-    // Arrival is known only to within the polling gap: report gaps over 2 ms.
-    let mut pacer = Pacer::new(Duration::from_millis(2));
+    // The reader wakes on each of the driver's 10 ms packets (the Device's
+    // doorbell), so arrival is known to within a wake-up: report gaps over two
+    // packets, a wake-up that came late.
+    let gap_limit = Duration::from_millis(20);
+    let mut meter = GapMeter::new(gap_limit);
     println!(
-        "measuring for {} s ({}) ...",
-        duration.as_secs(),
-        pacer.describe()
+        "measuring for {} s (woken by the driver's packets) ...",
+        duration.as_secs()
     );
     while start.elapsed() < duration {
-        pacer.tick();
-        let count = rx.read(&mut buffer).map_err(|e| e.to_string())?;
+        let count = rx
+            .read_paced(&mut buffer, start + duration)
+            .map_err(|e| e.to_string())?;
+        meter.tick();
         let read_at = now_hns();
-        // Polled every millisecond: arrival is known to within ~1 ms.
         let loudest = buffer[..count].iter().fold(0.0f32, |m, s| m.max(s.abs()));
         if detector.detect(read_at, loudest) {
             let mut run = run.lock().unwrap();
             run.seen_hns.push(read_at);
             run.delivered_hns.push(read_at); // the reader is the app: seen is delivered
         }
-        pacer.sleep_1ms();
     }
     // Read before stopping, as for the mic: once the reader stops, the driver keeps
     // writing until playback stops, which is after the measuring window.
@@ -445,8 +447,8 @@ fn measure_speaker(
         .join()
         .map_err(|_| "render thread panicked".to_string())??;
     let mut run = std::mem::take(&mut *run.lock().unwrap());
-    (run.longest_gap, run.gaps_over) = pacer.gaps();
-    (run.pacing, run.gap_limit) = (pacer.describe(), Duration::from_millis(2));
+    (run.longest_gap, run.gaps_over) = meter.gaps();
+    (run.pacing, run.gap_limit) = ("woken by the driver's packets", gap_limit);
     Ok((run, stats_before, stats_after))
 }
 
