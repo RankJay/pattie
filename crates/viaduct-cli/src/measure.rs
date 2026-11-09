@@ -22,7 +22,7 @@
 )]
 
 use crate::latency::{ClickDetector, HNS_PER_SECOND, Sent, frames_to_hns, pair_clicks, spread};
-use crate::pace::Pacer;
+use crate::pace::{GapMeter, Pacer};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -48,6 +48,10 @@ use windows::core::GUID;
 const RING_RATE: u64 = 48_000;
 const CLICK_PERIOD: Duration = Duration::from_millis(500);
 const CLICK_FRAMES: usize = 48; // 1 ms at 48 kHz
+/// The mic side writes 10 ms at a time; `write_paced` decides when each goes in.
+const CHUNK_FRAMES: usize = 480;
+/// A writer gap longer than this (Windows' 20 ms lead) starves the Ring.
+const GAP_LIMIT: Duration = Duration::from_millis(20);
 const CLICK_LEVEL: f32 = 0.8;
 
 /// An audio endpoint's device instance path (PKEY_Device_InstanceId's endpoint
@@ -88,14 +92,14 @@ struct Run {
     gap_limit: Duration,
 }
 
-pub fn run(direction: &str, name: &str, seconds: u64, lead_ms: u64) -> Result<(), String> {
+pub fn run(direction: &str, name: &str, seconds: u64) -> Result<(), String> {
     // SAFETY: initializes COM for this thread; the threads we spawn do their own.
     unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }
         .ok()
         .map_err(|e| format!("COM: {e}"))?;
     let duration = Duration::from_secs(seconds);
     let (run, stats_before, stats_after) = match direction {
-        "mic" => measure_mic(name, duration, lead_ms)?,
+        "mic" => measure_mic(name, duration)?,
         "speaker" => measure_speaker(name, duration)?,
         _ => return Err("measure needs `mic` or `speaker`".into()),
     };
@@ -266,7 +270,6 @@ impl Drop for Stream {
 fn measure_mic(
     name: &str,
     duration: Duration,
-    lead_ms: u64,
 ) -> Result<(Run, viaduct::Stats, viaduct::Stats), String> {
     let mic = Device::builder()
         .name(name)
@@ -288,35 +291,38 @@ fn measure_mic(
 
     let stats_before = mic.stats();
     let start = Instant::now();
-    // Paced by fill level, not by time: top the Ring up to LEAD each millisecond.
-    // Time-based pacing writes while Windows isn't reading yet, and that backlog
-    // then never drains (both sides run at 48 kHz), adding its length to every click.
-    let lead = RING_RATE * lead_ms / 1000;
-    let mut pacer = Pacer::new(Duration::from_millis(lead_ms));
+    // The SDK paces the writes (`write_paced`): the Ring stays only the Backend's
+    // lead ahead of Windows, so no backlog builds while Windows isn't reading yet
+    // (a backlog would add its length to every click).
+    let mut meter = GapMeter::new(GAP_LIMIT);
     let mut next_click = Duration::from_secs(1); // let the capture side settle first
-    let mut chunk = Vec::new();
+    let silence = [0.0f32; CHUNK_FRAMES];
+    let mut click = [0.0f32; CHUNK_FRAMES];
+    click[..CLICK_FRAMES].fill(CLICK_LEVEL);
+    let write = |tx: &mut viaduct::Writer, samples: &[f32]| {
+        tx.write_paced(samples, Instant::now() + Duration::from_secs(1))
+            .map_err(|e| e.to_string())
+    };
     println!(
-        "measuring for {} s, keeping a {lead_ms} ms lead ({}) ...",
-        duration.as_secs(),
-        pacer.describe()
+        "measuring for {} s, paced by the SDK (write_paced) ...",
+        duration.as_secs()
     );
     while start.elapsed() < duration {
-        pacer.tick();
-        let ahead = mic.stats().buffered_frames;
-        if ahead < lead {
-            chunk.clear();
-            chunk.resize((lead - ahead) as usize, 0.0f32);
-            if start.elapsed() >= next_click && chunk.len() >= CLICK_FRAMES {
-                chunk[..CLICK_FRAMES].fill(CLICK_LEVEL);
-                run.lock().unwrap().sent.push(Sent {
-                    at_hns: now_hns(),
-                    ahead_hns: frames_to_hns(ahead, RING_RATE),
-                });
-                next_click += CLICK_PERIOD;
-            }
-            tx.write(&chunk).map_err(|e| e.to_string())?;
+        meter.tick();
+        if start.elapsed() >= next_click {
+            // The click's first frame alone, so it's stamped the moment it enters
+            // the Ring, with what was already queued ahead of it.
+            write(&mut tx, &click[..1])?;
+            let ahead = mic.stats().buffered_frames.saturating_sub(1);
+            run.lock().unwrap().sent.push(Sent {
+                at_hns: now_hns(),
+                ahead_hns: frames_to_hns(ahead, RING_RATE),
+            });
+            write(&mut tx, &click[1..])?;
+            next_click += CLICK_PERIOD;
+        } else {
+            write(&mut tx, &silence)?;
         }
-        pacer.sleep_1ms();
     }
     // Read before stopping: once the writer stops, the driver plays out the lead
     // and then finds the Ring empty while capture winds down. That's one packet of
@@ -327,8 +333,8 @@ fn measure_mic(
         .join()
         .map_err(|_| "capture thread panicked".to_string())??;
     let mut run = std::mem::take(&mut *run.lock().unwrap());
-    (run.longest_gap, run.gaps_over) = pacer.gaps();
-    (run.pacing, run.gap_limit) = (pacer.describe(), Duration::from_millis(lead_ms));
+    (run.longest_gap, run.gaps_over) = meter.gaps();
+    (run.pacing, run.gap_limit) = ("SDK write_paced", GAP_LIMIT);
     Ok((run, stats_before, stats_after))
 }
 

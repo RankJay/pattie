@@ -565,7 +565,7 @@ version = "0.1.0"
 dependencies = [
  "cc",
  "libloading",
- "viaduct-fake-driver",
+ "viaduct",
  "windows-sys",
 ]
 
@@ -584,15 +584,6 @@ dependencies = [
  "bindgen",
  "cc",
  "proptest",
- "viaduct",
-]
-
-[[package]]
-name = "viaduct-fake-driver"
-version = "0.0.0"
-dependencies = [
- "bindgen",
- "cc",
  "viaduct",
 ]
 

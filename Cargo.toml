@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/viaduct", "crates/viaduct-cli", "core/tests", "testing/fake-driver"]
+members = ["crates/viaduct", "crates/viaduct-cli", "core/tests"]
 resolver = "3"
 
 [workspace.package]

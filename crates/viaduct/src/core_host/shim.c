@@ -1,5 +1,6 @@
 /*
- * Linux backend (ADR 0018): allocates the embedded core's state for the SDK, so
+ * Core host (ADR 0018; architecture review 2026-11-09): allocates the embedded
+ * core's state for the SDK, so
  * the Rust side treats vd_core and vd_owner as opaque and never mirrors their
  * sizes. The core itself never allocates.
  */
@@ -7,7 +8,7 @@
 
 #include "viaduct_core.h"
 
-vd_core *vd_linux_core_new(void)
+vd_core *vd_host_core_new(void)
 {
     vd_core *core = calloc(1, sizeof *core);
 
@@ -17,12 +18,12 @@ vd_core *vd_linux_core_new(void)
     return core;
 }
 
-void vd_linux_core_free(vd_core *core)
+void vd_host_core_free(vd_core *core)
 {
     free(core);
 }
 
-vd_owner *vd_linux_owner_new(void)
+vd_owner *vd_host_owner_new(void)
 {
     vd_owner *owner = calloc(1, sizeof *owner);
 
@@ -32,7 +33,7 @@ vd_owner *vd_linux_owner_new(void)
     return owner;
 }
 
-void vd_linux_owner_free(vd_owner *owner)
+void vd_host_owner_free(vd_owner *owner)
 {
     free(owner);
 }

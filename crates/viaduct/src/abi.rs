@@ -111,3 +111,11 @@ pub fn bytes_of<T: Copy>(value: &T) -> &[u8] {
     // SAFETY: T is a plain repr(C) ABI struct; any initialized value is valid bytes.
     unsafe { std::slice::from_raw_parts((value as *const T).cast(), std::mem::size_of::<T>()) }
 }
+
+/// The bytes of a reply struct, to be filled from the driver's reply. Only for
+/// the plain-integer reply structs above, for which every bit pattern is a value.
+pub(crate) fn bytes_of_mut<T: Copy>(value: &mut T) -> &mut [u8] {
+    // SAFETY: T is one of this module's reply structs: repr(C), integers only, so
+    // any bytes written through the slice leave a valid T; the slice borrows it.
+    unsafe { std::slice::from_raw_parts_mut((value as *mut T).cast(), std::mem::size_of::<T>()) }
+}

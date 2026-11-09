@@ -1,4 +1,7 @@
-//! Millisecond pacing for the CLI's audio loops, done the way audio apps do it.
+//! Gap measurement for the CLI's audio loops, and millisecond waits for the one
+//! loop the SDK doesn't pace: `measure speaker`'s reader. Microphone writers pace
+//! with the SDK's `Writer::write_paced` (its own timer, `crates/viaduct/src/timer.rs`);
+//! this copy of the timer goes when the SDK gets a paced reader (POST-V0).
 //!
 //! `std::thread::sleep(1 ms)` can last a whole Windows timer tick (up to ~15.6 ms),
 //! longer than a 20 ms lead allows under load (VM run a3: the Ring ran dry 23
@@ -9,26 +12,19 @@
 
 use std::time::{Duration, Instant};
 
-/// Sleeps in short, accurate steps and keeps the longest gap between steps.
-pub struct Pacer {
-    #[cfg(windows)]
-    timer: Option<windows::Win32::Foundation::HANDLE>,
-    #[cfg(windows)]
-    mmcss: Option<windows::Win32::Foundation::HANDLE>,
+/// The longest gap between a loop's passes, and how many exceeded a limit: a
+/// writer gap longer than its lead is the app's side starving the Ring.
+pub struct GapMeter {
     last: Option<Instant>,
     longest_gap: Duration,
     gaps_over: u64,
     limit: Duration,
 }
 
-impl Pacer {
-    /// A pacer for the current thread; gaps longer than `limit` are counted.
-    pub fn new(limit: Duration) -> Pacer {
-        Pacer {
-            #[cfg(windows)]
-            timer: win::high_resolution_timer(),
-            #[cfg(windows)]
-            mmcss: win::join_pro_audio(),
+impl GapMeter {
+    /// Counts gaps longer than `limit`.
+    pub fn new(limit: Duration) -> GapMeter {
+        GapMeter {
             last: None,
             longest_gap: Duration::ZERO,
             gaps_over: 0,
@@ -49,9 +45,39 @@ impl Pacer {
         self.last = Some(now);
     }
 
+    /// The longest gap between passes so far, and how many exceeded the limit.
+    pub fn gaps(&self) -> (Duration, u64) {
+        (self.longest_gap, self.gaps_over)
+    }
+}
+
+/// Sleeps in short, accurate steps and measures the gaps between them. Only
+/// `measure speaker` uses it, so it exists only on Windows, like `measure`.
+#[cfg(windows)]
+pub struct Pacer {
+    timer: Option<windows::Win32::Foundation::HANDLE>,
+    mmcss: Option<windows::Win32::Foundation::HANDLE>,
+    meter: GapMeter,
+}
+
+#[cfg(windows)]
+impl Pacer {
+    /// A pacer for the current thread; gaps longer than `limit` are counted.
+    pub fn new(limit: Duration) -> Pacer {
+        Pacer {
+            timer: win::high_resolution_timer(),
+            mmcss: win::join_pro_audio(),
+            meter: GapMeter::new(limit),
+        }
+    }
+
+    /// Marks one pass of the loop.
+    pub fn tick(&mut self) {
+        self.meter.tick();
+    }
+
     /// Waits about one millisecond.
     pub fn sleep_1ms(&self) {
-        #[cfg(windows)]
         if let Some(timer) = self.timer
             && win::wait(timer, Duration::from_millis(1))
         {
@@ -66,20 +92,17 @@ impl Pacer {
 
     /// The longest gap between passes so far, and how many exceeded the limit.
     pub fn gaps(&self) -> (Duration, u64) {
-        (self.longest_gap, self.gaps_over)
+        self.meter.gaps()
     }
 
     /// Whether the high-resolution timer and MMCSS registration are in use.
     pub fn describe(&self) -> &'static str {
-        #[cfg(windows)]
-        return match (self.timer.is_some(), self.mmcss.is_some()) {
+        match (self.timer.is_some(), self.mmcss.is_some()) {
             (true, true) => "high-resolution timer, MMCSS Pro Audio",
             (true, false) => "high-resolution timer (MMCSS unavailable)",
             (false, true) => "plain sleeps (no high-resolution timer), MMCSS Pro Audio",
             (false, false) => "plain sleeps",
-        };
-        #[cfg(not(windows))]
-        return "plain sleeps";
+        }
     }
 }
 
@@ -147,35 +170,36 @@ mod tests {
 
     #[test]
     fn the_first_pass_measures_no_gap() {
-        let mut pacer = Pacer::new(Duration::from_millis(10));
+        let mut meter = GapMeter::new(Duration::from_millis(10));
 
-        pacer.tick();
+        meter.tick();
 
-        assert_eq!(pacer.gaps(), (Duration::ZERO, 0));
+        assert_eq!(meter.gaps(), (Duration::ZERO, 0));
     }
 
     /// Not timing-sensitive: a sleep lasts at least as long as asked, and two
     /// passes back to back are far under a 10 ms limit.
     #[test]
     fn a_gap_over_the_limit_is_counted_and_kept_as_the_longest() {
-        let mut pacer = Pacer::new(Duration::from_millis(10));
-        pacer.tick();
+        let mut meter = GapMeter::new(Duration::from_millis(10));
+        meter.tick();
         #[expect(
             clippy::disallowed_methods,
             reason = "the test needs a gap of at least 30 ms; a long sleep is fine"
         )]
         std::thread::sleep(Duration::from_millis(30));
-        pacer.tick();
-        pacer.tick();
-        pacer.tick();
+        meter.tick();
+        meter.tick();
+        meter.tick();
 
-        let (longest, over) = pacer.gaps();
+        let (longest, over) = meter.gaps();
 
         // One gap over the limit and two far under it: only the long one counts.
         assert!(longest >= Duration::from_millis(30), "{longest:?}");
         assert_eq!(over, 1);
     }
 
+    #[cfg(windows)]
     #[test]
     fn a_step_waits_and_the_pacing_is_described() {
         let pacer = Pacer::new(Duration::from_millis(10));
@@ -185,19 +209,17 @@ mod tests {
 
         assert!(start.elapsed() >= Duration::from_micros(500));
         // Windows 10 1803 and later always provide the high-resolution timer.
-        #[cfg(windows)]
         assert!(
             pacer.describe().starts_with("high-resolution timer"),
             "{}",
             pacer.describe()
         );
-        #[cfg(not(windows))]
-        assert_eq!(pacer.describe(), "plain sleeps");
     }
 
     /// Timing-dependent, so opt-in: `cargo test -p viaduct-cli -- --ignored --nocapture`.
     /// On Windows the high-resolution timer should keep 200 steps near 200 ms,
     /// where plain 1 ms sleeps can take up to a timer tick (~15.6 ms) each.
+    #[cfg(windows)]
     #[test]
     #[ignore]
     fn steps_take_about_a_millisecond() {

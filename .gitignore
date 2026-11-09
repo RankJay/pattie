@@ -3,6 +3,7 @@
 # AI assisted developement
 .ai/
 .agents/
+.claude/
 
 # Temporary
 .github/

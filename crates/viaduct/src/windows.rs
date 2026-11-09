@@ -1,6 +1,6 @@
 //! The Windows transport: opens `\\.\Viaduct` and sends one IOCTL per command
 //! (ADR 0010, ADR 0012). Thin on purpose: everything above the two system calls is
-//! covered by the contract suite through the fake driver; this rests on review and
+//! covered by the contract suite through the Core host's test backend; this rests on review and
 //! the VM test.
 
 use crate::Error;

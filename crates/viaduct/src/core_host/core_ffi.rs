@@ -27,10 +27,10 @@ pub(crate) struct VdRing {
 const MAX_DEVICES: usize = crate::abi::MAX_DEVICES as usize;
 
 unsafe extern "C" {
-    fn vd_linux_core_new() -> *mut VdCore;
-    fn vd_linux_core_free(core: *mut VdCore);
-    fn vd_linux_owner_new() -> *mut VdOwner;
-    fn vd_linux_owner_free(owner: *mut VdOwner);
+    fn vd_host_core_new() -> *mut VdCore;
+    fn vd_host_core_free(core: *mut VdCore);
+    fn vd_host_owner_new() -> *mut VdOwner;
+    fn vd_host_owner_free(owner: *mut VdOwner);
     fn vd_core_command(
         core: *mut VdCore,
         owner: *mut VdOwner,
@@ -47,6 +47,13 @@ unsafe extern "C" {
     fn vd_core_device_ring(core: *mut VdCore, device_id: u32) -> *mut VdRing;
     fn vd_ring_read(ring: *mut VdRing, dst: *mut f32, count: u32);
     fn vd_ring_write(ring: *mut VdRing, src: *const f32, count: u32);
+    #[cfg_attr(
+        not(target_os = "linux"),
+        allow(
+            dead_code,
+            reason = "the PipeWire node drops stale audio; test nodes don't"
+        )
+    )]
     fn vd_ring_skip_stale(ring: *mut VdRing, keep_frames: u32);
 }
 
@@ -55,14 +62,14 @@ unsafe extern "C" {
 pub(crate) struct Core(NonNull<VdCore>);
 
 // SAFETY: the core is plain C state with no thread affinity; every use goes
-// through a mutex (`super::LinuxTransport`), so only one thread touches it at once.
+// through a mutex (`super::HostTransport`), so only one thread touches it at once.
 unsafe impl Send for Core {}
 
 impl Core {
     /// A fresh core; `None` if the allocation failed.
     pub(crate) fn new() -> Option<Core> {
         // SAFETY: allocates and initialises a vd_core; returns null on failure.
-        NonNull::new(unsafe { vd_linux_core_new() }).map(Core)
+        NonNull::new(unsafe { vd_host_core_new() }).map(Core)
     }
 
     /// Runs one command exactly as the Windows shell does: `ring` is the app's Ring
@@ -126,8 +133,8 @@ impl Core {
 
 impl Drop for Core {
     fn drop(&mut self) {
-        // SAFETY: allocated by vd_linux_core_new, freed once.
-        unsafe { vd_linux_core_free(self.0.as_ptr()) };
+        // SAFETY: allocated by vd_host_core_new, freed once.
+        unsafe { vd_host_core_free(self.0.as_ptr()) };
     }
 }
 
@@ -141,14 +148,14 @@ impl Owner {
     /// A fresh Owner; `None` if the allocation failed.
     pub(crate) fn new() -> Option<Owner> {
         // SAFETY: allocates and initialises a vd_owner; returns null on failure.
-        NonNull::new(unsafe { vd_linux_owner_new() }).map(Owner)
+        NonNull::new(unsafe { vd_host_owner_new() }).map(Owner)
     }
 }
 
 impl Drop for Owner {
     fn drop(&mut self) {
-        // SAFETY: allocated by vd_linux_owner_new, freed once.
-        unsafe { vd_linux_owner_free(self.0.as_ptr()) };
+        // SAFETY: allocated by vd_host_owner_new, freed once.
+        unsafe { vd_host_owner_free(self.0.as_ptr()) };
     }
 }
 
@@ -187,6 +194,13 @@ impl RingRef {
         unsafe { vd_ring_write(self.0.as_ptr(), samples.as_ptr(), count) };
     }
 
+    #[cfg_attr(
+        not(target_os = "linux"),
+        allow(
+            dead_code,
+            reason = "the PipeWire node drops stale audio; test nodes don't"
+        )
+    )]
     /// Microphone, when a recording starts: keeps at most `keep_frames` of the
     /// newest audio unread (ADR 0014).
     ///

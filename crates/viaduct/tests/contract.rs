@@ -1,15 +1,18 @@
 //! The SDK contract (Seam S1, ADR 0012): what every backend must do, checked
-//! through the public API only. Each test runs against every backend: the
-//! in-process fake driver (the Windows driver's control path), and on Linux the
-//! real Linux transport with test-driven nodes (ADR 0018).
+//! through the public API only. Each test runs against the Core host with
+//! test-driven nodes (`TestBackend`) on every OS: the C core and the control path
+//! the Linux backend uses, which plays the Windows driver's part in-process
+//! (ADR 0018; architecture review 2026-11-09, candidate 2). The Windows driver
+//! itself is checked in the test VM.
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use viaduct::transport::Transport;
 use viaduct::{Device, DeviceBuilder, Kind};
 
 /// What the suite needs from a backend: a transport, and the system's side of
 /// each Device's Ring.
-trait Backend {
+trait Backend: Sync {
     fn transport(&self) -> Arc<dyn Transport>;
     /// The system pulls `count` frames of a Microphone's audio.
     fn driver_read(&self, device_id: u32, count: usize) -> Option<Vec<f32>>;
@@ -17,19 +20,6 @@ trait Backend {
     fn driver_write(&self, device_id: u32, samples: &[f32]) -> bool;
 }
 
-impl Backend for viaduct_fake_driver::FakeDriver {
-    fn transport(&self) -> Arc<dyn Transport> {
-        self.transport()
-    }
-    fn driver_read(&self, device_id: u32, count: usize) -> Option<Vec<f32>> {
-        self.driver_read(device_id, count)
-    }
-    fn driver_write(&self, device_id: u32, samples: &[f32]) -> bool {
-        self.driver_write(device_id, samples)
-    }
-}
-
-#[cfg(target_os = "linux")]
 impl Backend for viaduct::transport::TestBackend {
     fn transport(&self) -> Arc<dyn Transport> {
         self.transport()
@@ -47,21 +37,11 @@ fn builder(backend: &dyn Backend) -> DeviceBuilder {
     Device::builder().transport(backend.transport())
 }
 
-/// One `#[test]` per contract test and backend: `fake::<name>`, and on Linux
-/// `linux::<name>`.
+/// One `#[test]` per contract test and backend: `host::<name>`. A new backend
+/// (macOS) adds its own module here.
 macro_rules! contract_suite {
     ($($test:ident),* $(,)?) => {
-        mod fake {
-            $(
-                #[test]
-                fn $test() {
-                    super::$test(&viaduct_fake_driver::FakeDriver::new());
-                }
-            )*
-        }
-
-        #[cfg(target_os = "linux")]
-        mod linux {
+        mod host {
             $(
                 #[test]
                 fn $test() {
@@ -94,6 +74,14 @@ contract_suite!(
     the_longest_allowed_name_is_accepted,
     a_ninth_live_device_is_too_many,
     debug_output_names_the_device_and_its_settings,
+    played_counts_only_what_the_system_took,
+    write_paced_delivers_everything_keeping_only_a_small_lead,
+    write_paced_stops_at_its_deadline_with_only_the_lead_written,
+    wait_for_playout_is_true_once_the_system_has_taken_everything,
+    a_reply_pushed_at_once_reaches_the_system_whole_and_in_order,
+    interrupt_stops_a_reply_with_at_most_the_lead_still_playing,
+    a_playout_holds_the_writer_slot_until_dropped,
+    wait_idle_is_true_once_a_reply_has_played,
 );
 
 fn creating_a_microphone_gives_a_device_with_id_1(backend: &dyn Backend) {
@@ -356,4 +344,199 @@ fn debug_output_names_the_device_and_its_settings(backend: &dyn Backend) {
     assert_eq!(format!("{speaker:?}"), "Device { id: 2, kind: Speaker }");
     assert_eq!(format!("{tx:?}"), "Writer { device: 1 }");
     assert_eq!(format!("{rx:?}"), "Reader { device: 2 }");
+}
+
+fn played_counts_only_what_the_system_took(backend: &dyn Backend) {
+    let mic = builder(backend).name("Agent Mic").create().unwrap();
+    let mut tx = mic.writer().unwrap();
+    tx.write(&[0.5; 3_000]).unwrap();
+    let before = (tx.played_frames(), tx.played_ms());
+    backend.driver_read(mic.id(), 2_400); // the system takes 50 ms of the 3,000
+
+    let after = (tx.played_frames(), tx.played_ms());
+
+    assert_eq!((before, after), ((0, 0), (2_400, 50)));
+}
+
+/// The system's pulls, 10 ms apart, as a test thread plays them.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test thread playing the system's 10 ms pulls; precision doesn't matter"
+)]
+fn system_pause() {
+    std::thread::sleep(Duration::from_millis(10));
+}
+
+fn write_paced_delivers_everything_keeping_only_a_small_lead(backend: &dyn Backend) {
+    let mic = builder(backend).name("Agent Mic").create().unwrap();
+    let mut tx = mic.writer().unwrap();
+    let samples: Vec<f32> = (0..9_600u16).map(|i| f32::from(i) / 9_600.0).collect(); // 200 ms
+    let (written, heard, most_buffered) = std::thread::scope(|scope| {
+        let system = scope.spawn(|| {
+            // Takes only what's there, so the order of real frames can be checked.
+            let (mut heard, mut most) = (Vec::new(), 0);
+            let give_up = Instant::now() + Duration::from_secs(5);
+            while heard.len() < samples.len() && Instant::now() < give_up {
+                let buffered = mic.stats().buffered_frames;
+                most = most.max(buffered);
+                let take = usize::try_from(buffered.min(480)).unwrap();
+                if take > 0 {
+                    heard.extend(backend.driver_read(mic.id(), take).unwrap());
+                }
+                system_pause();
+            }
+            (heard, most)
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let written = tx.write_paced(&samples, deadline).unwrap();
+        let (heard, most) = system.join().unwrap();
+        (written, heard, most)
+    });
+
+    assert_eq!(written, samples.len());
+    assert_eq!(heard, samples);
+    assert!(
+        most_buffered <= 2_400,
+        "{most_buffered} frames buffered, over 50 ms"
+    );
+    assert_eq!(mic.stats().overflow_frames, 0);
+}
+
+fn write_paced_stops_at_its_deadline_with_only_the_lead_written(backend: &dyn Backend) {
+    let mic = builder(backend).name("Agent Mic").create().unwrap();
+    let mut tx = mic.writer().unwrap();
+    let started = Instant::now();
+
+    // Nobody pulls: the lead fills, then nothing more fits before the deadline.
+    let written = tx
+        .write_paced(&[0.5; 48_000], started + Duration::from_millis(50))
+        .unwrap();
+
+    assert!((1..=2_400).contains(&written), "{written} written");
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert_eq!(mic.stats().overflow_frames, 0);
+}
+
+fn wait_for_playout_is_true_once_the_system_has_taken_everything(backend: &dyn Backend) {
+    let mic = builder(backend).name("Agent Mic").create().unwrap();
+    let mut tx = mic.writer().unwrap();
+    tx.write(&[0.5; 960]).unwrap();
+
+    let while_queued = tx.wait_for_playout(Instant::now() + Duration::from_millis(30));
+    backend.driver_read(mic.id(), 960);
+    let once_taken = tx.wait_for_playout(Instant::now() + Duration::from_secs(1));
+
+    assert_eq!((while_queued, once_taken), (false, true));
+}
+
+/// The system pulling 10 ms packets for `duration`, while `during` runs on this
+/// thread; returns what the system took.
+fn system_pulls_while<T>(
+    backend: &dyn Backend,
+    mic: &Device,
+    duration: Duration,
+    during: impl FnOnce() -> T,
+) -> (Vec<f32>, T) {
+    std::thread::scope(|scope| {
+        let system = scope.spawn(|| {
+            let mut taken = Vec::new();
+            let until = Instant::now() + duration;
+            while Instant::now() < until {
+                taken.extend(backend.driver_read(mic.id(), 480).unwrap());
+                system_pause();
+            }
+            taken
+        });
+        let result = during();
+        (system.join().unwrap(), result)
+    })
+}
+
+/// A reply's samples: never zero, so they stand out from the silence around them.
+fn reply(frames: u16) -> Vec<f32> {
+    (1..=frames)
+        .map(|i| f32::from(i) / f32::from(frames))
+        .collect()
+}
+
+fn a_reply_pushed_at_once_reaches_the_system_whole_and_in_order(backend: &dyn Backend) {
+    let mic = builder(backend).name("Agent Mic").create().unwrap();
+    let playout = mic.playout().unwrap();
+    let audio = reply(9_600); // 200 ms
+
+    let (taken, accepted) = system_pulls_while(backend, &mic, Duration::from_millis(500), || {
+        playout.push(&audio)
+    });
+
+    // Silence before and after (the idle playout), the reply whole in between.
+    let start = taken.iter().position(|&s| s != 0.0).unwrap();
+    let end = taken.iter().rposition(|&s| s != 0.0).unwrap() + 1;
+    assert_eq!(accepted, audio.len());
+    assert_eq!(&taken[start..end], &audio[..]);
+    assert_eq!(mic.stats().overflow_frames, 0);
+}
+
+fn interrupt_stops_a_reply_with_at_most_the_lead_still_playing(backend: &dyn Backend) {
+    let mic = builder(backend).name("Agent Mic").create().unwrap();
+    let playout = mic.playout().unwrap();
+    playout.push(&reply(48_000)); // a one-second reply
+
+    let (taken, cut) = system_pulls_while(backend, &mic, Duration::from_millis(400), || {
+        sleep_ms(150);
+        playout.interrupt()
+    });
+
+    let reply_frames = taken.iter().filter(|&&s| s != 0.0).count() as u64;
+    let lead = u64::from(backend.transport().lead_frames());
+    assert!(cut.heard_frames > 0 && cut.discarded_frames > 0, "{cut:?}");
+    assert!(
+        reply_frames >= cut.heard_frames && reply_frames <= cut.heard_frames + lead,
+        "{reply_frames} reply frames reached the system; heard {}, lead {lead}",
+        cut.heard_frames
+    );
+}
+
+fn a_playout_holds_the_writer_slot_until_dropped(backend: &dyn Backend) {
+    let mic = builder(backend).name("Agent Mic").create().unwrap();
+    let speaker = builder(backend)
+        .name("Out")
+        .kind(Kind::Speaker)
+        .create()
+        .unwrap();
+    let playout = mic.playout().unwrap();
+
+    let while_held = (mic.writer().err(), mic.playout().err());
+    drop(playout);
+    let after = mic.writer().is_ok();
+
+    assert_eq!(
+        while_held,
+        (
+            Some(viaduct::Error::AlreadyTaken),
+            Some(viaduct::Error::AlreadyTaken)
+        )
+    );
+    assert!(after);
+    assert_eq!(speaker.playout().err(), Some(viaduct::Error::WrongKind));
+}
+
+fn wait_idle_is_true_once_a_reply_has_played(backend: &dyn Backend) {
+    let mic = builder(backend).name("Agent Mic").create().unwrap();
+    let playout = mic.playout().unwrap();
+    playout.push(&reply(4_800)); // 100 ms
+
+    let nobody_pulls = playout.wait_idle(Instant::now() + Duration::from_millis(30));
+    let (_, pulled) = system_pulls_while(backend, &mic, Duration::from_millis(400), || {
+        playout.wait_idle(Instant::now() + Duration::from_secs(1))
+    });
+
+    assert_eq!((nobody_pulls, pulled), (false, true));
+}
+
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the test waits before interrupting; precision doesn't matter"
+)]
+fn sleep_ms(ms: u64) {
+    std::thread::sleep(Duration::from_millis(ms));
 }

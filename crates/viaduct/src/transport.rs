@@ -1,21 +1,29 @@
 //! How the SDK reaches a driver (ADR 0012).
 //!
-//! Public so test backends (the in-process fake driver, and Linux's
-//! `TestBackend`) can implement or use it, but not part of the supported API. A
+//! Public so test backends (`TestBackend`, and the scripted driver in
+//! `tests/driver_replies.rs`) can implement or use it, but not part of the supported API. A
 //! connection is one Owner: one open handle.
 
 #![forbid(unsafe_code)] // pure logic: the compiler guarantees no unsafe here
 
 use crate::Error;
 
-/// Linux's test backend: the real Linux transport with nodes the test drives.
-#[cfg(target_os = "linux")]
+/// The test backend: the Core host with nodes the test drives (every OS; outside
+/// Linux it needs the hidden `test-backend` feature).
+#[cfg(any(target_os = "linux", feature = "test-backend"))]
 #[doc(hidden)]
-pub use crate::linux::TestBackend;
+pub use crate::core_host::TestBackend;
 
 /// Something that can open Owner connections to a driver.
 pub trait Transport: Send + Sync {
     fn connect(&self) -> Result<Box<dyn Connection>, Error>;
+
+    /// How far ahead a paced Microphone writer keeps the Ring filled: at least
+    /// one of the system's pulls, or each pull finds the Ring short (ADR 0020).
+    /// Windows pulls one 10 ms packet, so 20 ms (960 frames at 48 kHz).
+    fn lead_frames(&self) -> u32 {
+        960
+    }
 }
 
 /// One open handle on the driver. Dropping it closes the handle, and the driver

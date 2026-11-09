@@ -7,7 +7,7 @@ use viaduct::Stats;
 
 pub const SAMPLE_RATE: u32 = 48_000;
 
-pub const USAGE: &str = "usage:\n  viaduct-cli mic <name> [--tone <hz>]\n  viaduct-cli speaker <name>\n  viaduct-cli measure mic|speaker <name> [--seconds <n>] [--lead-ms <n>]\n  viaduct-cli install <package folder or viaduct.inf>\n  viaduct-cli uninstall";
+pub const USAGE: &str = "usage:\n  viaduct-cli mic <name> [--tone <hz>]\n  viaduct-cli speaker <name>\n  viaduct-cli measure mic|speaker <name> [--seconds <n>]\n  viaduct-cli install <package folder or viaduct.inf>\n  viaduct-cli uninstall";
 
 #[derive(Debug, PartialEq)]
 pub enum Command<'a> {
@@ -22,7 +22,6 @@ pub enum Command<'a> {
         direction: &'a str,
         name: &'a str,
         seconds: u64,
-        lead_ms: u64,
     },
     Install {
         package: &'a str,
@@ -46,12 +45,10 @@ pub fn parse<'a>(args: &[&'a str]) -> Result<Command<'a>, String> {
             if direction != "mic" && direction != "speaker" {
                 return Err("measure needs `mic` or `speaker`".to_string());
             }
-            let (seconds, lead_ms) = measure_options(options)?;
             Ok(Command::Measure {
                 direction,
                 name,
-                seconds,
-                lead_ms,
+                seconds: measure_seconds(options)?,
             })
         }
         ["install", package] => Ok(Command::Install { package }),
@@ -60,21 +57,16 @@ pub fn parse<'a>(args: &[&'a str]) -> Result<Command<'a>, String> {
     }
 }
 
-/// `--seconds <n>` (default 60) and `--lead-ms <n>` (default 20), in any order.
-fn measure_options(options: &[&str]) -> Result<(u64, u64), String> {
-    let (mut seconds, mut lead_ms) = (60, 20);
-    for pair in options.chunks(2) {
-        let value = |what: &str, max: u64| match pair.get(1).map(|v| v.parse::<u64>()) {
-            Some(Ok(n)) if n > 0 && n <= max => Ok(n),
-            _ => Err(format!("{what} needs a whole number from 1 to {max}")),
-        };
-        match pair[0] {
-            "--seconds" => seconds = value("--seconds", 86_400)?,
-            "--lead-ms" => lead_ms = value("--lead-ms", 80)?, // the default Ring holds 85 ms
-            _ => return Err(USAGE.to_string()),
-        }
+/// `--seconds <n>`, 60 by default.
+fn measure_seconds(options: &[&str]) -> Result<u64, String> {
+    match *options {
+        [] => Ok(60),
+        ["--seconds", ref value @ ..] => match value.first().map(|v| v.parse::<u64>()) {
+            Some(Ok(n)) if (1..=86_400).contains(&n) && value.len() == 1 => Ok(n),
+            _ => Err("--seconds needs a whole number from 1 to 86400".to_string()),
+        },
+        _ => Err(USAGE.to_string()),
     }
-    Ok((seconds, lead_ms))
 }
 
 /// One line of Device health: missing audio so far, and what's waiting now.
@@ -118,50 +110,22 @@ mod tests {
     }
 
     #[test]
-    fn measure_defaults_to_60_seconds_and_a_20_ms_lead() {
+    fn measure_runs_60_seconds_unless_told_otherwise() {
         assert_eq!(
             parse(&["measure", "mic", "Agent Mic"]),
             Ok(Command::Measure {
                 direction: "mic",
                 name: "Agent Mic",
                 seconds: 60,
-                lead_ms: 20
             })
         );
-    }
-
-    #[test]
-    fn measure_options_come_in_any_order() {
-        let expected = Ok(Command::Measure {
-            direction: "speaker",
-            name: "S",
-            seconds: 5,
-            lead_ms: 40,
-        });
-
         assert_eq!(
-            parse(&[
-                "measure",
-                "speaker",
-                "S",
-                "--seconds",
-                "5",
-                "--lead-ms",
-                "40"
-            ]),
-            expected
-        );
-        assert_eq!(
-            parse(&[
-                "measure",
-                "speaker",
-                "S",
-                "--lead-ms",
-                "40",
-                "--seconds",
-                "5"
-            ]),
-            expected
+            parse(&["measure", "speaker", "S", "--seconds", "5"]),
+            Ok(Command::Measure {
+                direction: "speaker",
+                name: "S",
+                seconds: 5,
+            })
         );
     }
 
@@ -175,8 +139,11 @@ mod tests {
             let error = parse(&["measure", "mic", "X", "--seconds", value]).unwrap_err();
             assert_eq!(error, "--seconds needs a whole number from 1 to 86400");
         }
-        let error = parse(&["measure", "mic", "X", "--lead-ms", "81"]).unwrap_err();
-        assert_eq!(error, "--lead-ms needs a whole number from 1 to 80");
+        // The lead is the Backend's now (`Writer::write_paced`), not an option.
+        assert_eq!(
+            parse(&["measure", "mic", "X", "--lead-ms", "20"]),
+            Err(USAGE.to_string())
+        );
         assert_eq!(
             parse(&["measure", "mic", "X", "--seconds"]).unwrap_err(),
             "--seconds needs a whole number from 1 to 86400"

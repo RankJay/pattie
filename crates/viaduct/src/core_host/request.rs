@@ -16,7 +16,7 @@ pub(super) fn read_u64(bytes: &[u8], offset: usize) -> Option<u64> {
 }
 
 /// The Ring a Create Device request names. Its address is the SDK's own memory in
-/// this process, as the fake driver uses it; the core checks the size.
+/// this process; the core checks the size.
 pub(super) fn ring_of(input: &[u8]) -> Option<(*mut std::ffi::c_void, usize)> {
     let address = read_u64(input, offset_of!(CreateDeviceRequest, ring_address))?;
     let bytes = read_u64(input, offset_of!(CreateDeviceRequest, ring_bytes))?;

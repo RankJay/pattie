@@ -1,13 +1,18 @@
 //! Devices: named virtual microphones and speakers (ADR 0012).
 
 use crate::Error;
-use crate::abi::{self, CreateDeviceReply, CreateDeviceRequest, HelloRequest, ReplyEnvelope};
+use crate::abi;
+use crate::convert::Format;
+use crate::pacing::{self, Step};
+use crate::playout::Playout;
 use crate::ring::RingMemory;
-use crate::transport::{Connection, Transport};
+use crate::session::Session;
+use crate::timer::Waiter;
+use crate::transport::Transport;
 use std::fmt;
-use std::mem::size_of;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 /// Whether a Device is a microphone (the app writes audio others hear) or a
 /// speaker (others play audio the app reads).
@@ -29,7 +34,7 @@ impl Kind {
 }
 
 /// The one format v0 supports: 48 kHz, mono (ADR 0005).
-const V0_FORMAT: (u32, u16) = (48_000, 1);
+pub(crate) const V0_FORMAT: (u32, u16) = (48_000, 1);
 
 /// Default Ring size: 4,096 frames, about 85 ms at 48 kHz.
 const DEFAULT_BUFFER_FRAMES: u32 = 4096;
@@ -91,62 +96,18 @@ impl DeviceBuilder {
             Some(transport) => transport,
             None => default_transport()?,
         };
-        let mut connection = transport.connect()?;
-
-        let hello = HelloRequest {
-            major: abi::ABI_MAJOR,
-            minor: abi::ABI_MINOR,
-        };
-        let mut reply = [0u8; size_of::<abi::HelloReply>()];
-        send(
-            connection.as_mut(),
-            abi::CMD_HELLO,
-            abi::bytes_of(&hello),
-            &mut reply,
-        )?;
-        // The driver replies with its version; the connection speaks the lower
-        // minor (ADR 0003). At 1.0 there is no older minor to fall back to yet.
-        let driver_major = u16::from_ne_bytes([reply[0], reply[1]]);
-        if driver_major != abi::ABI_MAJOR {
-            return Err(Error::VersionMismatch);
-        }
-
+        let lead_frames = u64::from(transport.lead_frames());
+        let mut session = Session::open(transport.as_ref())?;
         let ring = RingMemory::new(self.buffer_frames)?;
-        let mut request = CreateDeviceRequest {
-            kind: self.kind.abi(),
-            name_len: 0,
-            name: [0; abi::DEVICE_NAME_MAX],
-            reserved: 0,
-            ring_address: ring.address(),
-            ring_bytes: ring.len() as u64,
-        };
-        let units: Vec<u16> = self.name.encode_utf16().collect();
-        let n = units.len().min(abi::DEVICE_NAME_MAX);
-        request.name[..n].copy_from_slice(&units[..n]);
-        // The driver rejects anything over 63 units; saturating keeps it rejected.
-        request.name_len = u32::try_from(units.len()).unwrap_or(u32::MAX);
-
-        let mut reply = CreateDeviceReply::default();
-        // SAFETY: CreateDeviceReply is a plain repr(C) struct of integers.
-        let reply_bytes = unsafe {
-            std::slice::from_raw_parts_mut(
-                (&mut reply as *mut CreateDeviceReply).cast::<u8>(),
-                size_of::<CreateDeviceReply>(),
-            )
-        };
-        send(
-            connection.as_mut(),
-            abi::CMD_CREATE_DEVICE,
-            abi::bytes_of(&request),
-            reply_bytes,
-        )?;
+        let id = session.create_device(self.kind.abi(), &self.name, &ring)?;
 
         Ok(Device {
             inner: Arc::new(Inner {
-                _connection: Mutex::new(connection),
+                _session: Mutex::new(session),
                 ring,
-                id: reply.device_id,
+                id,
                 kind: self.kind,
+                lead_frames,
                 endpoint_taken: AtomicBool::new(false),
             }),
         })
@@ -158,64 +119,28 @@ fn default_transport() -> Result<Arc<dyn Transport>, Error> {
     #[cfg(windows)]
     return Ok(Arc::new(crate::windows::WindowsTransport));
     #[cfg(target_os = "linux")]
-    return Ok(Arc::new(crate::linux::LinuxTransport::new()?));
+    return Ok(Arc::new(crate::linux::transport()?));
     #[cfg(not(any(windows, target_os = "linux")))]
     return Err(Error::NoBackend);
 }
 
-/// Sends one command; on success copies the command's reply into `reply`.
-fn send(
-    connection: &mut dyn Connection,
-    command: u32,
-    input: &[u8],
-    reply: &mut [u8],
-) -> Result<(), Error> {
-    let envelope_len = size_of::<ReplyEnvelope>();
-    let mut output = vec![0u8; envelope_len + reply.len()];
-    let written = connection.ioctl(abi::ioctl(command), input, &mut output)?;
-    if written < envelope_len {
-        return Err(Error::Protocol(abi::ERR_BAD_REQUEST));
-    }
-    let status = output
-        .first_chunk::<4>()
-        .map(|bytes| u32::from_ne_bytes(*bytes))
-        .ok_or(Error::Protocol(abi::ERR_BAD_REQUEST))?;
-    if status != abi::OK {
-        return Err(error_from_status(status));
-    }
-    if written < envelope_len + reply.len() {
-        return Err(Error::Protocol(abi::ERR_BAD_REQUEST));
-    }
-    reply.copy_from_slice(&output[envelope_len..envelope_len + reply.len()]);
-    Ok(())
-}
-
-fn error_from_status(status: abi::Status) -> Error {
-    match status {
-        abi::ERR_VERSION => Error::VersionMismatch,
-        abi::ERR_BAD_NAME => Error::BadName,
-        abi::ERR_DUPLICATE_NAME => Error::DuplicateName,
-        abi::ERR_TOO_MANY_DEVICES => Error::TooManyDevices,
-        abi::ERR_SYSTEM => Error::System,
-        other => Error::Protocol(other),
-    }
-}
-
-/// What a Device's handle and Ring share with its writer or reader.
-struct Inner {
-    // Field order matters: the connection closes (the driver unpins the Ring)
+/// What a Device's handle and Ring share with its writer, reader or playout.
+pub(crate) struct Inner {
+    // Field order matters: the session closes (the driver unpins the Ring)
     // before the Ring's memory is freed.
-    _connection: Mutex<Box<dyn Connection>>,
-    ring: RingMemory,
-    id: u32,
+    _session: Mutex<Session>,
+    pub(crate) ring: RingMemory,
+    pub(crate) id: u32,
     kind: Kind,
+    /// How far ahead `Writer::write_paced` keeps the Ring filled (the Backend's).
+    pub(crate) lead_frames: u64,
     /// The Ring has one app-side party: a single Writer or Reader at a time.
     endpoint_taken: AtomicBool,
 }
 
 impl Inner {
     /// Claims the app side of the Ring for a `kind` Device's writer or reader.
-    fn take_endpoint(&self, kind: Kind) -> Result<(), Error> {
+    pub(crate) fn take_endpoint(&self, kind: Kind) -> Result<(), Error> {
         if self.kind != kind {
             return Err(Error::WrongKind);
         }
@@ -225,7 +150,7 @@ impl Inner {
             .map_err(|_| Error::AlreadyTaken)
     }
 
-    fn release_endpoint(&self) {
+    pub(crate) fn release_endpoint(&self) {
         self.endpoint_taken.store(false, Ordering::Release);
     }
 }
@@ -279,6 +204,28 @@ impl Device {
     /// The driver's ID for this Device; never reused until the machine restarts.
     pub fn id(&self) -> u32 {
         self.inner.id
+    }
+
+    /// The Microphone's audio input for a voice agent: audio pushed at any speed
+    /// is played at the system's pace, and `interrupt` stops it at once and says
+    /// how much was heard (ADR 0020). It takes the Device's one writer slot, like
+    /// `writer`: one or the other, until dropped.
+    pub fn playout(&self) -> Result<Playout, Error> {
+        Playout::start(self.inner.clone(), Format::DEVICE)
+    }
+
+    /// As `playout`, for audio in another format: `push_bytes` takes it (16-bit
+    /// PCM at 24 kHz from OpenAI Realtime, μ-law at 8 kHz from telephony, ...) and
+    /// converts it to the Device's own (ADR 0019). `UnsupportedFormat` for a rate
+    /// or channel count the converter doesn't take.
+    pub fn playout_from(&self, input: Format) -> Result<Playout, Error> {
+        Playout::start(self.inner.clone(), input)
+    }
+
+    /// The shared parts, for the crate's own modules.
+    #[cfg_attr(not(test), allow(dead_code, reason = "used by the playout's tests"))]
+    pub(crate) fn inner(&self) -> &Arc<Inner> {
+        &self.inner
     }
 
     /// The Microphone's audio input: what the app writes, listeners hear.
@@ -367,6 +314,71 @@ impl Writer {
     /// Appends 48 kHz mono samples without blocking; returns how many were accepted.
     pub fn write(&mut self, samples: &[f32]) -> Result<usize, Error> {
         Ok(self.inner.ring.write(samples))
+    }
+
+    /// Writes `samples` at the pace the system takes them, blocking: it keeps the
+    /// Ring filled only a little ahead of the system (the Backend's lead, about
+    /// 20 ms on Windows), so nothing is dropped and an interruption has little
+    /// left to cut (ADR 0020). Returns how many samples went in: all of them,
+    /// unless `deadline` passed first.
+    pub fn write_paced(&mut self, samples: &[f32], deadline: Instant) -> Result<usize, Error> {
+        let waiter = Waiter::new();
+        let mut written = 0;
+        while written < samples.len() {
+            match pacing::step(
+                self.inner.ring.buffered(),
+                self.inner.lead_frames,
+                V0_FORMAT.0,
+            ) {
+                Step::Write(room) => {
+                    let end = samples
+                        .len()
+                        .min(written + usize::try_from(room).unwrap_or(usize::MAX));
+                    written += self.inner.ring.write(&samples[written..end]);
+                }
+                Step::Wait(pause) => {
+                    let now = Instant::now();
+                    if now >= deadline {
+                        break;
+                    }
+                    waiter.wait(pause.min(deadline - now));
+                }
+            }
+        }
+        Ok(written)
+    }
+
+    /// Waits until the system has taken everything written so far (the Ring is
+    /// empty): true then, false if `deadline` passed first.
+    pub fn wait_for_playout(&self, deadline: Instant) -> bool {
+        let waiter = Waiter::new();
+        loop {
+            let buffered = self.inner.ring.buffered();
+            if buffered == 0 {
+                return true;
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return false;
+            }
+            // A lead of zero: how long until it has all drained, within limits.
+            if let Step::Wait(pause) = pacing::step(buffered, 0, V0_FORMAT.0) {
+                waiter.wait(pause.min(deadline - now));
+            }
+        }
+    }
+
+    /// Frames the system has taken from this Microphone since it was created:
+    /// how much listeners have been sent (ADR 0020). Frames the driver skipped as
+    /// stale when a recording started (ADR 0014) count as taken.
+    pub fn played_frames(&self) -> u64 {
+        self.inner.ring.taken()
+    }
+
+    /// `played_frames` in whole milliseconds at 48 kHz, as OpenAI Realtime's
+    /// `audio_end_ms` takes it.
+    pub fn played_ms(&self) -> u64 {
+        self.played_frames() * 1_000 / u64::from(V0_FORMAT.0)
     }
 }
 

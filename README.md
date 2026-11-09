@@ -186,11 +186,11 @@ core/
   tests/                    host tests for the core (Rust harness via bindgen + cc)
   fuzz/                     libFuzzer + AddressSanitizer target for the core (Fuzzing the core)
 crates/
-  viaduct/                  the Rust SDK (public API: Device, Writer, Reader, Stats, Error,
-                            stable_id); backends in src/windows.rs and src/linux.rs + src/linux/
+  viaduct/                  the Rust SDK (public API: Device, Writer, Reader, Playout, Converter, Stats, Error,
+                            stable_id); backends in src/windows.rs and src/linux.rs + src/linux/;
+                            src/core_host.rs runs the C core in-process (Linux, and the
+                            contract suite's test backend on every OS)
   viaduct-cli/              test tool: mic, speaker, measure, install, uninstall
-testing/
-  fake-driver/              the real C core behind the SDK, in-process, for SDK tests
 platforms/windows/
   driver/                   the ACX/KMDF driver: shell sources, viaduct.inf, project
   vm/                       scripts for the test VM (package, install, probe, trace)
@@ -225,7 +225,7 @@ cargo test --workspace
 ```
 
 This runs the core's C logic, the ABI mirror check and the SDK contract tests against
-the fake driver. One test, `windows_without_driver`, expects the driver to be absent,
+the Core host (the C core in-process, with test-driven nodes). One test, `windows_without_driver`, expects the driver to be absent,
 so it fails on a machine where Viaduct is installed; that's by design.
 
 Formatting, lints and coverage: see [Before you commit](#before-you-commit).
@@ -287,7 +287,7 @@ VMware issue.
 | --- | --- |
 | `viaduct-cli mic "<name>" [--tone <hz>]` | Creates a mic and streams a sine tone into it (440 Hz by default) until Enter |
 | `viaduct-cli speaker "<name>"` | Creates a speaker and shows a level meter of what's played to it |
-| `viaduct-cli measure mic\|speaker "<name>" [--seconds 60] [--lead-ms 20]` | Opens the endpoint the way Zoom does (WASAPI) and reports latency, glitches, Gap and Overflow |
+| `viaduct-cli measure mic\|speaker "<name>" [--seconds 60]` | Opens the endpoint the way Zoom does (WASAPI) and reports latency, glitches, Gap and Overflow |
 | `viaduct-cli install <package folder or viaduct.inf>` | **Admin.** Creates the root device if missing and installs the driver. Safe to repeat. |
 | `viaduct-cli uninstall` | **Admin.** Removes the root device, leftover endpoints and the driver package |
 
@@ -408,7 +408,7 @@ cargo install cargo-llvm-cov --locked
 Then:
 
 ```bash
-CC="/c/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/Llvm/x64/bin/clang-cl.exe" cargo llvm-cov --workspace --include-ffi --summary-only --ignore-filename-regex 'viaduct[\\/]src[\\/]windows\.rs|viaduct-cli[\\/]src[\\/](main|measure)\.rs|install[\\/]setup\.rs|testing[\\/]fake-driver'
+CC="/c/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/Llvm/x64/bin/clang-cl.exe" cargo llvm-cov --workspace --include-ffi --summary-only --ignore-filename-regex 'viaduct[\\/]src[\\/]windows\.rs|viaduct-cli[\\/]src[\\/](main|measure)\.rs|install[\\/]setup\.rs|core_host[\\/]test_backend'
 ```
 
 Add `--show-missing-lines` to list the lines each file misses. Left out of the
@@ -422,7 +422,7 @@ test VM):
 | `crates/viaduct-cli/src/main.rs` | The mic/speaker loops on a live Device | Parsing: `cli.rs` |
 | `crates/viaduct-cli/src/measure.rs` | WASAPI streams on a live endpoint | Pairing and statistics: `latency.rs` |
 | `crates/viaduct-cli/src/install/setup.rs` | SetupAPI calls that change the machine | INF parsing: `install.rs`; VM for the rest |
-| `testing/fake-driver` | Test scaffolding, never shipped | The contract tests it serves |
+| `crates/viaduct/src/core_host/test_backend.rs` | Test scaffolding (the contract suite's nodes), never shipped | The contract tests it serves |
 
 ### Property tests
 
@@ -504,7 +504,7 @@ fails on undefined behaviour the compiled tests can pass straight through: readi
 past an allocation, a misaligned or dangling pointer, a data race between threads.
 It runs on the Ring's own tests (`crates/viaduct/src/ring.rs`), which play the
 driver's side in Rust with the C core's counter protocol, two of them on a second
-thread. The SDK's other tests reach the Ring through the C fake driver, and Miri
+thread. The SDK's other tests reach the Ring through the Core host's C core, and Miri
 can't run C. Once:
 
 ```bash
@@ -610,10 +610,10 @@ Where they live, from widest to narrowest:
 | Where | Applies to | What it enforces |
 | --- | --- | --- |
 | Root `Cargo.toml`, `[workspace.lints]` | every crate (each opts in with `[lints] workspace = true`) | The `unsafe` rules below; no `dbg!`, `todo!`, `unimplemented!`; no pointer casts that hide a type or alignment change (`ptr_as_ptr`, `cast_ptr_alignment`, `transmute_ptr_to_ptr`); rustdoc links and HTML must be valid |
-| `clippy.toml` | every crate | Methods banned by name, each with its reason: `std::process::exit` (skips destructors, so a live Device isn't removed cleanly) and `std::thread::sleep` (a 1 ms sleep can last ~15.6 ms and starve an audio loop: use `pace::Pacer`). Also: the `unsafe fn` contract rule covers private functions, and tests may unwrap |
+| `clippy.toml` | every crate | Methods banned by name, each with its reason: `std::process::exit` (skips destructors, so a live Device isn't removed cleanly) and `std::thread::sleep` (a 1 ms sleep can last ~15.6 ms and starve an audio loop: use the SDK's `Writer::write_paced`, or the CLI's `pace::Pacer` for its one paced reader). Also: the `unsafe fn` contract rule covers private functions, and tests may unwrap |
 | Top of `crates/viaduct/src/lib.rs` | the SDK only | It runs inside other people's apps: no `unwrap`/`expect`/`panic!`, no printing, no silently narrowing casts, and every public item is documented and has `Debug` |
 | `#![forbid(unsafe_code)]` at the top of a module | `cli.rs`, `latency.rs`, `error.rs`, `identity.rs`, `transport.rs` | The compiler guarantees these hold no `unsafe`, so a reviewer can skip them for memory safety |
-| `core/tests/build.rs`, `testing/fake-driver/build.rs`, `viaduct.vcxproj` | the C core (and the driver) | Warnings are errors, plus implicit narrowing and sign changes: `-Wconversion -Wsign-conversion` under clang, C4242/C4244/C4365 under MSVC |
+| `core/tests/build.rs`, `crates/viaduct/build.rs`, `viaduct.vcxproj` | the C core (and the driver) | Warnings are errors, plus implicit narrowing and sign changes: `-Wconversion -Wsign-conversion` under clang, C4242/C4244/C4365 under MSVC |
 
 To make an exception in one place, use `#[expect(clippy::…, reason = "…")]` on that
 item or statement, never a crate-wide `allow`: the reason is written down, and the

@@ -1,17 +1,26 @@
-//! A test backend for the SDK contract suite (ADR 0012, Seam S1): the real Linux
-//! transport (the embedded core, the name claims, the node seam), with each node
-//! replaced by one the test drives. `driver_read` and `driver_write` play
-//! PipeWire's audio callback, as the fake driver plays the Windows shell. Real
-//! PipeWire nodes are tested separately (`tests/linux_pipewire.rs`).
+//! A test backend for the SDK contract suite (ADR 0012, Seam S1), on every OS:
+//! the Core host (the embedded core, the control path, on Linux the name claims),
+//! with each node replaced by one the test drives. `driver_read` and
+//! `driver_write` play the system's side: PipeWire's audio callback on Linux, the
+//! Windows shell's timer elsewhere. Real PipeWire nodes are tested separately
+//! (`tests/linux_pipewire.rs`).
 //!
 //! Public only so the contract suite can reach it; not part of the supported API.
 
-use super::{LinuxTransport, Node, NodeSpec, Nodes, RingRef};
+use super::{HostTransport, Node, NodeSpec, Nodes, RingRef};
 use crate::Error;
 use crate::transport::Transport;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
+
+/// The lead of the platform's real Backend: PipeWire's pull on Linux, Windows'
+/// packet elsewhere.
+const LEAD_FRAMES: u32 = if cfg!(target_os = "linux") {
+    2_048
+} else {
+    960
+};
 
 /// The live Devices' Rings, by Device ID. A node's entry is removed when the node
 /// is dropped, before the core lets go of the Device, and every use holds the
@@ -85,7 +94,7 @@ impl TestBackend {
         let rings = Rings::default();
         let nodes = Arc::new(TestNodes(rings.clone()));
         Ok(TestBackend {
-            transport: Arc::new(LinuxTransport::with_nodes(nodes, &namespace)?),
+            transport: Arc::new(HostTransport::with_nodes(nodes, &namespace, LEAD_FRAMES)?),
             rings,
         })
     }

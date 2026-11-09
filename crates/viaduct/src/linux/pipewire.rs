@@ -8,7 +8,7 @@
 
 mod ffi;
 
-use super::{Node, NodeSpec, Nodes, RingRef};
+use crate::core_host::{Node, NodeSpec, Nodes, RingRef};
 use crate::{Error, Kind};
 use ffi::{
     Api, DIRECTION_INPUT, DIRECTION_OUTPUT, FORMAT, ID_ANY, STATE_ERROR, STATE_PAUSED,

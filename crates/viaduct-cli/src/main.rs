@@ -4,7 +4,7 @@
 //! ```text
 //! viaduct-cli mic "Agent Mic" [--tone 440]   stream a sine tone into a microphone
 //! viaduct-cli speaker "Agent Speaker"        show the level of what's played to it
-//! viaduct-cli measure mic|speaker <name> [--seconds 60] [--lead-ms 20]
+//! viaduct-cli measure mic|speaker <name> [--seconds 60]
 //!                                            latency and glitches, WASAPI as the app
 //! viaduct-cli install <package folder or .inf>   put the driver on this machine
 //! viaduct-cli uninstall                      take it off (both as administrator)
@@ -29,18 +29,10 @@ mod measure;
 mod pace;
 
 use cli::{Command, SAMPLE_RATE, health};
-use pace::Pacer;
+use pace::GapMeter;
 
-/// How far ahead of real time the tone is kept: at least one of the system's
-/// pulls, or each pull finds the Ring short and the rest is Gap. Windows pulls one
-/// 10 ms packet, so 20 ms there.
-#[cfg(not(target_os = "linux"))]
-const LEAD_FRAMES: u64 = 960;
-/// On Linux, PipeWire's graph pulls a whole cycle at once: 1,024 frames (21.3 ms)
-/// by default, up to 2,048 when the graph runs at its default maximum. Leading by
-/// 960 left every 1,024-frame pull 64 frames short (WSL, 2026-11-08).
-#[cfg(target_os = "linux")]
-const LEAD_FRAMES: u64 = 2048;
+/// The tone is generated 10 ms at a time; `write_paced` decides when each goes in.
+const CHUNK_FRAMES: usize = 480;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -52,8 +44,7 @@ fn main() -> ExitCode {
             direction,
             name,
             seconds,
-            lead_ms,
-        } => run_measure(direction, name, seconds, lead_ms),
+        } => run_measure(direction, name, seconds),
         Command::Install { package } => install::install(package),
         Command::Uninstall => install::uninstall(),
     });
@@ -67,12 +58,12 @@ fn main() -> ExitCode {
 }
 
 #[cfg(windows)]
-fn run_measure(direction: &str, name: &str, seconds: u64, lead_ms: u64) -> Result<(), String> {
-    measure::run(direction, name, seconds, lead_ms)
+fn run_measure(direction: &str, name: &str, seconds: u64) -> Result<(), String> {
+    measure::run(direction, name, seconds)
 }
 
 #[cfg(not(windows))]
-fn run_measure(_: &str, _: &str, _: u64, _: u64) -> Result<(), String> {
+fn run_measure(_: &str, _: &str, _: u64) -> Result<(), String> {
     Err("measure uses WASAPI and runs on Windows only".to_string())
 }
 
@@ -107,27 +98,24 @@ fn run_mic(name: &str, hz: f32) -> Result<(), String> {
     let mut phase = 0.0f32;
     let step = TAU * hz / SAMPLE_RATE as f32;
     let mut next_report = Duration::from_secs(1);
-    let mut chunk = Vec::new();
-    let mut pacer = Pacer::new(Duration::from_millis(20)); // a gap over the lead starves the Ring
-    println!("pacing: {}", pacer.describe());
+    let mut chunk = vec![0.0f32; CHUNK_FRAMES];
+    // A gap between calls longer than the lead starves the Ring.
+    let mut meter = GapMeter::new(Duration::from_millis(20));
 
     while !stop.load(Ordering::Relaxed) {
-        pacer.tick();
-        // Top the Ring up to LEAD_FRAMES, paced by its fill level rather than by
-        // time: while nobody records, nothing more is written (no Overflow), and
-        // when recording starts the listener hears the tone 20 ms behind, not
-        // behind a Ring's worth of stale audio.
-        let buffered = mic.stats().buffered_frames;
-        if buffered < LEAD_FRAMES {
-            chunk.clear();
-            for _ in buffered..LEAD_FRAMES {
-                chunk.push(0.2 * phase.sin());
-                phase = (phase + step) % TAU;
-            }
-            written += tx.write(&chunk).map_err(|e| e.to_string())? as u64;
+        meter.tick();
+        for sample in &mut chunk {
+            *sample = 0.2 * phase.sin();
+            phase = (phase + step) % TAU;
         }
+        // The SDK paces it: the Ring stays only the Backend's lead ahead of the
+        // system, so nothing is written while nobody records (no Overflow), and a
+        // listener who starts recording hears the tone about 20 ms behind.
+        written += tx
+            .write_paced(&chunk, Instant::now() + Duration::from_secs(1))
+            .map_err(|e| e.to_string())? as u64;
         if start.elapsed() >= next_report {
-            let (longest, over) = pacer.gaps();
+            let (longest, over) = meter.gaps();
             println!(
                 "written {written} frames, {}, writer gaps: longest {:.1} ms, {over} over 20 ms",
                 health(mic.stats()),
@@ -135,7 +123,6 @@ fn run_mic(name: &str, hz: f32) -> Result<(), String> {
             );
             next_report += Duration::from_secs(1);
         }
-        pacer.sleep_1ms();
     }
     println!("Stopped; removing \"{name}\".");
     Ok(())

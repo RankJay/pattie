@@ -162,6 +162,18 @@ impl RingMemory {
         )
     }
 
+    /// Frames the writing side has put in since the Ring was created: its write
+    /// counter, the position the next written frame takes.
+    pub(crate) fn written(&self) -> u64 {
+        self.write_frames().load(Ordering::Acquire)
+    }
+
+    /// Frames the reading side has taken since the Ring was created: its read
+    /// counter, as last published.
+    pub(crate) fn taken(&self) -> u64 {
+        self.read_frames().load(Ordering::Acquire)
+    }
+
     /// Frames written but not yet read, whichever side writes; never more than
     /// the capacity, whatever either counter claims.
     pub(crate) fn buffered(&self) -> u64 {
@@ -183,7 +195,7 @@ impl Drop for RingMemory {
 /// touch only the frames it allows, release your own). These run under Miri
 /// (README, Miri), which checks every unsafe access here for undefined behaviour
 /// and the two-thread tests for data races; the SDK's other tests reach the Ring
-/// through the C fake driver, which Miri can't run.
+/// through the Core host's C core, which Miri can't run.
 #[cfg(test)]
 mod tests {
     use super::*;

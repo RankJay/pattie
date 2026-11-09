@@ -31,17 +31,26 @@
 
 #[doc(hidden)]
 pub mod abi;
+mod convert;
+#[cfg(any(target_os = "linux", feature = "test-backend"))]
+mod core_host;
 mod device;
 mod error;
 mod identity;
 #[cfg(target_os = "linux")]
 mod linux;
+mod pacing;
+mod playout;
 mod ring;
+mod session;
+mod timer;
 #[doc(hidden)]
 pub mod transport;
 #[cfg(windows)]
 mod windows;
 
+pub use convert::{Converter, Encoding, Format};
 pub use device::{Device, DeviceBuilder, Kind, Reader, Stats, Writer};
 pub use error::Error;
 pub use identity::stable_id;
+pub use playout::{Interrupted, Playout};
