@@ -27,6 +27,7 @@ typedef struct vd_ring {
     uint64_t gap_frames;
     uint64_t write_frames;     /* Speaker: the driver writes */
     uint64_t overflow_frames;
+    uint64_t clock_seq;        /* the published clock's sequence: never re-read */
 } vd_ring;
 
 /* Per-Owner state. One per open handle, stored in the shell's file context. */
@@ -93,6 +94,14 @@ void vd_ring_read(vd_ring *ring, float *dst, uint32_t count);
 void vd_ring_write(vd_ring *ring, const float *src, uint32_t count);
 
 /*
+ * After a pass (ADR 0022): publishes the driver's counter and `now_ns` as the
+ * Ring's clock pair, on the driver's own line: the read position for a
+ * Microphone, the write position for a Speaker.
+ */
+void vd_ring_publish_read_clock(vd_ring *ring, uint64_t now_ns);
+void vd_ring_publish_write_clock(vd_ring *ring, uint64_t now_ns);
+
+/*
  * Seam B, Windows-facing format (ADR 0005): Windows' audio endpoint builder needs a
  * PCM device format, while the Ring and the app stay 32-bit float. Samples are
  * converted with integer arithmetic on their IEEE-754 bit patterns, so the driver
@@ -125,6 +134,12 @@ void vd_ring_skip_stale(vd_ring *ring, uint32_t keep_frames);
  */
 uint64_t vd_clock_frames(uint64_t start_ticks, uint64_t now_ticks,
                          uint64_t tick_hz, uint32_t sample_rate);
+
+/*
+ * Seam C: a tick reading at `tick_hz` in nanoseconds, rounded down: the unit a
+ * Ring's clock pair is published in (ADR 0022).
+ */
+uint64_t vd_clock_ns(uint64_t ticks, uint64_t tick_hz);
 
 /*
  * Seam C, inverse: the fewest ticks after the start at which vd_clock_frames

@@ -37,6 +37,23 @@ pub(super) struct PwBuffer {
     pub(super) requested: u64,
 }
 
+/// `struct pw_time`, as far as PipeWire 0.3.50 defines it (it copies only the
+/// size it's given, so a newer one is fine).
+#[repr(C)]
+#[derive(Default)]
+pub(super) struct PwTime {
+    /// When the graph's cycle started: `CLOCK_MONOTONIC` nanoseconds.
+    pub(super) now: i64,
+    pub(super) rate_num: u32,
+    pub(super) rate_denom: u32,
+    pub(super) ticks: u64,
+    pub(super) delay: i64,
+    pub(super) queued: u64,
+    pub(super) buffered: u64,
+    pub(super) queued_buffers: u32,
+    pub(super) avail_buffers: u32,
+}
+
 #[repr(C)]
 pub(super) struct SpaBuffer {
     pub(super) n_metas: u32,
@@ -126,6 +143,7 @@ pub(super) struct Api {
     pub(super) stream_destroy: unsafe extern "C" fn(*mut c_void),
     pub(super) stream_dequeue_buffer: unsafe extern "C" fn(*mut c_void) -> *mut PwBuffer,
     pub(super) stream_queue_buffer: unsafe extern "C" fn(*mut c_void, *mut PwBuffer) -> c_int,
+    pub(super) stream_get_time_n: unsafe extern "C" fn(*mut c_void, *mut PwTime, usize) -> c_int,
 }
 
 /// libpipewire, loaded and initialised on first use; `None` if it isn't installed.
@@ -164,6 +182,7 @@ pub(super) fn load() -> Option<Api> {
         stream_destroy: symbol!("pw_stream_destroy"),
         stream_dequeue_buffer: symbol!("pw_stream_dequeue_buffer"),
         stream_queue_buffer: symbol!("pw_stream_queue_buffer"),
+        stream_get_time_n: symbol!("pw_stream_get_time_n"),
         _library: library,
     };
     // SAFETY: pw_init accepts null argc/argv; it may be called more than once.

@@ -7,7 +7,7 @@ use viaduct::Stats;
 
 pub const SAMPLE_RATE: u32 = 48_000;
 
-pub const USAGE: &str = "usage:\n  viaduct-cli mic <name> [--tone <hz>]\n  viaduct-cli speaker <name>\n  viaduct-cli measure mic|speaker <name> [--seconds <n>]\n  viaduct-cli install <package folder or viaduct.inf>\n  viaduct-cli uninstall";
+pub const USAGE: &str = "usage:\n  viaduct-cli mic <name> [--tone <hz>]\n  viaduct-cli speaker <name>\n  viaduct-cli measure mic|speaker <name> [--seconds <n>]\n  viaduct-cli measure drift <name> [--seconds <n>] [--ppm <p>] [--uncorrected]\n  viaduct-cli install <package folder or viaduct.inf>\n  viaduct-cli uninstall";
 
 #[derive(Debug, PartialEq)]
 pub enum Command<'a> {
@@ -22,6 +22,13 @@ pub enum Command<'a> {
         direction: &'a str,
         name: &'a str,
         seconds: u64,
+    },
+    /// A live source `ppm` off the device, through a `LiveWriter`, logged.
+    Drift {
+        name: &'a str,
+        seconds: u64,
+        ppm: f64,
+        correct: bool,
     },
     Install {
         package: &'a str,
@@ -41,6 +48,7 @@ pub fn parse<'a>(args: &[&'a str]) -> Result<Command<'a>, String> {
             )),
         },
         ["speaker", name] => Ok(Command::Speaker { name }),
+        ["measure", "drift", name, ref options @ ..] => drift(name, options),
         ["measure", direction, name, ref options @ ..] => {
             if direction != "mic" && direction != "speaker" {
                 return Err("measure needs `mic` or `speaker`".to_string());
@@ -67,6 +75,38 @@ fn measure_seconds(options: &[&str]) -> Result<u64, String> {
         },
         _ => Err(USAGE.to_string()),
     }
+}
+
+/// `measure drift`'s options, in any order: an hour at +50 ppm, corrected.
+fn drift<'a>(name: &'a str, options: &[&str]) -> Result<Command<'a>, String> {
+    let (mut seconds, mut ppm, mut correct) = (3_600, 50.0, true);
+    let mut rest = options;
+    while let Some((&option, tail)) = rest.split_first() {
+        rest = match (option, tail) {
+            ("--uncorrected", tail) => {
+                correct = false;
+                tail
+            }
+            ("--seconds", [value, tail @ ..]) => {
+                seconds = measure_seconds(&["--seconds", value])?;
+                tail
+            }
+            ("--ppm", [value, tail @ ..]) => {
+                ppm = match value.parse::<f64>() {
+                    Ok(p) if p.abs() <= 1_000.0 => p,
+                    _ => return Err("--ppm needs a drift from -1000 to 1000".to_string()),
+                };
+                tail
+            }
+            _ => return Err(USAGE.to_string()),
+        };
+    }
+    Ok(Command::Drift {
+        name,
+        seconds,
+        ppm,
+        correct,
+    })
 }
 
 /// One line of Device health: missing audio so far, and what's waiting now.
@@ -186,5 +226,44 @@ mod tests {
             health(stats),
             "gap 480 frames, overflow 0 frames, buffered 20.0 ms"
         );
+    }
+
+    #[test]
+    fn measure_drift_runs_an_hour_at_50_ppm_with_correction_unless_told_otherwise() {
+        assert_eq!(
+            parse(&["measure", "drift", "Agent Mic"]),
+            Ok(Command::Drift {
+                name: "Agent Mic",
+                seconds: 3_600,
+                ppm: 50.0,
+                correct: true
+            })
+        );
+        assert_eq!(
+            parse(&[
+                "measure",
+                "drift",
+                "Agent Mic",
+                "--uncorrected",
+                "--ppm",
+                "-20",
+                "--seconds",
+                "28800"
+            ]),
+            Ok(Command::Drift {
+                name: "Agent Mic",
+                seconds: 28_800,
+                ppm: -20.0,
+                correct: false
+            })
+        );
+    }
+
+    #[test]
+    fn a_drift_beyond_what_correction_covers_is_refused() {
+        for ppm in ["1500", "-1001", "fast"] {
+            let error = parse(&["measure", "drift", "Agent Mic", "--ppm", ppm]).unwrap_err();
+            assert!(error.starts_with("--ppm needs"), "{ppm}: {error}");
+        }
     }
 }

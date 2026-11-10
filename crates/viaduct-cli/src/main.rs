@@ -5,6 +5,7 @@
 //! viaduct-cli mic "Agent Mic" [--tone 440]   stream a sine tone into a microphone
 //! viaduct-cli speaker "Agent Speaker"        show the level of what's played to it
 //! viaduct-cli measure mic|speaker <name> [--seconds 60]
+//! viaduct-cli measure drift <name> [--seconds 3600] [--ppm 50] [--uncorrected]
 //!                                            latency and glitches, WASAPI as the app
 //! viaduct-cli install <package folder or .inf>   put the driver on this machine
 //! viaduct-cli uninstall                      take it off (both as administrator)
@@ -45,6 +46,12 @@ fn main() -> ExitCode {
             name,
             seconds,
         } => run_measure(direction, name, seconds),
+        Command::Drift {
+            name,
+            seconds,
+            ppm,
+            correct,
+        } => run_drift(name, seconds, ppm, correct),
         Command::Install { package } => install::install(package),
         Command::Uninstall => install::uninstall(),
     });
@@ -64,6 +71,16 @@ fn run_measure(direction: &str, name: &str, seconds: u64) -> Result<(), String> 
 
 #[cfg(not(windows))]
 fn run_measure(_: &str, _: &str, _: u64) -> Result<(), String> {
+    Err("measure uses WASAPI and runs on Windows only".to_string())
+}
+
+#[cfg(windows)]
+fn run_drift(name: &str, seconds: u64, ppm: f64, correct: bool) -> Result<(), String> {
+    measure::drift(name, seconds, ppm, correct)
+}
+
+#[cfg(not(windows))]
+fn run_drift(_: &str, _: u64, _: f64, _: bool) -> Result<(), String> {
     Err("measure uses WASAPI and runs on Windows only".to_string())
 }
 

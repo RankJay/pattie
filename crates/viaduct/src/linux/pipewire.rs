@@ -12,7 +12,7 @@ use crate::core_host::{Node, NodeSpec, Nodes, RingRef};
 use crate::doorbell::Ringer;
 use crate::{Error, Kind};
 use ffi::{
-    Api, DIRECTION_INPUT, DIRECTION_OUTPUT, FORMAT, ID_ANY, STATE_ERROR, STATE_PAUSED,
+    Api, DIRECTION_INPUT, DIRECTION_OUTPUT, FORMAT, ID_ANY, PwTime, STATE_ERROR, STATE_PAUSED,
     STATE_STREAMING, STATE_UNCONNECTED, STREAM_EVENTS_VERSION, STREAM_FLAGS, SpaChunk, SpaData,
     StreamEvents, api,
 };
@@ -364,6 +364,18 @@ unsafe extern "C" fn on_process(data: *mut c_void) {
             }
         }
     }
+    // The clock pair (ADR 0022): where the Ring's counter is after this cycle,
+    // stamped with the cycle's own start time (`CLOCK_MONOTONIC`, as the SDK
+    // reads it). Meant for this callback: it takes no lock.
+    let mut time = PwTime::default();
+    // SAFETY: the current stream, and an out-parameter of the size passed.
+    let got = unsafe { (shared.api.stream_get_time_n)(stream, &raw mut time, size_of::<PwTime>()) };
+    let now = match u64::try_from(time.now) {
+        Ok(now) if got == 0 && now > 0 => now,
+        _ => crate::clock::os_now_ns(),
+    };
+    // SAFETY: as above: this callback is the Ring's only user.
+    unsafe { ring.publish_clock(shared.kind, now) };
     // SAFETY: the buffer was dequeued from this stream above.
     unsafe { (shared.api.stream_queue_buffer)(stream, buffer) };
     // One write to an eventfd: no lock, safe on PipeWire's real-time thread.

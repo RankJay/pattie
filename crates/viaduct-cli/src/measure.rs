@@ -63,6 +63,11 @@ const PKEY_ENDPOINT_DEVICE_INSTANCE: PROPERTYKEY = PROPERTYKEY {
 };
 
 /// Now, in 100 ns units on the performance counter (WASAPI's QPC timestamps use the same).
+/// How long ago `at` was, in 100 ns units.
+fn hns_since(at: Instant) -> u64 {
+    u64::try_from(at.elapsed().as_nanos() / 100).unwrap_or(u64::MAX)
+}
+
 fn now_hns() -> u64 {
     let (mut counter, mut frequency) = (0i64, 0i64);
     // SAFETY: a plain out-parameter.
@@ -427,16 +432,25 @@ fn measure_speaker(
         duration.as_secs()
     );
     while start.elapsed() < duration {
-        let count = rx
-            .read_paced(&mut buffer, start + duration)
+        let timed = rx
+            .read_timed(&mut buffer, start + duration)
             .map_err(|e| e.to_string())?;
         meter.tick();
         let read_at = now_hns();
-        let loudest = buffer[..count].iter().fold(0.0f32, |m, s| m.max(s.abs()));
-        if detector.detect(read_at, loudest) {
-            let mut run = run.lock().unwrap();
-            run.seen_hns.push(read_at);
-            run.delivered_hns.push(read_at); // the reader is the app: seen is delivered
+        // Each frame's playback time from the device's clock (ADR 0022): when
+        // the driver took it from Windows, not when this loop got to it.
+        let first_hns = timed
+            .first_at
+            .map(|at| read_at.saturating_sub(hns_since(at)));
+        let mut run = run.lock().unwrap();
+        for (frame, &sample) in buffer[..timed.frames].iter().enumerate() {
+            let at = first_hns.map_or(read_at, |first| {
+                first + frames_to_hns(frame as u64, RING_RATE)
+            });
+            if detector.detect(at, sample) {
+                run.seen_hns.push(at);
+                run.delivered_hns.push(read_at); // the reader is the app
+            }
         }
     }
     // Read before stopping, as for the mic: once the reader stops, the driver keeps
@@ -530,10 +544,12 @@ fn report(direction: &str, run: &Run, before: viaduct::Stats, after: viaduct::St
     );
     if direction == "mic" {
         println!("by capture timestamp (how apps sync audio):");
-        println!("  raw   (ms) {}", spread(raw));
-        println!("  added (ms) {}", spread(added));
-        println!("by delivery to the app (what a live call experiences):");
+    } else {
+        println!("by the device's playback timestamp (Reader::read_timed):");
     }
+    println!("  raw   (ms) {}", spread(raw));
+    println!("  added (ms) {}", spread(added));
+    println!("by delivery to the app (what a live call experiences):");
     println!("  raw   (ms) {}", spread(raw_delivered));
     println!(
         "  added (ms) {}   <- brief's target: under 10 ms",
@@ -557,4 +573,79 @@ fn report(direction: &str, run: &Run, before: viaduct::Stats, after: viaduct::St
         run.gaps_over,
         run.gap_limit.as_millis()
     );
+}
+
+/// `viaduct-cli measure drift`: a live source `ppm` off the device, pushed in
+/// 20 ms bursts through a `LiveWriter` while WASAPI records the Microphone, and
+/// a log line every 10 s of the latency it holds (ADR 0022's 8-hour log). With
+/// `correct` false the correction is held at 0, so the latency drifts.
+pub fn drift(name: &str, seconds: u64, ppm: f64, correct: bool) -> Result<(), String> {
+    // SAFETY: initializes COM for this thread; the capture thread does its own.
+    unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }
+        .ok()
+        .map_err(|e| format!("COM: {e}"))?;
+    let mic = Device::builder()
+        .name(name)
+        .format(48_000, 1)
+        .create()
+        .map_err(|e| format!("couldn't create the microphone: {e}"))?;
+    let live = mic
+        .live_writer(viaduct::Format::DEVICE)
+        .map_err(|e| e.to_string())?;
+    if !correct {
+        live.hold_correction(Some(0.0));
+    }
+    let endpoint = find_endpoint(eCapture, name, Kind::Microphone)?;
+    let stop = Arc::new(AtomicBool::new(false));
+    let run = Arc::new(Mutex::new(Run::default()));
+    // Something must record the Microphone for its stream to run.
+    let capture = {
+        let (stop, run) = (stop.clone(), run.clone());
+        let endpoint = SendDevice(endpoint);
+        thread::spawn(move || capture_clicks(endpoint, &stop, &run))
+    };
+
+    println!(
+        "a source {ppm:+} ppm off the device for {seconds} s, drift correction {} ...",
+        if correct { "on" } else { "off" }
+    );
+    println!("seconds,latency_ms,correction_ppm,starved_frames,dropped_frames");
+    let rate = RING_RATE as f64 * (1.0 + ppm / 1e6);
+    let step = 2.0 * std::f64::consts::PI * 440.0 / RING_RATE as f64;
+    let (start, mut sent, mut next_log) = (Instant::now(), 0u64, 0u64);
+    while start.elapsed() < Duration::from_secs(seconds) {
+        // The source's clock: `rate` frames per second of this PC's clock.
+        let due = (start.elapsed().as_secs_f64() * rate) as u64;
+        let chunk: Vec<f32> = (sent..due)
+            .map(|i| 0.2 * (step * (i % RING_RATE) as f64).sin() as f32)
+            .collect();
+        live.push(&chunk);
+        sent = due;
+        if start.elapsed().as_secs() >= next_log {
+            let stats = live.stats();
+            println!(
+                "{next_log},{:.2},{:.1},{},{}",
+                stats.queued_frames as f64 * 1_000.0 / RING_RATE as f64,
+                stats.correction_ppm,
+                stats.starved_frames,
+                stats.dropped_frames
+            );
+            next_log += 10;
+        }
+        burst_pause();
+    }
+    stop.store(true, Ordering::Relaxed);
+    capture
+        .join()
+        .map_err(|_| "capture thread panicked".to_string())??;
+    Ok(())
+}
+
+/// The source's bursts, about 20 ms apart, as a network stream arrives.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the gap between a simulated source's bursts; its timing is the source's own"
+)]
+fn burst_pause() {
+    thread::sleep(Duration::from_millis(20));
 }

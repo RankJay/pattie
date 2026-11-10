@@ -501,6 +501,18 @@ impl Ring {
         unsafe { vd_ring_write_pcm16(&mut *self.view, src.as_ptr(), src.len() as u32) };
     }
 
+    /// After a Microphone pass: the driver publishes its read position at `ns`.
+    pub fn driver_publish_read_clock(&mut self, ns: u64) {
+        // SAFETY: `view` was attached to `self.memory`, which lives as long as it.
+        unsafe { vd_ring_publish_read_clock(&mut *self.view, ns) };
+    }
+
+    /// After a Speaker pass: the driver publishes its write position at `ns`.
+    pub fn driver_publish_write_clock(&mut self, ns: u64) {
+        // SAFETY: `view` was attached to `self.memory`, which lives as long as it.
+        unsafe { vd_ring_publish_write_clock(&mut *self.view, ns) };
+    }
+
     /// A recording starts: the driver drops stale Microphone audio, keeping at
     /// most `keep_frames` of the newest (ADR 0014).
     pub fn driver_skip_stale(&mut self, keep_frames: u32) {

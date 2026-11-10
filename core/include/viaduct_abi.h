@@ -122,15 +122,31 @@ typedef struct vd_remove_device_request {
 /* Largest Ring the driver will pin: the header plus VD_RING_MAX_FRAMES frames. */
 #define VD_RING_MAX_BYTES (192u + VD_RING_MAX_FRAMES * 4u)
 
+/*
+ * A side's clock (ADR 0022): after each pass the system's side (the driver,
+ * PipeWire's callback) publishes "my counter was `frames` at `ns`", `ns` being
+ * nanoseconds of the OS clock apps measure time with (Windows: the performance
+ * counter; Linux: CLOCK_MONOTONIC). A seqlock: `seq` is odd while the pair is
+ * being written; a reader retries if it saw an odd or changed `seq`. The app's
+ * side never publishes one and leaves its own all zero.
+ */
+typedef struct vd_ring_clock {
+    uint64_t seq;
+    uint64_t frames;
+    uint64_t ns;
+} vd_ring_clock;
+
 typedef struct vd_ring_header {
     /* Writer's line: only the writing side stores here. */
     uint64_t write_frames;
     uint64_t overflow_frames;
-    uint8_t writer_pad[48];   /* reserved: the writing side's clock (ADR 0017); zero */
+    vd_ring_clock writer_clock; /* a Speaker's: the driver writes */
+    uint8_t writer_pad[24];   /* reserved; zero */
     /* Reader's line: only the reading side stores here. */
     uint64_t read_frames;
     uint64_t gap_frames;
-    uint8_t reader_pad[48];   /* reserved: the reading side's clock (ADR 0017); zero */
+    vd_ring_clock reader_clock; /* a Microphone's: the driver reads */
+    uint8_t reader_pad[24];   /* reserved; zero */
     /* Fixed by the SDK before Create Device. */
     uint32_t capacity_frames;
     uint8_t config_pad[60];   /* reserved: sample rate, channels (ADR 0017); zero */

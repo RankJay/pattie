@@ -86,15 +86,25 @@ fn a_microphone_carries_the_apps_audio_to_a_recording() {
     let mut writer = mic.writer().unwrap();
     let file = std::env::temp_dir().join(format!("viaduct-mic-{}.wav", std::process::id()));
     let stop = AtomicBool::new(false);
+    let mut clocks = Vec::new();
 
     std::thread::scope(|scope| {
-        // The app: 10 ms of tone every 10 ms, a little ahead of the listener.
+        // The device's clock (ADR 0022), read twice a second apart while recorded.
+        let clocks = &mut clocks;
+        let mic = &mic;
+        scope.spawn(move || {
+            for _ in 0..2 {
+                pause(1_000);
+                clocks.push((mic.clock(), Instant::now()));
+            }
+        });
+        // The app: 10 ms of tone at a time, paced by the SDK so the Ring never
+        // runs dry (the clock's frames count only audio taken, not Gap).
         scope.spawn(|| {
             let (mut phase, mut chunk) = (0.0, [0.0f32; 480]);
             while !stop.load(Ordering::Relaxed) {
                 tone(&mut chunk, &mut phase);
-                let _ = writer.write(&chunk);
-                pause(10);
+                let _ = writer.write_paced(&chunk, Instant::now() + Duration::from_secs(1));
             }
         });
         let recorded = Command::new("timeout")
@@ -114,6 +124,15 @@ fn a_microphone_carries_the_apps_audio_to_a_recording() {
             "pw-record: {recorded}"
         );
     });
+
+    // PipeWire stamps each cycle: recent, and advancing at about 48 kHz.
+    let [(Some(first), read_first), (Some(second), _)] = clocks[..] else {
+        panic!("no clock while recording: {clocks:?}");
+    };
+    assert!(read_first.saturating_duration_since(first.at) < Duration::from_millis(100));
+    let seconds = (second.at - first.at).as_secs_f64();
+    let rate = (second.frames - first.frames) as f64 / seconds;
+    assert!((rate - 48_000.0).abs() < 480.0, "{rate:.0} frames a second");
 
     let samples = wav_samples(&std::fs::read(&file).unwrap());
     let _ = std::fs::remove_file(&file);

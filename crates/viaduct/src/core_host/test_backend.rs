@@ -9,6 +9,8 @@
 
 use super::{HostTransport, Node, NodeSpec, Nodes, RingRef};
 use crate::Error;
+use crate::Kind;
+use crate::clock::os_now_ns;
 use crate::doorbell::Ringer;
 use crate::transport::Transport;
 use std::collections::HashMap;
@@ -108,12 +110,20 @@ impl TestBackend {
     /// The audio callback of a Microphone pulls `count` frames. `None` if no live
     /// Device has that ID.
     pub fn driver_read(&self, device_id: u32, count: usize) -> Option<Vec<f32>> {
+        self.driver_read_at(device_id, count, os_now_ns())
+    }
+
+    /// As `driver_read`, with the pass published as happening at `ns` (the
+    /// clock pair's nanoseconds): virtual time, for runs of hours in seconds.
+    pub fn driver_read_at(&self, device_id: u32, count: usize, ns: u64) -> Option<Vec<f32>> {
         let mut rings = self.rings.lock().unwrap_or_else(PoisonError::into_inner);
         let (ring, wake) = rings.get_mut(&device_id)?;
         let mut out = vec![0.0f32; count];
         // SAFETY: the entry exists, so the Device is live, and the lock makes this
         // the Ring's only user.
         unsafe { ring.read(&mut out) };
+        // SAFETY: as above.
+        unsafe { ring.publish_clock(Kind::Microphone, ns) };
         wake.ring();
         Some(out)
     }
@@ -126,6 +136,8 @@ impl TestBackend {
         };
         // SAFETY: as in `driver_read`.
         unsafe { ring.write(samples) };
+        // SAFETY: as above.
+        unsafe { ring.publish_clock(Kind::Speaker, os_now_ns()) };
         wake.ring();
         true
     }

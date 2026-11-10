@@ -178,7 +178,14 @@ static VOID VdEvtStreamTimer(WDFTIMER Timer)
         } else {
             vd_ring_write(device->Ring, (const float *)packet, frames);
         }
-        /* Wake the app's paced writer, reader or playout (ADR 0021). */
+        /* The clock pair (ADR 0022): how far this side has got, and when, in
+         * nanoseconds of the performance counter, as apps read it. */
+        if (device->Kind == VD_KIND_MICROPHONE) {
+            vd_ring_publish_read_clock(device->Ring, vd_clock_ns(VdNow(), streamCtx->TickHz));
+        } else {
+            vd_ring_publish_write_clock(device->Ring, vd_clock_ns(VdNow(), streamCtx->TickHz));
+        }
+                /* Wake the app's paced writer, reader or playout (ADR 0021). */
         (void)KeSetEvent(device->WakeEvent, IO_NO_INCREMENT, FALSE);
         ExReleaseRundownProtection(&device->Rundown);
     } else if (device->Kind == VD_KIND_MICROPHONE) {

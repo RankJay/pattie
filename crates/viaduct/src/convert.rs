@@ -305,7 +305,7 @@ fn gcd(mut a: u32, mut b: u32) -> u32 {
 }
 
 /// The modified Bessel function of the first kind, order zero, by its series.
-fn bessel_i0(x: f64) -> f64 {
+pub(crate) fn bessel_i0(x: f64) -> f64 {
     let (mut sum, mut term, mut k) = (1.0, 1.0, 1.0);
     while term > sum * 1e-12 {
         term *= (x / (2.0 * k)).powi(2);

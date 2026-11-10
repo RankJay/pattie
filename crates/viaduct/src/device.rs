@@ -4,6 +4,7 @@ use crate::Error;
 use crate::abi;
 use crate::convert::Format;
 use crate::doorbell::Doorbell;
+use crate::live::LiveWriter;
 use crate::mmcss::ProAudio;
 use crate::playout::Playout;
 use crate::ring::RingMemory;
@@ -12,7 +13,7 @@ use crate::transport::Transport;
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// Whether a Device is a microphone (the app writes audio others hear) or a
 /// speaker (others play audio the app reads).
@@ -199,7 +200,62 @@ impl fmt::Debug for DeviceBuilder {
     }
 }
 
+/// Where the system's side of a Device was at a moment (ADR 0022): its counter
+/// had reached `frames` (a Microphone: frames taken; a Speaker: frames played to
+/// it) at `at`, the end of the system's latest pass over the Ring. Frames are
+/// positions in the app's audio: silence the system played because a
+/// Microphone's Ring ran dry (Gap) isn't counted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ClockPoint {
+    /// The system's frame count at `at`.
+    pub frames: u64,
+    /// When the pass ran.
+    pub at: Instant,
+}
+
+/// What [`Reader::read_timed`] read: how many frames, and when the first of them
+/// was played to the Speaker (`None` if none were read, or before the system's
+/// first pass).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Timed {
+    /// Frames read.
+    pub frames: usize,
+    /// When the system played the first of them.
+    pub first_at: Option<Instant>,
+}
+
+/// The time of frame `position`, from the clock pair `(frames, at)` at the
+/// nominal 48 kHz: the pair is at most one pass old, too recent for drift to show.
+fn time_of(position: u64, clock: ClockPoint) -> Instant {
+    let rate = u64::from(V0_FORMAT.0);
+    let span = |frames: u64| Duration::from_nanos(frames * 1_000_000_000 / rate);
+    if position >= clock.frames {
+        clock.at + span(position - clock.frames)
+    } else {
+        clock
+            .at
+            .checked_sub(span(clock.frames - position))
+            .unwrap_or(clock.at)
+    }
+}
+
+impl Inner {
+    fn clock(&self) -> Option<ClockPoint> {
+        let (frames, ns) = self.ring.clock(self.kind == Kind::Microphone)?;
+        Some(ClockPoint {
+            frames,
+            at: crate::clock::to_instant(ns),
+        })
+    }
+}
+
 impl Device {
+    /// Where the system was at its latest pass over this Device's Ring: the
+    /// device's clock. `None` until its stream has run once.
+    pub fn clock(&self) -> Option<ClockPoint> {
+        self.inner.clock()
+    }
+
     /// Starts configuring a Device: a Microphone, 48 kHz mono, with a
     /// 4,096-frame Ring, until told otherwise.
     pub fn builder() -> DeviceBuilder {
@@ -231,6 +287,16 @@ impl Device {
     /// or channel count the converter doesn't take.
     pub fn playout_from(&self, input: Format) -> Result<Playout, Error> {
         Playout::start(self.inner.clone(), input)
+    }
+
+    /// A Microphone's input for a *live* source: audio relayed in real time from
+    /// something with its own clock (a network call, a capture card), pushed as
+    /// it arrives in `input`'s format. It's held in a jitter buffer at about
+    /// 40 ms, and kept there for hours by resampling a few ppm to the device's
+    /// real rate (drift compensation, ADR 0022). For a voice agent's replies,
+    /// which arrive in bursts, use [`Device::playout`]. Takes the writer slot.
+    pub fn live_writer(&self, input: Format) -> Result<LiveWriter, Error> {
+        LiveWriter::start(self.inner.clone(), input)
     }
 
     /// The shared parts, for the crate's own modules.
@@ -285,6 +351,18 @@ impl Reader {
     /// Takes up to `out.len()` 48 kHz mono samples without blocking; returns how many.
     pub fn read(&mut self, out: &mut [f32]) -> Result<usize, Error> {
         Ok(self.inner.ring.read(out))
+    }
+
+    /// As [`Reader::read_paced`], also saying when the system played the first
+    /// frame read: the reference an echo canceller aligns the microphone with.
+    pub fn read_timed(&mut self, out: &mut [f32], deadline: Instant) -> Result<Timed, Error> {
+        let first = self.inner.ring.taken();
+        let frames = self.read_paced(out, deadline)?;
+        let first_at = (frames > 0)
+            .then(|| self.inner.clock())
+            .flatten()
+            .map(|clock| time_of(first, clock));
+        Ok(Timed { frames, first_at })
     }
 
     /// Takes up to `out.len()` samples, blocking until there are some: returns
@@ -385,6 +463,14 @@ impl Writer {
             }
             self.inner.doorbell.wait(Some(deadline - now));
         }
+    }
+
+    /// When the system will take the next frame written (after what's already in
+    /// the Ring), for keeping audio in step with video. `None` before the
+    /// system's first pass.
+    pub fn next_play_time(&self) -> Option<Instant> {
+        let clock = self.inner.clock()?;
+        Some(time_of(self.inner.ring.written(), clock))
     }
 
     /// Frames the system has taken from this Microphone since it was created:

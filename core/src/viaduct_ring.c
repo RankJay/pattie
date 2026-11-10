@@ -39,7 +39,33 @@ vd_status vd_ring_attach(vd_ring *ring, void *memory, size_t memory_len)
     ring->gap_frames = 0;
     ring->write_frames = 0;
     ring->overflow_frames = 0;
+    ring->clock_seq = 0;
     return VD_OK;
+}
+
+/*
+ * The seqlock's writer. Every store is a release store, so each is ordered after
+ * all the stores before it: a reader that sees the new pair saw `seq` go odd
+ * first, and one that sees `seq` even again saw the whole pair.
+ */
+static void vd_publish_clock(vd_ring *ring, vd_ring_clock *clock, uint64_t frames,
+                             uint64_t now_ns)
+{
+    ring->clock_seq += 2u; /* our own copy: the app can't skew it */
+    vd_store_release_u64(&clock->seq, ring->clock_seq - 1u);
+    vd_store_release_u64(&clock->frames, frames);
+    vd_store_release_u64(&clock->ns, now_ns);
+    vd_store_release_u64(&clock->seq, ring->clock_seq);
+}
+
+void vd_ring_publish_read_clock(vd_ring *ring, uint64_t now_ns)
+{
+    vd_publish_clock(ring, &ring->shared->reader_clock, ring->read_frames, now_ns);
+}
+
+void vd_ring_publish_write_clock(vd_ring *ring, uint64_t now_ns)
+{
+    vd_publish_clock(ring, &ring->shared->writer_clock, ring->write_frames, now_ns);
 }
 
 /*

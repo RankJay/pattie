@@ -2,6 +2,7 @@
 //! the app's own process. `shim.c` allocates its state, so `vd_core` and
 //! `vd_owner` stay opaque on this side.
 
+use crate::Kind;
 use std::ffi::c_void;
 use std::ptr::NonNull;
 
@@ -47,6 +48,8 @@ unsafe extern "C" {
     fn vd_core_device_ring(core: *mut VdCore, device_id: u32) -> *mut VdRing;
     fn vd_ring_read(ring: *mut VdRing, dst: *mut f32, count: u32);
     fn vd_ring_write(ring: *mut VdRing, src: *const f32, count: u32);
+    fn vd_ring_publish_read_clock(ring: *mut VdRing, now_ns: u64);
+    fn vd_ring_publish_write_clock(ring: *mut VdRing, now_ns: u64);
     #[cfg_attr(
         not(target_os = "linux"),
         allow(
@@ -192,6 +195,21 @@ impl RingRef {
         let count = u32::try_from(samples.len()).unwrap_or(u32::MAX);
         // SAFETY: as in `read`; the buffer holds at least `count` frames.
         unsafe { vd_ring_write(self.0.as_ptr(), samples.as_ptr(), count) };
+    }
+
+    /// After a pass: publishes the read position (a Microphone) or the write
+    /// position (a Speaker) at `now_ns` as the Ring's clock pair (ADR 0022).
+    ///
+    /// # Safety
+    ///
+    /// As for [`RingRef::read`].
+    pub(crate) unsafe fn publish_clock(&mut self, kind: Kind, now_ns: u64) {
+        match kind {
+            // SAFETY: as in `read`.
+            Kind::Microphone => unsafe { vd_ring_publish_read_clock(self.0.as_ptr(), now_ns) },
+            // SAFETY: as in `read`.
+            Kind::Speaker => unsafe { vd_ring_publish_write_clock(self.0.as_ptr(), now_ns) },
+        }
     }
 
     #[cfg_attr(

@@ -1,6 +1,8 @@
 //! Seam C: the clock (ADR 0007, ADR 0008).
 
-use viaduct_core_tests::ffi::{vd_clock_frames, vd_clock_next_pass, vd_clock_ticks_for};
+use viaduct_core_tests::ffi::{
+    vd_clock_frames, vd_clock_next_pass, vd_clock_ns, vd_clock_ticks_for,
+};
 
 const QPC_HZ: u64 = 10_000_000; // the usual Windows performance-counter rate
 
@@ -65,6 +67,33 @@ fn ticks_for_1000_days_of_frames_do_not_overflow() {
     let ticks = unsafe { vd_clock_ticks_for(frames, QPC_HZ, 48_000) };
 
     assert_eq!(ticks, 1000 * 86_400 * QPC_HZ);
+}
+
+#[test]
+fn ticks_become_nanoseconds_exactly_at_the_usual_counter_rate() {
+    // SAFETY: a pure C function of plain integers: no pointers, no state.
+    let ns = unsafe { vd_clock_ns(12_345_678, QPC_HZ) };
+
+    assert_eq!(ns, 1_234_567_800);
+}
+
+#[test]
+fn nanoseconds_from_an_odd_counter_rate_round_down() {
+    // The old ACPI timer's rate: 1 tick is 279.36... ns.
+    // SAFETY: as above.
+    let ns = unsafe { vd_clock_ns(3, 3_579_545) };
+
+    assert_eq!(ns, 838); // 838.09...
+}
+
+#[test]
+fn a_thousand_days_of_ticks_become_nanoseconds_without_overflow() {
+    let ticks = 1000 * 86_400 * QPC_HZ + 7;
+
+    // SAFETY: as above.
+    let ns = unsafe { vd_clock_ns(ticks, QPC_HZ) };
+
+    assert_eq!(ns, 1000 * 86_400 * 1_000_000_000 + 700);
 }
 
 /// One 10 ms packet at 48 kHz, in ticks.

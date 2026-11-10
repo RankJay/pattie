@@ -288,6 +288,7 @@ VMware issue.
 | `viaduct-cli mic "<name>" [--tone <hz>]` | Creates a mic and streams a sine tone into it (440 Hz by default) until Enter |
 | `viaduct-cli speaker "<name>"` | Creates a speaker and shows a level meter of what's played to it |
 | `viaduct-cli measure mic\|speaker "<name>" [--seconds 60]` | Opens the endpoint the way Zoom does (WASAPI) and reports latency, glitches, Gap and Overflow |
+| `viaduct-cli measure drift "<name>" [--seconds 3600] [--ppm 50] [--uncorrected]` | Feeds a live source that many ppm off the device through a `LiveWriter` and logs its latency every 10 s as CSV: drift compensation over hours (ADR 0022) |
 | `viaduct-cli install <package folder or viaduct.inf>` | **Admin.** Creates the root device if missing and installs the driver. Safe to repeat. |
 | `viaduct-cli uninstall` | **Admin.** Removes the root device, leftover endpoints and the driver package |
 

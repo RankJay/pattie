@@ -95,6 +95,7 @@ fn struct_sizes_match() {
         size_of::<rust::RemoveDeviceRequest>(),
         size_of::<rust::ReplyEnvelope>(),
         size_of::<rust::RingHeader>(),
+        size_of::<rust::RingClock>(),
     ];
     let c_sizes = [
         size_of::<c::vd_hello_request>(),
@@ -104,6 +105,7 @@ fn struct_sizes_match() {
         size_of::<c::vd_remove_device_request>(),
         size_of::<c::vd_reply_envelope>(),
         size_of::<c::vd_ring_header>(),
+        size_of::<c::vd_ring_clock>(),
     ];
 
     assert_eq!(rust_sizes, c_sizes);
@@ -124,6 +126,10 @@ fn field_offsets_match() {
         offset_of!(rust::RingHeader, read_frames),
         offset_of!(rust::RingHeader, gap_frames),
         offset_of!(rust::RingHeader, capacity_frames),
+        offset_of!(rust::RingHeader, writer_clock),
+        offset_of!(rust::RingHeader, reader_clock),
+        offset_of!(rust::RingClock, frames),
+        offset_of!(rust::RingClock, ns),
     ];
     let c_offsets = [
         offset_of!(c::vd_hello_request, minor),
@@ -138,6 +144,10 @@ fn field_offsets_match() {
         offset_of!(c::vd_ring_header, read_frames),
         offset_of!(c::vd_ring_header, gap_frames),
         offset_of!(c::vd_ring_header, capacity_frames),
+        offset_of!(c::vd_ring_header, writer_clock),
+        offset_of!(c::vd_ring_header, reader_clock),
+        offset_of!(c::vd_ring_clock, frames),
+        offset_of!(c::vd_ring_clock, ns),
     ];
 
     assert_eq!(rust_offsets, c_offsets);

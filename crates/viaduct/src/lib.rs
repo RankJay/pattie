@@ -31,15 +31,19 @@
 
 #[doc(hidden)]
 pub mod abi;
+mod adaptive;
+mod clock;
 mod convert;
 #[cfg(any(target_os = "linux", feature = "test-backend"))]
 mod core_host;
 mod device;
 mod doorbell;
+mod drift;
 mod error;
 mod identity;
 #[cfg(target_os = "linux")]
 mod linux;
+mod live;
 mod mmcss;
 mod playout;
 mod ring;
@@ -50,7 +54,8 @@ pub mod transport;
 mod windows;
 
 pub use convert::{Converter, Encoding, Format};
-pub use device::{Device, DeviceBuilder, Kind, Reader, Stats, Writer};
+pub use device::{ClockPoint, Device, DeviceBuilder, Kind, Reader, Stats, Timed, Writer};
 pub use error::Error;
 pub use identity::stable_id;
+pub use live::{LiveStats, LiveWriter};
 pub use playout::{Interrupted, Playout};

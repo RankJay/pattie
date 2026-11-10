@@ -84,6 +84,12 @@ contract_suite!(
     wait_idle_is_true_once_a_reply_has_played,
     read_paced_returns_as_soon_as_the_system_plays_audio,
     read_paced_returns_nothing_once_its_deadline_passes,
+    a_microphones_clock_says_how_far_and_when_the_system_last_took,
+    a_speakers_clock_says_how_far_and_when_the_system_last_played,
+    read_timed_says_when_the_first_frame_read_was_played,
+    next_play_time_says_when_the_next_frame_written_will_be_taken,
+    a_live_writers_audio_reaches_the_system_after_its_buffer_fills,
+    a_live_writer_holds_the_writer_slot_and_only_on_a_microphone,
 );
 
 fn creating_a_microphone_gives_a_device_with_id_1(backend: &dyn Backend) {
@@ -583,4 +589,116 @@ fn read_paced_returns_nothing_once_its_deadline_passes(backend: &dyn Backend) {
 
     assert_eq!(got, 0);
     assert!(started.elapsed() >= Duration::from_millis(14)); // a timer tick early at most
+}
+
+/// `at` lies between two Instants, give or take the clock conversion's error.
+fn between(at: Instant, from: Instant, to: Instant) -> bool {
+    let slack = Duration::from_millis(1);
+    at + slack >= from && at <= to + slack
+}
+
+fn a_microphones_clock_says_how_far_and_when_the_system_last_took(backend: &dyn Backend) {
+    let mic = builder(backend).name("Agent Mic").create().unwrap();
+    let mut tx = mic.writer().unwrap();
+    tx.write(&[0.5; 960]).unwrap();
+    let before_any_pass = mic.clock();
+
+    let from = Instant::now();
+    backend.driver_read(mic.id(), 480);
+    let to = Instant::now();
+    let clock = mic.clock().unwrap();
+
+    assert!(before_any_pass.is_none());
+    assert_eq!(clock.frames, 480);
+    assert!(between(clock.at, from, to));
+}
+
+fn a_speakers_clock_says_how_far_and_when_the_system_last_played(backend: &dyn Backend) {
+    let speaker = builder(backend)
+        .name("Agent Speaker")
+        .kind(Kind::Speaker)
+        .create()
+        .unwrap();
+
+    let from = Instant::now();
+    backend.driver_write(speaker.id(), &[0.25; 480]);
+    backend.driver_write(speaker.id(), &[0.25; 480]);
+    let to = Instant::now();
+    let clock = speaker.clock().unwrap();
+
+    assert_eq!(clock.frames, 960);
+    assert!(between(clock.at, from, to));
+}
+
+const TEN_MS: Duration = Duration::from_millis(10);
+
+fn read_timed_says_when_the_first_frame_read_was_played(backend: &dyn Backend) {
+    let speaker = builder(backend)
+        .name("Agent Speaker")
+        .kind(Kind::Speaker)
+        .create()
+        .unwrap();
+    let mut rx = speaker.reader().unwrap();
+    backend.driver_write(speaker.id(), &[0.25; 480]);
+    rx.read(&mut [0.0; 480]).unwrap();
+
+    // One 10 ms packet, played by a pass between `from` and `to`: its first
+    // frame went out 10 ms before the pass ended.
+    let from = Instant::now();
+    backend.driver_write(speaker.id(), &[0.5; 480]);
+    let to = Instant::now();
+    let timed = rx
+        .read_timed(&mut [0.0; 960], Instant::now() + Duration::from_secs(1))
+        .unwrap();
+
+    assert_eq!(timed.frames, 480);
+    assert!(between(timed.first_at.unwrap(), from - TEN_MS, to - TEN_MS));
+}
+
+fn next_play_time_says_when_the_next_frame_written_will_be_taken(backend: &dyn Backend) {
+    let mic = builder(backend).name("Agent Mic").create().unwrap();
+    let mut tx = mic.writer().unwrap();
+    let before_any_pass = tx.next_play_time();
+    tx.write(&[0.5; 960]).unwrap();
+
+    let from = Instant::now();
+    backend.driver_read(mic.id(), 480);
+    let to = Instant::now();
+    // 480 frames are still ahead of the next one written: 10 ms after the pass.
+    let next = tx.next_play_time().unwrap();
+
+    assert!(before_any_pass.is_none());
+    assert!(between(next, from + TEN_MS, to + TEN_MS));
+}
+
+fn a_live_writers_audio_reaches_the_system_after_its_buffer_fills(backend: &dyn Backend) {
+    let mic = builder(backend).name("Agent Mic").create().unwrap();
+    let live = mic.live_writer(viaduct::Format::DEVICE).unwrap();
+    live.push(&[0.5; 9_600]); // 200 ms from the source
+
+    let (taken, ()) = system_pulls_while(backend, &mic, Duration::from_millis(300), || {});
+
+    let audio = taken.iter().filter(|&&s| (s - 0.5).abs() < 1e-3).count();
+    assert!(audio >= 4_800, "{audio} frames of the source's audio");
+    assert_eq!(live.stats().dropped_frames, 0);
+}
+
+fn a_live_writer_holds_the_writer_slot_and_only_on_a_microphone(backend: &dyn Backend) {
+    let mic = builder(backend).name("Agent Mic").create().unwrap();
+    let speaker = builder(backend)
+        .name("Agent Speaker")
+        .kind(Kind::Speaker)
+        .create()
+        .unwrap();
+
+    let live = mic.live_writer(viaduct::Format::DEVICE).unwrap();
+    let second = mic.writer().err();
+    drop(live);
+
+    assert_eq!(second, Some(viaduct::Error::AlreadyTaken));
+    assert!(mic.writer().is_ok());
+    assert_eq!(
+        speaker.live_writer(viaduct::Format::DEVICE).err(),
+        Some(viaduct::Error::WrongKind)
+    );
 }

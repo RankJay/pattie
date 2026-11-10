@@ -101,12 +101,67 @@ pub struct ReplyEnvelope {
 pub struct RingHeader {
     pub write_frames: u64,
     pub overflow_frames: u64,
-    pub writer_pad: [u8; 48],
+    /// A Speaker's clock pair: the driver writes it.
+    pub writer_clock: RingClock,
+    pub writer_pad: [u8; 24],
     pub read_frames: u64,
     pub gap_frames: u64,
-    pub reader_pad: [u8; 48],
+    /// A Microphone's clock pair: the driver reads it.
+    pub reader_clock: RingClock,
+    pub reader_pad: [u8; 24],
     pub capacity_frames: u32,
     pub config_pad: [u8; 60],
+}
+
+/// A side's clock pair (ADR 0022): its counter was `frames` at `ns`, under the
+/// seqlock `seq` (odd while being written).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RingClock {
+    pub seq: u64,
+    pub frames: u64,
+    pub ns: u64,
+}
+
+/// Reads a clock pair as `(frames, ns)`: the seqlock's reader side, matching the
+/// core's writer (`viaduct_ring.c`). `None` if nothing was published yet, or the
+/// pair stayed mid-write for as long as it's worth waiting (a writer takes
+/// nanoseconds; one stuck odd has died or been tampered with).
+///
+/// # Safety
+///
+/// `clock` points at a live, 8-byte-aligned `RingClock` that stays valid for the
+/// call, and that others change only with atomic stores.
+pub unsafe fn read_clock(clock: *const RingClock) -> Option<(u64, u64)> {
+    use std::mem::offset_of;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    let field = |offset: usize| {
+        // SAFETY: the caller's contract: the pair is live, so this offset is
+        // inside it.
+        let pointer = unsafe { clock.byte_add(offset) }.cast::<u64>().cast_mut();
+        // SAFETY: an aligned u64 others change only atomically.
+        unsafe { AtomicU64::from_ptr(pointer) }
+    };
+    let seq = field(offset_of!(RingClock, seq));
+    let frames = field(offset_of!(RingClock, frames));
+    let ns = field(offset_of!(RingClock, ns));
+    for _ in 0..1_000 {
+        let before = seq.load(Ordering::Acquire);
+        if before == 0 {
+            return None;
+        }
+        if before % 2 == 0 {
+            // Acquire loads: each is ordered before the next, so the second
+            // `seq` is read after the pair.
+            let pair = (frames.load(Ordering::Acquire), ns.load(Ordering::Acquire));
+            if seq.load(Ordering::Acquire) == before {
+                return Some(pair);
+            }
+        }
+        std::hint::spin_loop();
+    }
+    None
 }
 
 /// The bytes of an ABI struct, as sent to the driver.

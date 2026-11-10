@@ -14,6 +14,12 @@ uint64_t vd_clock_frames(uint64_t start_ticks, uint64_t now_ticks,
          + (elapsed % tick_hz) * sample_rate / tick_hz;
 }
 
+uint64_t vd_clock_ns(uint64_t ticks, uint64_t tick_hz)
+{
+    /* Whole seconds and a remainder, as in vd_clock_frames: exact, no overflow. */
+    return (ticks / tick_hz) * 1000000000u + (ticks % tick_hz) * 1000000000u / tick_hz;
+}
+
 uint64_t vd_clock_ticks_for(uint64_t frames, uint64_t tick_hz, uint32_t sample_rate)
 {
     /*
