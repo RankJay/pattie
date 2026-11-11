@@ -1,0 +1,72 @@
+[build-system]
+requires = ["maturin>=1.16,<2"]
+build-backend = "maturin"
+
+[project]
+name = "viaduct-audio"
+version = "0.1.0"
+description = "Virtual microphones and speakers that every app sees as real audio devices"
+readme = "README.md"
+requires-python = ">=3.14"
+license = "MIT OR Apache-2.0"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Rust",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Typing :: Typed",
+]
+# No runtime dependencies: nothing to install besides this package.
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "maturin>=1.16,<2",
+    "pytest>=9",
+    "ruff>=0.14",
+    "ty>=0.0.1a30",
+    "websockets>=17.4",
+]
+
+[tool.maturin]
+module-name = "viaduct._viaduct"
+python-source = "python"
+
+[tool.uv]
+# The project's own builds include the SDK's test backend (viaduct._testing) so
+# the tests run without the driver. Wheels for users are built by release.yml
+# with plain `maturin build`, which leaves it out.
+config-settings = { build-args = "--features test-backend" }
+# Rebuild the extension whenever its Rust or the SDK's changes.
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "Cargo.toml" },
+    { file = "src/**/*.rs" },
+    { file = "../../crates/viaduct/Cargo.toml" },
+    { file = "../../crates/viaduct/src/**/*.rs" },
+    { file = "../../crates/viaduct/build.rs" },
+    { file = "../../core/**/*.{c,h}" },
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py314"
+line-length = 99
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "SIM", "RUF", "PT", "ASYNC", "PL"]
+ignore = [
+    "PLR2004", # tests compare against literal frame counts on purpose
+    "N818",    # the exception names are the SDK's error names (DuplicateName, ...)
+]
+
+[tool.ruff.lint.isort]
+# The package lives in python/, so ruff can't tell it's this project's own.
+known-first-party = ["viaduct"]
+
+[tool.ty.environment]
+python-version = "3.14"

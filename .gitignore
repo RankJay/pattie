@@ -7,3 +7,9 @@
 
 # Temporary
 .github/
+
+# Python binding: uv's virtual environment and build output
+bindings/python/.venv/
+__pycache__/
+*.pyd
+*.so

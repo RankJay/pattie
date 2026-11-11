@@ -1,0 +1,28 @@
+[package]
+name = "viaduct-python"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+description = "Python binding of the Viaduct SDK (ADR 0019), built with maturin as the viaduct-audio package"
+
+[lib]
+name = "_viaduct"
+crate-type = ["cdylib"]
+# A Python extension can't link a Rust test binary on its own: tests are the
+# pytest suite in tests/, run against the built module.
+test = false
+doctest = false
+
+[features]
+# Dev builds only (pyproject.toml, [tool.uv]): adds viaduct._testing, the SDK's
+# test backend, so pytest runs without the driver. Published wheels leave it out.
+test-backend = ["viaduct/test-backend"]
+
+[dependencies]
+viaduct = { path = "../../crates/viaduct" }
+# abi3-py314: one wheel for CPython 3.14 and every later version.
+# generate-import-lib: Windows builds need no Python install to link.
+pyo3 = { version = "0.30", features = ["abi3-py314", "extension-module", "generate-import-lib"] }
+
+[lints]
+workspace = true
