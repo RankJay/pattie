@@ -27,38 +27,19 @@ pub(crate) struct VdRing {
 /// `VD_MAX_DEVICES`: the most IDs `vd_core_owner_closed` reports.
 const MAX_DEVICES: usize = crate::abi::MAX_DEVICES as usize;
 
+// The host's own allocation helpers (`shim.c`), which have no header to check
+// against.
 unsafe extern "C" {
     fn vd_host_core_new() -> *mut VdCore;
     fn vd_host_core_free(core: *mut VdCore);
     fn vd_host_owner_new() -> *mut VdOwner;
     fn vd_host_owner_free(owner: *mut VdOwner);
-    fn vd_core_command(
-        core: *mut VdCore,
-        owner: *mut VdOwner,
-        command: u32,
-        input: *const c_void,
-        input_len: usize,
-        ring_memory: *mut c_void,
-        ring_len: usize,
-        output: *mut c_void,
-        output_cap: usize,
-        output_len: *mut usize,
-    ) -> u32;
-    fn vd_core_owner_closed(core: *mut VdCore, owner: *const VdOwner, removed: *mut u32) -> usize;
-    fn vd_core_device_ring(core: *mut VdCore, device_id: u32) -> *mut VdRing;
-    fn vd_ring_read(ring: *mut VdRing, dst: *mut f32, count: u32);
-    fn vd_ring_write(ring: *mut VdRing, src: *const f32, count: u32);
-    fn vd_ring_publish_read_clock(ring: *mut VdRing, now_ns: u64);
-    fn vd_ring_publish_write_clock(ring: *mut VdRing, now_ns: u64);
-    #[cfg_attr(
-        not(target_os = "linux"),
-        allow(
-            dead_code,
-            reason = "the PipeWire node drops stale audio; test nodes don't"
-        )
-    )]
-    fn vd_ring_skip_stale(ring: *mut VdRing, keep_frames: u32);
 }
+
+// The C core's own functions (`viaduct_core.h`), in a file of their own:
+// core/tests includes the same file and checks every signature against bindgen's
+// reading of the header (`tests/ffi_mirror.rs`).
+include!("core_ffi/core_externs.rs");
 
 /// The core's Device table and rules. One per process (`super::process_core`), or
 /// one per test transport; always used behind a mutex, as the driver does.

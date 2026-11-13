@@ -8,9 +8,13 @@ use std::fmt;
 pub enum Error {
     /// The Viaduct driver isn't installed (or isn't running).
     DriverNotInstalled,
-    /// Linux: PipeWire isn't installed or isn't running (ADR 0018). Systems on
-    /// PulseAudio alone, such as Ubuntu 22.04 by default, need PipeWire first.
+    /// Linux: PipeWire isn't installed or isn't running (ADR 0018).
     AudioServerUnavailable,
+    /// Linux: PulseAudio is this user's sound server (Ubuntu 22.04 and Mint 21 by
+    /// default). Apps would record and play through it, and never see Viaduct's
+    /// devices, which live in PipeWire; the sound server needs switching to
+    /// PipeWire first (ADR 0018).
+    PulseAudioInUse,
     /// This user may not open the driver (ADR 0011).
     AccessDenied,
     /// No backend exists for this operating system yet.
@@ -47,6 +51,11 @@ impl fmt::Display for Error {
                 f,
                 "PipeWire is not running (Viaduct needs PipeWire on Linux)"
             ),
+            Error::PulseAudioInUse => write!(
+                f,
+                "PulseAudio is this system's sound server, so apps can't see Viaduct's devices: \
+                 switch the sound server to PipeWire (the default since Ubuntu 22.10 and Fedora 34)"
+            ),
             Error::AccessDenied => write!(f, "access to the Viaduct driver was denied"),
             Error::NoBackend => write!(f, "Viaduct has no backend for this operating system yet"),
             Error::VersionMismatch => write!(
@@ -80,9 +89,10 @@ mod tests {
     use super::Error;
 
     /// Every variant, so a new one without its own message fails here.
-    const ALL: [Error; 15] = [
+    const ALL: [Error; 16] = [
         Error::DriverNotInstalled,
         Error::AudioServerUnavailable,
+        Error::PulseAudioInUse,
         Error::AccessDenied,
         Error::NoBackend,
         Error::VersionMismatch,
@@ -106,6 +116,29 @@ mod tests {
 
         assert_eq!(messages.len(), ALL.len());
         assert!(messages.iter().all(|m| !m.is_empty()));
+    }
+
+    #[test]
+    fn the_pulseaudio_error_says_what_to_switch_to() {
+        let message = Error::PulseAudioInUse.to_string();
+
+        assert!(
+            message.contains("PulseAudio") && message.contains("PipeWire"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn no_message_has_runs_of_spaces() {
+        // A line continuation that lost its backslash leaves the next line's
+        // indent inside the message.
+        let spaced: Vec<String> = ALL
+            .iter()
+            .map(Error::to_string)
+            .filter(|message| message.contains("  "))
+            .collect();
+
+        assert!(spaced.is_empty(), "{spaced:?}");
     }
 
     #[test]
