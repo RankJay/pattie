@@ -28,8 +28,12 @@ pub(crate) struct PipeWireNodes;
 
 impl Nodes for PipeWireNodes {
     fn create(&self, spec: NodeSpec) -> Result<Box<dyn Node>, Error> {
-        let api = api().ok_or(Error::AudioServerUnavailable)?;
-        Ok(Box::new(PipeWireNode::new(api, spec)?))
+        let made = api()
+            .ok_or(Error::AudioServerUnavailable)
+            .and_then(|api| PipeWireNode::new(api, spec));
+        // In a Flatpak, "PipeWire out of reach" means a missing permission.
+        let node = made.map_err(|error| super::explain(error, super::in_flatpak()))?;
+        Ok(Box::new(node))
     }
 }
 

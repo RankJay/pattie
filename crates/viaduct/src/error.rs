@@ -15,6 +15,9 @@ pub enum Error {
     /// devices, which live in PipeWire; the sound server needs switching to
     /// PipeWire first (ADR 0018).
     PulseAudioInUse,
+    /// Linux: this app runs in a Flatpak sandbox that can't reach PipeWire. It
+    /// needs one permission, `--filesystem=xdg-run/pipewire-0:ro` (ADR 0018).
+    FlatpakNeedsPipeWire,
     /// This user may not open the driver (ADR 0011).
     AccessDenied,
     /// No backend exists for this operating system yet.
@@ -56,6 +59,11 @@ impl fmt::Display for Error {
                 "PulseAudio is this system's sound server, so apps can't see Viaduct's devices: \
                  switch the sound server to PipeWire (the default since Ubuntu 22.10 and Fedora 34)"
             ),
+            Error::FlatpakNeedsPipeWire => write!(
+                f,
+                "this Flatpak app can't reach PipeWire: give it \
+                 --filesystem=xdg-run/pipewire-0:ro (finish-args in its manifest)"
+            ),
             Error::AccessDenied => write!(f, "access to the Viaduct driver was denied"),
             Error::NoBackend => write!(f, "Viaduct has no backend for this operating system yet"),
             Error::VersionMismatch => write!(
@@ -89,10 +97,11 @@ mod tests {
     use super::Error;
 
     /// Every variant, so a new one without its own message fails here.
-    const ALL: [Error; 16] = [
+    const ALL: [Error; 17] = [
         Error::DriverNotInstalled,
         Error::AudioServerUnavailable,
         Error::PulseAudioInUse,
+        Error::FlatpakNeedsPipeWire,
         Error::AccessDenied,
         Error::NoBackend,
         Error::VersionMismatch,
@@ -124,6 +133,16 @@ mod tests {
 
         assert!(
             message.contains("PulseAudio") && message.contains("PipeWire"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn the_flatpak_error_names_the_permission() {
+        let message = Error::FlatpakNeedsPipeWire.to_string();
+
+        assert!(
+            message.contains("--filesystem=xdg-run/pipewire-0:ro"),
             "{message}"
         );
     }

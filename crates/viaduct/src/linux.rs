@@ -24,6 +24,21 @@ pub(crate) fn transport() -> Result<HostTransport, Error> {
     HostTransport::for_process(Arc::new(pipewire::PipeWireNodes), LEAD_FRAMES)
 }
 
+/// What a failure to reach PipeWire means here: in a Flatpak sandbox
+/// (`sandboxed`), the one permission the app lacks; anything else, as it is.
+fn explain(error: Error, sandboxed: bool) -> Error {
+    match error {
+        Error::AudioServerUnavailable if sandboxed => Error::FlatpakNeedsPipeWire,
+        other => other,
+    }
+}
+
+/// Whether this process runs in a Flatpak sandbox: Flatpak puts this file at
+/// the root of every sandbox it runs.
+fn in_flatpak() -> bool {
+    std::path::Path::new("/.flatpak-info").exists()
+}
+
 /// Whether a `pulseaudio` daemon runs as `uid`: then it is that user's sound
 /// server, whether or not PipeWire runs too (Ubuntu 22.04 runs PipeWire for
 /// screen sharing and PulseAudio for audio). PipeWire's own PulseAudio server is
@@ -126,6 +141,27 @@ mod tests {
         ]);
 
         assert!(!pulseaudio_serves(running, ME));
+    }
+
+    #[test]
+    fn pipewire_out_of_reach_in_a_flatpak_names_the_missing_permission() {
+        assert_eq!(
+            explain(Error::AudioServerUnavailable, true),
+            Error::FlatpakNeedsPipeWire
+        );
+    }
+
+    #[test]
+    fn outside_a_flatpak_pipewire_out_of_reach_stays_as_it_is() {
+        assert_eq!(
+            explain(Error::AudioServerUnavailable, false),
+            Error::AudioServerUnavailable
+        );
+    }
+
+    #[test]
+    fn other_errors_in_a_flatpak_stay_as_they_are() {
+        assert_eq!(explain(Error::DuplicateName, true), Error::DuplicateName);
     }
 
     #[test]

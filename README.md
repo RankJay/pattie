@@ -604,6 +604,24 @@ One of them, `a_device_comes_back_by_itself_after_pipewire_restarts`, restarts y
 user's PipeWire service to check that a Device returns on its own (brief Goal 4).
 In WSL that's harmless; on a desktop it briefly interrupts all audio.
 
+What an app on Linux needs (ADR 0018):
+
+- **PipeWire as the sound server.** Where PulseAudio is (Ubuntu 22.04 and Mint 21
+  by default), creating a Device fails with `Error::PulseAudioInUse`: apps would
+  never see it. PipeWire is the default since Ubuntu 22.10 and Fedora 34.
+- **In a Flatpak, one permission**, or creating a Device fails with
+  `Error::FlatpakNeedsPipeWire`:
+
+  ```yaml
+  finish-args:
+    - --filesystem=xdg-run/pipewire-0:ro
+  ```
+
+  One gap: names are held across apps with abstract Unix sockets, which live in
+  the network namespace. A Flatpak without network access (`--share=network`)
+  has a namespace of its own, so it can't see other apps' names, and two apps
+  could then create Devices with the same name.
+
 ### Lint rules
 
 Where they live, from widest to narrowest:

@@ -29,7 +29,7 @@ create_exception!(
     viaduct,
     AudioServerUnavailable,
     Error,
-    "Linux: PipeWire isn't running, or PulseAudio serves audio instead."
+    "Linux: PipeWire isn't running or reachable, or PulseAudio serves audio instead."
 );
 create_exception!(
     viaduct,
@@ -119,6 +119,7 @@ fn to_py(error: sdk::Error) -> PyErr {
         )),
         // Its own message says what to do; the fix depends on the distribution.
         sdk::Error::PulseAudioInUse => AudioServerUnavailable::new_err(text),
+        sdk::Error::FlatpakNeedsPipeWire => AudioServerUnavailable::new_err(text),
         sdk::Error::AccessDenied => AccessDenied::new_err(text),
         sdk::Error::NoBackend => NoBackend::new_err(text),
         sdk::Error::VersionMismatch => VersionMismatch::new_err(format!(
