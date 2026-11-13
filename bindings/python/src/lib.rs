@@ -6,8 +6,9 @@ use pyo3::buffer::PyBuffer;
 use pyo3::create_exception;
 use pyo3::exceptions::{PyException, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::sync::MutexExt;
+use pyo3::sync::{MutexExt, PyOnceLock};
 use pyo3::types::{PyBytes, PyMemoryView};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
 use std::time::{Duration, Instant};
 use viaduct as sdk;
@@ -154,6 +155,16 @@ fn lock<'a, T>(py: Python<'_>, mutex: &'a Mutex<T>) -> MutexGuard<'a, T> {
     mutex
         .lock_py_attached(py)
         .unwrap_or_else(PoisonError::into_inner)
+}
+
+/// The longest one wait inside a blocking call lasts. Between pieces the call
+/// checks whether close() was called (and for Ctrl+C), so close() never waits
+/// on a call that could wait forever, such as a write nobody records.
+const PIECE: Duration = Duration::from_millis(100);
+
+/// The end of the next piece of a wait that gives up at `deadline`.
+fn piece_end(deadline: Instant) -> Instant {
+    deadline.min(Instant::now() + PIECE)
 }
 
 /// The moment a wait gives up: `timeout` seconds from now, or about a year when
@@ -402,35 +413,244 @@ impl LossWatch {
     }
 }
 
-struct MicrophoneState {
-    device: sdk::Device,
-    /// Created by the first write, so a playout() can take the slot instead.
-    writer: Option<sdk::Writer>,
-    /// The app's format to the Device's own.
-    input: sdk::Converter,
-    watch: LossWatch,
+/// `at` on Python's `time.perf_counter()` clock, in seconds. It and `Instant`
+/// read the same counter (Windows: QPC; Linux: CLOCK_MONOTONIC), so this is a
+/// shift by the distance from now, accurate to about a microsecond.
+fn perf_seconds(py: Python<'_>, at: Instant) -> PyResult<f64> {
+    static PERF_COUNTER: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+    let perf: f64 = PERF_COUNTER
+        .import(py, "time", "perf_counter")?
+        .call0()?
+        .extract()?;
+    let now = Instant::now();
+    Ok(if at <= now {
+        perf - (now - at).as_secs_f64()
+    } else {
+        perf + (at - now).as_secs_f64()
+    })
 }
 
+/// Where the system's side of a Device had got to, and when (ADR 0022): its
+/// count had reached `frames` (48 kHz) at `at`, a `time.perf_counter()` time.
+#[pyclass(module = "viaduct", frozen)]
+struct Clock {
+    #[pyo3(get)]
+    frames: u64,
+    #[pyo3(get)]
+    at: f64,
+}
+
+impl Clock {
+    fn from_sdk(py: Python<'_>, clock: Option<sdk::ClockPoint>) -> PyResult<Option<Clock>> {
+        clock
+            .map(|clock| {
+                Ok(Clock {
+                    frames: clock.frames,
+                    at: perf_seconds(py, clock.at)?,
+                })
+            })
+            .transpose()
+    }
+}
+
+#[pymethods]
+impl Clock {
+    fn __repr__(&self) -> String {
+        format!("Clock(frames={}, at={:.6})", self.frames, self.at)
+    }
+}
+
+/// How a LiveWriter is doing.
+#[pyclass(module = "viaduct", frozen)]
+struct LiveStats {
+    /// 48 kHz frames waiting in its buffer: the latency it holds (about 40 ms).
+    #[pyo3(get)]
+    queued_frames: u64,
+    /// The drift correction in use, in ppm: positive when the source runs fast.
+    #[pyo3(get)]
+    correction_ppm: f64,
+    /// Frames played as silence because the source fell behind.
+    #[pyo3(get)]
+    starved_frames: u64,
+    /// Frames dropped because more than a second had piled up.
+    #[pyo3(get)]
+    dropped_frames: u64,
+}
+
+#[pymethods]
+impl LiveStats {
+    fn __repr__(&self) -> String {
+        format!(
+            "LiveStats(queued_frames={}, correction_ppm={:.1}, starved_frames={}, dropped_frames={})",
+            self.queued_frames, self.correction_ppm, self.starved_frames, self.dropped_frames
+        )
+    }
+}
+
+/// A LiveWriter's SDK object, shared with the microphone that handed it out.
+type LiveSlot = Arc<RwLock<Option<Arc<sdk::LiveWriter>>>>;
+
+/// A microphone's input for a live source (Microphone.live_writer()): audio
+/// relayed in real time from something with its own clock, held at about 40 ms
+/// and kept there for hours by drift compensation (ADR 0022).
+#[pyclass(module = "viaduct")]
+struct LiveWriter {
+    inner: LiveSlot,
+}
+
+impl LiveWriter {
+    fn get(&self) -> PyResult<Arc<sdk::LiveWriter>> {
+        self.inner
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+            .ok_or_else(|| PyValueError::new_err("this LiveWriter is closed"))
+    }
+}
+
+#[pymethods]
+impl LiveWriter {
+    /// Queues audio (in the writer's format) as it arrives from the source, and
+    /// returns at once. Returns how many 48 kHz frames were queued.
+    fn push(&self, data: &Bound<'_, PyAny>) -> PyResult<usize> {
+        let bytes = audio_bytes(data)?;
+        Ok(self.get()?.push_bytes(&bytes))
+    }
+
+    #[getter]
+    fn stats(&self) -> PyResult<LiveStats> {
+        let stats = self.get()?.stats();
+        Ok(LiveStats {
+            queued_frames: stats.queued_frames,
+            correction_ppm: stats.correction_ppm,
+            starved_frames: stats.starved_frames,
+            dropped_frames: stats.dropped_frames,
+        })
+    }
+
+    /// Stops playing and gives the microphone's writer back. Closing twice is fine.
+    fn close(&self) {
+        self.inner
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+    }
+
+    fn __enter__(slf: Py<Self>) -> Py<Self> {
+        slf
+    }
+
+    fn __exit__(
+        &self,
+        _kind: Option<&Bound<'_, PyAny>>,
+        _value: Option<&Bound<'_, PyAny>>,
+        _traceback: Option<&Bound<'_, PyAny>>,
+    ) -> bool {
+        self.close();
+        false
+    }
+}
+
+/// What a microphone handed out in place of write(): a Playout or a LiveWriter.
+/// Closing the microphone closes it too.
+enum Handed {
+    Playout(PlayoutSlot),
+    Live(LiveSlot),
+}
+
+/// How a microphone turns what write() is given into the Device's samples.
+enum Input {
+    /// Already the Device's format (48 kHz mono float): read as it is. `tail`
+    /// holds the bytes of a sample split across calls, as the Converter would.
+    Device { tail: Vec<u8> },
+    /// Any other format: through the SDK's Converter.
+    Convert(sdk::Converter),
+}
+
+impl Input {
+    fn new(format: sdk::Format) -> PyResult<Input> {
+        Ok(if format == sdk::Format::DEVICE {
+            Input::Device { tail: Vec::new() }
+        } else {
+            Input::Convert(sdk::Converter::new(format, sdk::Format::DEVICE).map_err(to_py)?)
+        })
+    }
+}
+
+/// write()'s side of a microphone: held for a whole paced write, so it has its
+/// own lock, apart from the Device that stats and close() need at any moment.
+struct Writing {
+    /// Created by the first write, so a playout() can take the slot instead.
+    writer: Option<sdk::Writer>,
+    input: Input,
+}
+
+impl Writing {
+    fn convert_input(&mut self, data: &Bound<'_, PyAny>) -> PyResult<Vec<f32>> {
+        let bytes = audio_bytes(data)?;
+        match &mut self.input {
+            Input::Convert(converter) => {
+                let mut converted = Vec::new();
+                converter.convert(&bytes, &mut converted);
+                Ok(f32_samples(&converted))
+            }
+            Input::Device { tail } if tail.is_empty() && bytes.len() % 4 == 0 => {
+                Ok(f32_samples(&bytes))
+            }
+            Input::Device { tail } => {
+                tail.extend_from_slice(&bytes);
+                let whole = tail.len() / 4 * 4;
+                let samples = f32_samples(&tail[..whole]);
+                tail.drain(..whole);
+                Ok(samples)
+            }
+        }
+    }
+}
+
+/// A Playout's SDK object, shared by the Python Playout and the microphone that
+/// handed it out, so closing the microphone ends it too. `None` once closed.
+type PlayoutSlot = Arc<RwLock<Option<Arc<sdk::Playout>>>>;
+
 /// A virtual microphone: audio the app writes is what other apps record.
+///
+/// Locks are always taken in this order, so no two calls wait on each other:
+/// `writing`, then `device`, then `handed`. Only `writing` is held while
+/// waiting for listeners.
 #[pyclass(module = "viaduct")]
 struct Microphone {
     id: u32,
     format: sdk::Format,
-    state: Mutex<Option<MicrophoneState>>,
+    watch: LossWatch,
+    /// Set by close() before it takes any lock: a waiting call stops at its next
+    /// piece, so close() never waits long.
+    closing: AtomicBool,
+    writing: Mutex<Writing>,
+    /// `None` once closed.
+    device: Mutex<Option<sdk::Device>>,
+    /// The Playout or LiveWriter this microphone handed out, if any.
+    handed: Mutex<Option<Handed>>,
 }
 
-impl MicrophoneState {
-    fn writer(&mut self) -> PyResult<&mut sdk::Writer> {
-        if self.writer.is_none() {
-            self.writer = Some(self.device.writer().map_err(to_py)?);
-        }
-        Ok(self.writer.as_mut().expect("set just above"))
+impl Microphone {
+    /// The Device's stats, or the "closed" error.
+    fn device_stats(&self, py: Python<'_>) -> PyResult<sdk::Stats> {
+        let device = lock(py, &self.device);
+        Ok(device.as_ref().ok_or_else(closed)?.stats())
     }
 
-    fn convert_input(&mut self, data: &Bound<'_, PyAny>) -> PyResult<Vec<f32>> {
-        let mut converted = Vec::new();
-        self.input.convert(&audio_bytes(data)?, &mut converted);
-        Ok(f32_samples(&converted))
+    /// The writer, created on first use; checks the microphone is open.
+    fn writer<'w>(
+        &self,
+        py: Python<'_>,
+        writing: &'w mut Writing,
+    ) -> PyResult<&'w mut sdk::Writer> {
+        let device = lock(py, &self.device);
+        let device = device.as_ref().ok_or_else(closed)?;
+        if writing.writer.is_none() {
+            writing.writer = Some(device.writer().map_err(to_py)?);
+        }
+        Ok(writing.writer.as_mut().expect("set just above"))
     }
 }
 
@@ -448,17 +668,19 @@ impl Microphone {
         _backend: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Microphone> {
         let format = Format::or_device(format);
-        let input = sdk::Converter::new(format, sdk::Format::DEVICE).map_err(to_py)?;
+        let input = Input::new(format)?;
         let device = create(name, sdk::Kind::Microphone, _backend)?;
         Ok(Microphone {
             id: device.id(),
             format,
-            state: Mutex::new(Some(MicrophoneState {
-                watch: LossWatch { strict },
-                device,
+            watch: LossWatch { strict },
+            closing: AtomicBool::new(false),
+            writing: Mutex::new(Writing {
                 writer: None,
                 input,
-            })),
+            }),
+            device: Mutex::new(Some(device)),
+            handed: Mutex::new(None),
         })
     }
 
@@ -479,12 +701,13 @@ impl Microphone {
 
     #[getter]
     fn closed(&self, py: Python<'_>) -> bool {
-        lock(py, &self.state).is_none()
+        lock(py, &self.device).is_none()
     }
 
     /// Writes `data` (in this microphone's format) at the pace listeners take it,
     /// blocking until all of it is in, so nothing is dropped. Returns how many
-    /// 48 kHz frames went in: all of them, unless `timeout` (seconds) ran out.
+    /// 48 kHz frames went in: all of them, unless `timeout` (seconds) ran out or
+    /// the microphone was closed from another thread meanwhile.
     #[pyo3(signature = (data, timeout = None))]
     fn write(
         &self,
@@ -493,17 +716,28 @@ impl Microphone {
         timeout: Option<f64>,
     ) -> PyResult<usize> {
         let deadline = deadline(timeout)?;
-        let mut guard = lock(py, &self.state);
-        let state = guard.as_mut().ok_or_else(closed)?;
-        let samples = state.convert_input(data)?;
-        let before = state.device.stats();
-        let writer = state.writer()?;
-        let written = py
-            .detach(|| writer.write_paced(&samples, deadline))
-            .map_err(to_py)?;
-        state
-            .watch
-            .check(py, before, state.device.stats(), "write()")?;
+        let mut writing = lock(py, &self.writing);
+        let samples = writing.convert_input(data)?;
+        let before = self.device_stats(py)?;
+        let writer = self.writer(py, &mut writing)?;
+        let mut written = 0;
+        loop {
+            let rest = &samples[written..];
+            let piece = piece_end(deadline);
+            written += py
+                .detach(|| writer.write_paced(rest, piece))
+                .map_err(to_py)?;
+            if written == samples.len()
+                || self.closing.load(Ordering::Acquire)
+                || Instant::now() >= deadline
+            {
+                break;
+            }
+            py.check_signals()?;
+        }
+        // close() waits for `writing`, so the Device is still here.
+        self.watch
+            .check(py, before, self.device_stats(py)?, "write()")?;
         Ok(written)
     }
 
@@ -511,34 +745,44 @@ impl Microphone {
     /// counted as Overflow (and logged, or raised with strict=True). Returns how
     /// many 48 kHz frames went in.
     fn write_nowait(&self, py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<usize> {
-        let mut guard = lock(py, &self.state);
-        let state = guard.as_mut().ok_or_else(closed)?;
-        let samples = state.convert_input(data)?;
-        let before = state.device.stats();
-        let written = state.writer()?.write(&samples).map_err(to_py)?;
-        state
-            .watch
-            .check(py, before, state.device.stats(), "write_nowait()")?;
+        let mut writing = lock(py, &self.writing);
+        let samples = writing.convert_input(data)?;
+        let before = self.device_stats(py)?;
+        let written = self
+            .writer(py, &mut writing)?
+            .write(&samples)
+            .map_err(to_py)?;
+        self.watch
+            .check(py, before, self.device_stats(py)?, "write_nowait()")?;
         Ok(written)
     }
 
     /// Waits until listeners have taken everything written so far: True then,
-    /// False if `timeout` (seconds) ran out first.
+    /// False if `timeout` (seconds) ran out first, or the microphone was closed.
     #[pyo3(signature = (timeout = None))]
     fn wait_for_playout(&self, py: Python<'_>, timeout: Option<f64>) -> PyResult<bool> {
         let deadline = deadline(timeout)?;
-        let mut guard = lock(py, &self.state);
-        let state = guard.as_mut().ok_or_else(closed)?;
-        let writer = state.writer()?;
-        Ok(py.detach(|| writer.wait_for_playout(deadline)))
+        let mut writing = lock(py, &self.writing);
+        let writer = self.writer(py, &mut writing)?;
+        loop {
+            let piece = piece_end(deadline);
+            if py.detach(|| writer.wait_for_playout(piece)) {
+                return Ok(true);
+            }
+            if self.closing.load(Ordering::Acquire) || Instant::now() >= deadline {
+                return Ok(false);
+            }
+            py.check_signals()?;
+        }
     }
 
-    /// 48 kHz frames listeners have taken so far.
+    /// 48 kHz frames listeners have taken so far. Never waits for a write in
+    /// progress: it's the count in the Device's clock (the same read counter).
     #[getter]
     fn played_frames(&self, py: Python<'_>) -> PyResult<u64> {
-        let mut guard = lock(py, &self.state);
-        let state = guard.as_mut().ok_or_else(closed)?;
-        Ok(state.writer.as_ref().map_or(0, sdk::Writer::played_frames))
+        let device = lock(py, &self.device);
+        let device = device.as_ref().ok_or_else(closed)?;
+        Ok(device.clock().map_or(0, |clock| clock.frames))
     }
 
     /// `played_frames` in whole milliseconds.
@@ -547,32 +791,94 @@ impl Microphone {
         Ok(self.played_frames(py)? * 1_000 / 48_000)
     }
 
+    /// Never waits for a write in progress, so a meter can read it at any time.
     #[getter]
     fn stats(&self, py: Python<'_>) -> PyResult<Stats> {
-        let guard = lock(py, &self.state);
-        Ok(guard.as_ref().ok_or_else(closed)?.device.stats().into())
+        Ok(self.device_stats(py)?.into())
     }
 
     /// The microphone as a voice agent's output: push() audio as fast as a model
     /// sends it, interrupt() it the moment someone talks over it (ADR 0020).
     /// It takes the microphone's one writer, so it can't be mixed with write().
+    /// Closing the microphone closes it too.
     #[pyo3(signature = (format = None))]
     fn playout(&self, py: Python<'_>, format: Option<Format>) -> PyResult<Playout> {
-        let guard = lock(py, &self.state);
-        let state = guard.as_ref().ok_or_else(closed)?;
-        if state.writer.is_some() {
+        let writing = lock(py, &self.writing);
+        let device = lock(py, &self.device);
+        let device = device.as_ref().ok_or_else(closed)?;
+        if writing.writer.is_some() {
             return Err(to_py(sdk::Error::AlreadyTaken));
         }
         let format = format.map_or(self.format, |format| format.sdk());
-        let playout = state.device.playout_from(format).map_err(to_py)?;
-        Ok(Playout {
-            inner: RwLock::new(Some(Arc::new(playout))),
-        })
+        let playout = device.playout_from(format).map_err(to_py)?;
+        let slot: PlayoutSlot = Arc::new(RwLock::new(Some(Arc::new(playout))));
+        *lock(py, &self.handed) = Some(Handed::Playout(slot.clone()));
+        Ok(Playout { inner: slot })
     }
 
-    /// Removes the microphone. Closing twice is fine.
+    /// The microphone as the input of a live source: audio relayed in real time
+    /// from something with its own clock (a network call, a capture card), pushed
+    /// as it arrives in `format` (the microphone's own when left out). It's held
+    /// at about 40 ms and kept there for hours by resampling a few ppm to the
+    /// device's real rate (drift compensation). For a voice agent's replies, use
+    /// playout(). It takes the microphone's one writer; closing the microphone
+    /// closes it too.
+    #[pyo3(signature = (format = None))]
+    fn live_writer(&self, py: Python<'_>, format: Option<Format>) -> PyResult<LiveWriter> {
+        let writing = lock(py, &self.writing);
+        let device = lock(py, &self.device);
+        let device = device.as_ref().ok_or_else(closed)?;
+        if writing.writer.is_some() {
+            return Err(to_py(sdk::Error::AlreadyTaken));
+        }
+        let format = format.map_or(self.format, |format| format.sdk());
+        let live = device.live_writer(format).map_err(to_py)?;
+        let slot: LiveSlot = Arc::new(RwLock::new(Some(Arc::new(live))));
+        *lock(py, &self.handed) = Some(Handed::Live(slot.clone()));
+        Ok(LiveWriter { inner: slot })
+    }
+
+    /// Where listeners had got to at the system's latest pass (a Clock), or None
+    /// before it first ran. Never waits for a write in progress.
+    #[getter]
+    fn clock(&self, py: Python<'_>) -> PyResult<Option<Clock>> {
+        let device = lock(py, &self.device);
+        let device = device.as_ref().ok_or_else(closed)?;
+        Clock::from_sdk(py, device.clock())
+    }
+
+    /// When the next frame written will be taken, as a `time.perf_counter()`
+    /// time: for keeping audio in step with video. None before the system first
+    /// ran. Never waits for a write in progress.
+    #[getter]
+    fn next_play_time(&self, py: Python<'_>) -> PyResult<Option<f64>> {
+        let device = lock(py, &self.device);
+        let device = device.as_ref().ok_or_else(closed)?;
+        device
+            .next_play_time()
+            .map(|at| perf_seconds(py, at))
+            .transpose()
+    }
+
+    /// Removes the microphone, and ends its Playout or LiveWriter if one is open.
+    /// A write or wait in progress in another thread stops within about 100 ms
+    /// and returns what it managed. Closing twice is fine.
     fn close(&self, py: Python<'_>) {
-        lock(py, &self.state).take();
+        self.closing.store(true, Ordering::Release);
+        let mut writing = lock(py, &self.writing);
+        let mut device = lock(py, &self.device);
+        match lock(py, &self.handed).take() {
+            Some(Handed::Playout(slot)) => {
+                slot.write().unwrap_or_else(PoisonError::into_inner).take();
+            }
+            Some(Handed::Live(slot)) => {
+                slot.write().unwrap_or_else(PoisonError::into_inner).take();
+            }
+            None => {}
+        }
+        // The writer and the playout share the Device; it goes once all three do.
+        writing.writer = None;
+        device.take();
     }
 
     fn __enter__(slf: Py<Self>) -> Py<Self> {
@@ -595,34 +901,73 @@ impl Microphone {
     }
 }
 
-struct SpeakerState {
-    device: sdk::Device,
-    reader: sdk::Reader,
-    /// The Device's own format to the app's.
-    output: sdk::Converter,
+/// read()'s side of a speaker: held for a whole wait, so it has its own lock,
+/// apart from the Device that stats, clock and close() need at any moment.
+struct Reading {
+    /// `None` once closed.
+    reader: Option<sdk::Reader>,
+    /// The Device's own format to the app's; `None` when they're the same, so
+    /// samples go out as they are.
+    output: Option<sdk::Converter>,
+    /// Reused by every read: the most one read takes (100 ms).
+    samples: Vec<f32>,
 }
 
 /// A virtual speaker: audio other apps play to it is what the app reads.
+///
+/// Locks are always taken `reading`, then `device`. Only `reading` is held while
+/// waiting for audio.
 #[pyclass(module = "viaduct")]
 struct Speaker {
     id: u32,
-    state: Mutex<Option<SpeakerState>>,
+    /// Set by close() before it takes any lock, as for a microphone.
+    closing: AtomicBool,
+    reading: Mutex<Reading>,
+    /// `None` once closed.
+    device: Mutex<Option<sdk::Device>>,
 }
 
 /// How many 48 kHz frames one read takes at most: 100 ms.
 const READ_FRAMES: usize = 4_800;
 
-impl SpeakerState {
-    fn read(&mut self, py: Python<'_>, deadline: Instant) -> PyResult<Vec<u8>> {
-        let mut samples = vec![0.0f32; READ_FRAMES];
-        let reader = &mut self.reader;
-        let frames = py
-            .detach(|| reader.read_paced(&mut samples, deadline))
-            .map_err(to_py)?;
-        let mut bytes = Vec::new();
-        self.output
-            .convert(&f32_bytes(&samples[..frames]), &mut bytes);
-        Ok(bytes)
+impl Speaker {
+    /// Up to 100 ms of what was played, in the speaker's format, and when its
+    /// first frame was played; waits in pieces until there's some, `deadline`
+    /// passes, or the speaker is closed (then empty).
+    fn read_until(
+        &self,
+        py: Python<'_>,
+        deadline: Instant,
+    ) -> PyResult<(Vec<u8>, Option<Instant>)> {
+        let mut guard = lock(py, &self.reading);
+        let Reading {
+            reader,
+            output,
+            samples,
+        } = &mut *guard;
+        let reader = reader.as_mut().ok_or_else(closed)?;
+        loop {
+            let piece = piece_end(deadline);
+            let timed = py
+                .detach(|| reader.read_timed(samples, piece))
+                .map_err(to_py)?;
+            if timed.frames > 0 {
+                let played = &samples[..timed.frames];
+                let bytes = match output {
+                    None => f32_bytes(played),
+                    Some(converter) => {
+                        let mut bytes = Vec::new();
+                        converter.convert(&f32_bytes(played), &mut bytes);
+                        bytes
+                    }
+                };
+                return Ok((bytes, timed.first_at));
+            }
+            if self.closing.load(Ordering::Acquire) || Instant::now() >= deadline {
+                return Ok((Vec::new(), None));
+            }
+            py.check_signals()?;
+        }
     }
 }
 
@@ -637,17 +982,23 @@ impl Speaker {
         format: Option<Format>,
         _backend: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Speaker> {
-        let output =
-            sdk::Converter::new(sdk::Format::DEVICE, Format::or_device(format)).map_err(to_py)?;
+        let format = Format::or_device(format);
+        let output = if format == sdk::Format::DEVICE {
+            None
+        } else {
+            Some(sdk::Converter::new(sdk::Format::DEVICE, format).map_err(to_py)?)
+        };
         let device = create(name, sdk::Kind::Speaker, _backend)?;
         let reader = device.reader().map_err(to_py)?;
         Ok(Speaker {
             id: device.id(),
-            state: Mutex::new(Some(SpeakerState {
-                device,
-                reader,
+            closing: AtomicBool::new(false),
+            reading: Mutex::new(Reading {
+                reader: Some(reader),
                 output,
-            })),
+                samples: vec![0.0; READ_FRAMES],
+            }),
+            device: Mutex::new(Some(device)),
         })
     }
 
@@ -658,19 +1009,39 @@ impl Speaker {
 
     #[getter]
     fn closed(&self, py: Python<'_>) -> bool {
-        lock(py, &self.state).is_none()
+        lock(py, &self.device).is_none()
     }
 
     /// Returns what other apps played since the last read, in this speaker's
     /// format, up to 100 ms of it. With `timeout` (seconds) it waits that long for
     /// audio when there's none yet; None waits as long as it takes. An empty
-    /// result means nothing was played.
+    /// result means nothing was played (or the speaker was closed meanwhile).
     #[pyo3(signature = (timeout = 0.0))]
     fn read<'py>(&self, py: Python<'py>, timeout: Option<f64>) -> PyResult<Bound<'py, PyBytes>> {
-        let deadline = deadline(timeout)?;
-        let mut guard = lock(py, &self.state);
-        let bytes = guard.as_mut().ok_or_else(closed)?.read(py, deadline)?;
+        let (bytes, _) = self.read_until(py, deadline(timeout)?)?;
         Ok(PyBytes::new(py, &bytes))
+    }
+
+    /// As read(), with when the first frame returned was played, as a
+    /// `time.perf_counter()` time: the reference an echo canceller aligns the
+    /// microphone with. `(b"", None)` when nothing was played.
+    #[pyo3(signature = (timeout = 0.0))]
+    fn read_timed<'py>(
+        &self,
+        py: Python<'py>,
+        timeout: Option<f64>,
+    ) -> PyResult<(Bound<'py, PyBytes>, Option<f64>)> {
+        let (bytes, first_at) = self.read_until(py, deadline(timeout)?)?;
+        let first_at = first_at.map(|at| perf_seconds(py, at)).transpose()?;
+        Ok((PyBytes::new(py, &bytes), first_at))
+    }
+
+    /// Where the playing app had got to at the system's latest pass (a Clock),
+    /// or None before it first played. Never waits for a read in progress.
+    #[getter]
+    fn clock(&self, py: Python<'_>) -> PyResult<Option<Clock>> {
+        let device = lock(py, &self.device);
+        Clock::from_sdk(py, device.as_ref().ok_or_else(closed)?.clock())
     }
 
     fn __iter__(slf: Py<Self>) -> Py<Self> {
@@ -680,30 +1051,35 @@ impl Speaker {
     /// The next audio played to the speaker, waiting for it. Ends when the
     /// speaker is closed (from another thread, say).
     fn __next__<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyBytes>>> {
-        loop {
-            let mut guard = lock(py, &self.state);
-            let Some(state) = guard.as_mut() else {
-                return Ok(None);
-            };
-            // Short waits, so a close() from another thread ends the loop soon.
-            let bytes = state.read(py, deadline(Some(0.1))?)?;
-            drop(guard);
-            if !bytes.is_empty() {
-                return Ok(Some(PyBytes::new(py, &bytes)));
-            }
-            py.check_signals()?;
+        if self.closing.load(Ordering::Acquire) {
+            return Ok(None);
+        }
+        // Waits in pieces: a close() from another thread ends it with nothing.
+        match self.read_until(py, deadline(None)?) {
+            Ok((bytes, _)) if !bytes.is_empty() => Ok(Some(PyBytes::new(py, &bytes))),
+            Ok(_) => Ok(None),
+            // Closed between the check above and the read.
+            Err(_) if self.closing.load(Ordering::Acquire) => Ok(None),
+            Err(error) => Err(error),
         }
     }
 
+    /// Never waits for a read in progress, so a meter can read it at any time.
     #[getter]
     fn stats(&self, py: Python<'_>) -> PyResult<Stats> {
-        let guard = lock(py, &self.state);
-        Ok(guard.as_ref().ok_or_else(closed)?.device.stats().into())
+        let device = lock(py, &self.device);
+        Ok(device.as_ref().ok_or_else(closed)?.stats().into())
     }
 
-    /// Removes the speaker. Closing twice is fine.
+    /// Removes the speaker. A read in progress in another thread stops within
+    /// about 100 ms and returns nothing. Closing twice is fine.
     fn close(&self, py: Python<'_>) {
-        lock(py, &self.state).take();
+        self.closing.store(true, Ordering::Release);
+        let mut reading = lock(py, &self.reading);
+        let mut device = lock(py, &self.device);
+        // The reader shares the Device; it goes once both do.
+        reading.reader = None;
+        device.take();
     }
 
     fn __enter__(slf: Py<Self>) -> Py<Self> {
@@ -761,8 +1137,8 @@ impl Interrupted {
 #[pyclass(module = "viaduct")]
 struct Playout {
     /// Shared, so push() and interrupt() from other threads don't wait behind a
-    /// wait_idle() in progress.
-    inner: RwLock<Option<Arc<sdk::Playout>>>,
+    /// wait_idle() in progress, and with the microphone, whose close() ends it.
+    inner: PlayoutSlot,
 }
 
 impl Playout {
@@ -961,6 +1337,9 @@ fn _viaduct(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<Playout>()?;
     module.add_class::<Interrupted>()?;
     module.add_class::<Converter>()?;
+    module.add_class::<Clock>()?;
+    module.add_class::<LiveWriter>()?;
+    module.add_class::<LiveStats>()?;
     module.add_function(wrap_pyfunction!(stable_id, module)?)?;
     #[cfg(feature = "test-backend")]
     module.add_class::<testing::TestBackend>()?;

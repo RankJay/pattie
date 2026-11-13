@@ -31,6 +31,8 @@ with viaduct.Speaker("Agent Speaker", format=viaduct.Format(16_000, "pcm16")) as
 
 The devices exist while the objects are open. Leaving the `with` block, or the
 process ending, removes them.
+A `close()` from another thread ends a call that's waiting (it returns what it
+managed within about 100 ms), and Ctrl+C interrupts one.
 
 With asyncio, use `viaduct.aio`. Waiting happens in a worker thread, so the
 event loop keeps running, and a call can be cancelled:
@@ -60,6 +62,32 @@ cut.heard_ms  # how much was heard: OpenAI's audio_end_ms
 [`examples/barge_in.py`](examples/barge_in.py) is a whole agent in a meeting:
 OpenAI's realtime model through Vercel's AI Gateway, with barge-in.
 
+## Relaying a live source
+
+Audio relayed in real time from something with its own clock, such as a phone
+call or a capture card, arrives a little faster or slower than the device plays
+it. Over hours that adds up to seconds of delay, or gaps. A `LiveWriter` holds
+it at about 40 ms and keeps it there by resampling a few parts per million:
+
+```python
+relay = mic.live_writer(viaduct.Format(16_000, "pcm16"))
+relay.push(chunk)  # as each chunk arrives; never waits
+relay.stats.correction_ppm  # how far off the source's clock is
+```
+
+## Timestamps
+
+Times are `time.perf_counter()` seconds, so they compare directly with your own.
+
+```python
+data, played_at = speaker.read_timed(timeout=1)  # when its first frame played
+mic.next_play_time  # when the next frame written will be heard
+mic.clock  # Clock(frames, at): how far listeners had got, and when
+```
+
+`read_timed` gives an echo canceller its reference; `next_play_time` keeps audio
+in step with video.
+
 ## What it takes care of
 
 | The usual problem | What Viaduct does |
@@ -69,6 +97,7 @@ OpenAI's realtime model through Vercel's AI Gateway, with barge-in.
 | A blocking `write` freezes async code | `viaduct.aio`; the sync calls also release the GIL while they wait |
 | Picking a device by list index breaks when devices change | You create the device and give it its name, and `stable_id()` gives the same ID every time |
 | Interrupting means killing the player | `Playout.interrupt()` stops within about 20 ms and says how much was heard |
+| A relayed stream drifts: seconds of delay after a few hours | `live_writer()` holds its latency with drift compensation |
 | Audio goes missing without a word | Lost audio is logged on the `viaduct` logger; `strict=True` raises `AudioLost`; `stats` has the counts |
 
 ## Errors

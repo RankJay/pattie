@@ -256,6 +256,15 @@ impl Device {
         self.inner.clock()
     }
 
+    /// A Microphone's [`Writer::next_play_time`], without needing the Writer: when
+    /// the system will take the next frame written. From the same two counters,
+    /// so a binding can read it while another thread's write waits. `None` before
+    /// the system's first pass.
+    pub fn next_play_time(&self) -> Option<Instant> {
+        let clock = self.inner.clock()?;
+        Some(time_of(self.inner.ring.written(), clock))
+    }
+
     /// Starts configuring a Device: a Microphone, 48 kHz mono, with a
     /// 4,096-frame Ring, until told otherwise.
     pub fn builder() -> DeviceBuilder {

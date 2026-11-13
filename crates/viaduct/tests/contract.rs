@@ -88,6 +88,7 @@ contract_suite!(
     a_speakers_clock_says_how_far_and_when_the_system_last_played,
     read_timed_says_when_the_first_frame_read_was_played,
     next_play_time_says_when_the_next_frame_written_will_be_taken,
+    a_devices_next_play_time_matches_its_writers,
     a_live_writers_audio_reaches_the_system_after_its_buffer_fills,
     a_live_writer_holds_the_writer_slot_and_only_on_a_microphone,
 );
@@ -701,4 +702,19 @@ fn a_live_writer_holds_the_writer_slot_and_only_on_a_microphone(backend: &dyn Ba
         speaker.live_writer(viaduct::Format::DEVICE).err(),
         Some(viaduct::Error::WrongKind)
     );
+}
+
+fn a_devices_next_play_time_matches_its_writers(backend: &dyn Backend) {
+    let mic = builder(backend).name("Agent Mic").create().unwrap();
+    let mut tx = mic.writer().unwrap();
+    let before_any_pass = mic.next_play_time();
+    tx.write(&[0.5; 960]).unwrap();
+    backend.driver_read(mic.id(), 480);
+
+    // The Device's answer needs no Writer (a binding reads it while a write waits).
+    // Each call converts the clock by its distance from now, so two calls agree
+    // to well within a millisecond, not to the nanosecond.
+    let (device, writer) = (mic.next_play_time().unwrap(), tx.next_play_time().unwrap());
+    assert!(before_any_pass.is_none());
+    assert!(device.max(writer) - device.min(writer) < Duration::from_millis(1));
 }

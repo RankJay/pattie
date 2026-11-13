@@ -16,7 +16,17 @@ from collections.abc import AsyncIterator, Buffer
 from types import TracebackType
 from typing import Self
 
-from viaduct._viaduct import Converter, Format, Interrupted, Microphone, Playout, Speaker, Stats
+from viaduct._viaduct import (
+    Clock,
+    Converter,
+    Format,
+    Interrupted,
+    LiveWriter,
+    Microphone,
+    Playout,
+    Speaker,
+    Stats,
+)
 
 __all__ = ["AsyncMicrophone", "AsyncPlayout", "AsyncSpeaker"]
 
@@ -87,6 +97,22 @@ class AsyncMicrophone:
     def playout(self, format: Format | None = None) -> AsyncPlayout:  # noqa: A002
         """The microphone as a voice agent's output. See ``Microphone.playout``."""
         return AsyncPlayout(self._mic.playout(format or self._format))
+
+    def live_writer(self, format: Format | None = None) -> LiveWriter:  # noqa: A002
+        """The microphone as a live source's input, drift-compensated. Its push()
+        never waits, so the sync ``LiveWriter`` serves asyncio code as it is. See
+        ``Microphone.live_writer``."""
+        return self._mic.live_writer(format or self._format)
+
+    @property
+    def clock(self) -> Clock | None:
+        """See ``Microphone.clock``. Never waits."""
+        return self._mic.clock
+
+    @property
+    def next_play_time(self) -> float | None:
+        """See ``Microphone.next_play_time``. Never waits."""
+        return self._mic.next_play_time
 
     async def aclose(self) -> None:
         """Removes the microphone. Waits for a write in progress to finish its piece."""
@@ -173,6 +199,19 @@ class AsyncSpeaker:
         while not (chunk := await asyncio.to_thread(self._speaker.read, _PIECE_SECONDS)):
             pass
         return chunk
+
+    async def read_timed(self) -> tuple[bytes, float | None]:
+        """Waits for other apps to play something, and returns it with when its
+        first frame was played (a ``time.perf_counter()`` time)."""
+        while True:
+            data, first_at = await asyncio.to_thread(self._speaker.read_timed, _PIECE_SECONDS)
+            if data:
+                return data, first_at
+
+    @property
+    def clock(self) -> Clock | None:
+        """See ``Speaker.clock``."""
+        return self._speaker.clock
 
     async def __aiter__(self) -> AsyncIterator[bytes]:
         # Short waits, so the loop notices aclose() and cancellation soon.

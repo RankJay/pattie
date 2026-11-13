@@ -232,3 +232,61 @@ def test_closing_from_another_thread_during_a_write_does_not_hang(
     writer.join(timeout=5)
     assert not writer.is_alive()
     assert mic.closed
+
+
+def test_stats_can_be_read_while_a_write_waits(backend: _testing.TestBackend) -> None:
+    with viaduct.Microphone("Agent Mic", _backend=backend) as mic:
+        # Nobody pulls, so this write waits until its timeout (2 s).
+        writer = threading.Thread(target=mic.write, args=(floats([0.1] * 48_000), 2.0))
+        writer.start()
+        time.sleep(0.05)
+
+        started = time.monotonic()
+        stats, played = mic.stats, mic.played_ms  # a meter, from another thread
+        waited = time.monotonic() - started
+
+        writer.join(timeout=5)
+    assert waited < 0.5, f"stats waited {waited:.2f} s for the write"
+    assert stats.buffered_frames == backend.lead_frames
+    assert played == 0
+
+
+def test_closing_a_microphone_removes_it_even_with_a_playout_open(
+    backend: _testing.TestBackend,
+) -> None:
+    mic = viaduct.Microphone("Agent Mic", _backend=backend)
+    playout = mic.playout()
+    playout.push(floats([0.5] * 480))
+
+    mic.close()
+
+    assert backend.driver_read(mic.id, 480) is None, "the Device is still live"
+    with pytest.raises(ValueError, match="closed"):
+        playout.push(floats([0.5] * 480))
+
+
+def test_a_write_cut_mid_sample_carries_the_rest_to_the_next(
+    backend: _testing.TestBackend,
+) -> None:
+    samples = [i / 100 for i in range(10)]
+    data = floats(samples)
+
+    with viaduct.Microphone("Agent Mic", _backend=backend) as mic:
+        # 5 bytes is one sample and a quarter: the quarter waits for the rest.
+        first = mic.write_nowait(data[:5])
+        second = mic.write_nowait(data[5:])
+        taken = backend.driver_read(mic.id, 10)
+
+    assert (first, second) == (1, 9)
+    assert taken is not None
+    assert as_floats(taken) == pytest.approx(samples)
+
+
+def test_a_speaker_in_another_format_still_converts(backend: _testing.TestBackend) -> None:
+    with viaduct.Speaker(
+        "Agent Speaker", format=viaduct.Format(48_000, "pcm16"), _backend=backend
+    ) as speaker:
+        backend.driver_write(speaker.id, floats([0.5] * 480))
+        data = speaker.read()
+
+    assert array.array("h", data).tolist() == [16_384] * 480
