@@ -125,9 +125,8 @@ fn to_py(error: sdk::Error) -> PyErr {
         sdk::Error::VersionMismatch => VersionMismatch::new_err(format!(
             "{text}: install the driver that matches this package's version"
         )),
-        sdk::Error::UnsupportedFormat => UnsupportedFormat::new_err(format!(
-            "{text}: rates 8, 11.025, 16, 22.05, 24, 32, 44.1 or 48 kHz; 1 or 2 channels"
-        )),
+        // Its own message lists what's supported.
+        sdk::Error::UnsupportedFormat => UnsupportedFormat::new_err(text),
         sdk::Error::BadBufferSize => BadBufferSize::new_err(text),
         sdk::Error::BadName => BadName::new_err(text),
         sdk::Error::DuplicateName => DuplicateName::new_err(format!(
@@ -243,9 +242,19 @@ impl Format {
         }
     }
 
-    /// The format a `format=` argument names, or the Device's own when it's None.
-    fn or_device(format: Option<Format>) -> sdk::Format {
-        format.map_or(sdk::Format::DEVICE, |format| format.sdk())
+    /// The format a `format=` argument names, or `device` (the Device's own)
+    /// when it's None.
+    fn or_device(format: Option<Format>, device: sdk::Format) -> sdk::Format {
+        format.map_or(device, |format| format.sdk())
+    }
+
+    /// A Device's own format: 32-bit float at its rate and channels.
+    fn device(rate: u32, channels: u16) -> sdk::Format {
+        sdk::Format {
+            rate,
+            channels,
+            encoding: sdk::Encoding::F32,
+        }
     }
 }
 
@@ -277,7 +286,7 @@ impl Format {
         Ok(format)
     }
 
-    /// What a Device itself takes and gives: 48 kHz, mono, 32-bit float.
+    /// What a Device takes and gives by default: 48 kHz, mono, 32-bit float.
     #[classattr]
     const DEVICE: Format = Format {
         rate: 48_000,
@@ -311,7 +320,8 @@ impl Format {
     }
 }
 
-/// Audio a Device lost so far, and how much is waiting now, in 48 kHz frames.
+/// Audio a Device lost so far, and how much is waiting now, in frames at the
+/// Device's rate.
 #[pyclass(module = "viaduct", frozen, eq)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Stats {
@@ -367,9 +377,13 @@ fn transport(
 fn create(
     name: &str,
     kind: sdk::Kind,
+    format: sdk::Format,
     backend: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<sdk::Device> {
-    let mut builder = sdk::Device::builder().name(name).kind(kind);
+    let mut builder = sdk::Device::builder()
+        .name(name)
+        .kind(kind)
+        .format(format.rate, format.channels);
     if let Some(transport) = transport(backend)? {
         builder = builder.transport(transport);
     }
@@ -434,7 +448,8 @@ fn perf_seconds(py: Python<'_>, at: Instant) -> PyResult<f64> {
 }
 
 /// Where the system's side of a Device had got to, and when (ADR 0022): its
-/// count had reached `frames` (48 kHz) at `at`, a `time.perf_counter()` time.
+/// count had reached `frames` (at the Device's rate) at `at`, a
+/// `time.perf_counter()` time.
 #[pyclass(module = "viaduct", frozen)]
 struct Clock {
     #[pyo3(get)]
@@ -466,7 +481,7 @@ impl Clock {
 /// How a LiveWriter is doing.
 #[pyclass(module = "viaduct", frozen)]
 struct LiveStats {
-    /// 48 kHz frames waiting in its buffer: the latency it holds (about 40 ms).
+    /// Frames waiting in its buffer: the latency it holds (about 40 ms).
     #[pyo3(get)]
     queued_frames: u64,
     /// The drift correction in use, in ppm: positive when the source runs fast.
@@ -514,7 +529,7 @@ impl LiveWriter {
 #[pymethods]
 impl LiveWriter {
     /// Queues audio (in the writer's format) as it arrives from the source, and
-    /// returns at once. Returns how many 48 kHz frames were queued.
+    /// returns at once. Returns how many of the microphone's frames were queued.
     fn push(&self, data: &Bound<'_, PyAny>) -> PyResult<usize> {
         let bytes = audio_bytes(data)?;
         Ok(self.get()?.push_bytes(&bytes))
@@ -563,19 +578,23 @@ enum Handed {
 
 /// How a microphone turns what write() is given into the Device's samples.
 enum Input {
-    /// Already the Device's format (48 kHz mono float): read as it is. `tail`
-    /// holds the bytes of a sample split across calls, as the Converter would.
-    Device { tail: Vec<u8> },
+    /// Already the Device's format (float at its rate and channels): read as it
+    /// is. `tail` holds the bytes of a frame split across calls, as the
+    /// Converter would.
+    Device { tail: Vec<u8>, frame_bytes: usize },
     /// Any other format: through the SDK's Converter.
     Convert(sdk::Converter),
 }
 
 impl Input {
-    fn new(format: sdk::Format) -> PyResult<Input> {
-        Ok(if format == sdk::Format::DEVICE {
-            Input::Device { tail: Vec::new() }
+    fn new(format: sdk::Format, device: sdk::Format) -> PyResult<Input> {
+        Ok(if format == device {
+            Input::Device {
+                tail: Vec::new(),
+                frame_bytes: 4 * usize::from(device.channels),
+            }
         } else {
-            Input::Convert(sdk::Converter::new(format, sdk::Format::DEVICE).map_err(to_py)?)
+            Input::Convert(sdk::Converter::new(format, device).map_err(to_py)?)
         })
     }
 }
@@ -597,12 +616,14 @@ impl Writing {
                 converter.convert(&bytes, &mut converted);
                 Ok(f32_samples(&converted))
             }
-            Input::Device { tail } if tail.is_empty() && bytes.len() % 4 == 0 => {
+            Input::Device { tail, frame_bytes }
+                if tail.is_empty() && bytes.len().is_multiple_of(*frame_bytes) =>
+            {
                 Ok(f32_samples(&bytes))
             }
-            Input::Device { tail } => {
+            Input::Device { tail, frame_bytes } => {
                 tail.extend_from_slice(&bytes);
-                let whole = tail.len() / 4 * 4;
+                let whole = tail.len() / *frame_bytes * *frame_bytes;
                 let samples = f32_samples(&tail[..whole]);
                 tail.drain(..whole);
                 Ok(samples)
@@ -623,7 +644,10 @@ type PlayoutSlot = Arc<RwLock<Option<Arc<sdk::Playout>>>>;
 #[pyclass(module = "viaduct")]
 struct Microphone {
     id: u32,
+    /// What write() takes.
     format: sdk::Format,
+    /// The Device's own: float at its rate and channels.
+    device_format: sdk::Format,
     watch: LossWatch,
     /// Set by close() before it takes any lock: a waiting call stops at its next
     /// piece, so close() never waits long.
@@ -660,22 +684,31 @@ impl Microphone {
 #[pymethods]
 impl Microphone {
     /// Creates the microphone; other apps list it by `name` until it's closed.
-    /// `format` is what write() takes (48 kHz mono float when left out).
-    /// With `strict=True`, lost audio raises AudioLost instead of logging a warning.
+    /// It runs at `rate` (44,100, 48,000 or 96,000) with `channels` (1 to 8:
+    /// mono, stereo, quad, 5.1 or 7.1 layouts), fixed while it lives. `format` is
+    /// what write() takes (32-bit float at the microphone's rate and channels when
+    /// left out). With `strict=True`, lost audio raises AudioLost instead of
+    /// logging a warning.
     #[new]
-    #[pyo3(signature = (name, *, format = None, strict = false, _backend = None))]
+    #[pyo3(signature = (
+        name, *, rate = 48_000, channels = 1, format = None, strict = false, _backend = None
+    ))]
     fn new(
         name: &str,
+        rate: u32,
+        channels: u16,
         format: Option<Format>,
         strict: bool,
         _backend: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Microphone> {
-        let format = Format::or_device(format);
-        let input = Input::new(format)?;
-        let device = create(name, sdk::Kind::Microphone, _backend)?;
+        let device_format = Format::device(rate, channels);
+        let format = Format::or_device(format, device_format);
+        let device = create(name, sdk::Kind::Microphone, device_format, _backend)?;
+        let input = Input::new(format, device_format)?;
         Ok(Microphone {
             id: device.id(),
             format,
+            device_format,
             watch: LossWatch { strict },
             closing: AtomicBool::new(false),
             writing: Mutex::new(Writing {
@@ -693,6 +726,7 @@ impl Microphone {
         self.id
     }
 
+    /// What write() takes.
     #[getter]
     fn format(&self) -> Format {
         Format {
@@ -702,15 +736,27 @@ impl Microphone {
         }
     }
 
+    /// The rate the microphone runs at.
+    #[getter]
+    fn rate(&self) -> u32 {
+        self.device_format.rate
+    }
+
+    /// The microphone's channels.
+    #[getter]
+    fn channels(&self) -> u16 {
+        self.device_format.channels
+    }
+
     #[getter]
     fn closed(&self, py: Python<'_>) -> bool {
         lock(py, &self.device).is_none()
     }
 
     /// Writes `data` (in this microphone's format) at the pace listeners take it,
-    /// blocking until all of it is in, so nothing is dropped. Returns how many
-    /// 48 kHz frames went in: all of them, unless `timeout` (seconds) ran out or
-    /// the microphone was closed from another thread meanwhile.
+    /// blocking until all of it is in, so nothing is dropped. Returns how many of
+    /// the microphone's frames went in: all of them, unless `timeout` (seconds)
+    /// ran out or the microphone was closed from another thread meanwhile.
     #[pyo3(signature = (data, timeout = None))]
     fn write(
         &self,
@@ -723,14 +769,17 @@ impl Microphone {
         let samples = writing.convert_input(data)?;
         let before = self.device_stats(py)?;
         let writer = self.writer(py, &mut writing)?;
+        // Whole frames only: the input keeps a frame split across calls.
+        let channels = usize::from(self.device_format.channels);
+        let frames = samples.len() / channels;
         let mut written = 0;
         loop {
-            let rest = &samples[written..];
+            let rest = &samples[written * channels..];
             let piece = piece_end(deadline);
             written += py
                 .detach(|| writer.write_paced(rest, piece))
                 .map_err(to_py)?;
-            if written == samples.len()
+            if written == frames
                 || self.closing.load(Ordering::Acquire)
                 || Instant::now() >= deadline
             {
@@ -746,7 +795,7 @@ impl Microphone {
 
     /// Writes what fits right now without waiting; the rest is dropped and
     /// counted as Overflow (and logged, or raised with strict=True). Returns how
-    /// many 48 kHz frames went in.
+    /// many of the microphone's frames went in.
     fn write_nowait(&self, py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<usize> {
         let mut writing = lock(py, &self.writing);
         let samples = writing.convert_input(data)?;
@@ -779,7 +828,7 @@ impl Microphone {
         }
     }
 
-    /// 48 kHz frames listeners have taken so far. Never waits for a write in
+    /// Frames listeners have taken so far. Never waits for a write in
     /// progress: it's the count in the Device's clock (the same read counter).
     #[getter]
     fn played_frames(&self, py: Python<'_>) -> PyResult<u64> {
@@ -791,7 +840,7 @@ impl Microphone {
     /// `played_frames` in whole milliseconds.
     #[getter]
     fn played_ms(&self, py: Python<'_>) -> PyResult<u64> {
-        Ok(self.played_frames(py)? * 1_000 / 48_000)
+        Ok(self.played_frames(py)? * 1_000 / u64::from(self.device_format.rate))
     }
 
     /// Never waits for a write in progress, so a meter can read it at any time.
@@ -923,6 +972,8 @@ struct Reading {
 #[pyclass(module = "viaduct")]
 struct Speaker {
     id: u32,
+    /// The Device's own format: float at its rate and channels.
+    device_format: sdk::Format,
     /// Set by close() before it takes any lock, as for a microphone.
     closing: AtomicBool,
     reading: Mutex<Reading>,
@@ -930,8 +981,8 @@ struct Speaker {
     device: Mutex<Option<sdk::Device>>,
 }
 
-/// How many 48 kHz frames one read takes at most: 100 ms.
-const READ_FRAMES: usize = 4_800;
+/// How much one read takes at most, as a share of a second: 100 ms.
+const READS_PER_SECOND: u32 = 10;
 
 impl Speaker {
     /// Up to 100 ms of what was played, in the speaker's format, and when its
@@ -955,7 +1006,8 @@ impl Speaker {
                 .detach(|| reader.read_timed(samples, piece))
                 .map_err(to_py)?;
             if timed.frames > 0 {
-                let played = &samples[..timed.frames];
+                let channels = usize::from(self.device_format.channels);
+                let played = &samples[..timed.frames * channels];
                 let bytes = match output {
                     None => f32_bytes(played),
                     Some(converter) => {
@@ -976,30 +1028,37 @@ impl Speaker {
 
 #[pymethods]
 impl Speaker {
-    /// Creates the speaker; other apps list it by `name` until it's closed.
-    /// `format` is what read() returns (48 kHz mono float when left out).
+    /// Creates the speaker; other apps list it by `name` until it's closed. It
+    /// runs at `rate` with `channels`, as a Microphone does. `format` is what
+    /// read() returns (32-bit float at the speaker's rate and channels when left
+    /// out).
     #[new]
-    #[pyo3(signature = (name, *, format = None, _backend = None))]
+    #[pyo3(signature = (name, *, rate = 48_000, channels = 1, format = None, _backend = None))]
     fn new(
         name: &str,
+        rate: u32,
+        channels: u16,
         format: Option<Format>,
         _backend: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Speaker> {
-        let format = Format::or_device(format);
-        let output = if format == sdk::Format::DEVICE {
+        let device_format = Format::device(rate, channels);
+        let format = Format::or_device(format, device_format);
+        let device = create(name, sdk::Kind::Speaker, device_format, _backend)?;
+        let output = if format == device_format {
             None
         } else {
-            Some(sdk::Converter::new(sdk::Format::DEVICE, format).map_err(to_py)?)
+            Some(sdk::Converter::new(device_format, format).map_err(to_py)?)
         };
-        let device = create(name, sdk::Kind::Speaker, _backend)?;
         let reader = device.reader().map_err(to_py)?;
+        let read_frames = (rate / READS_PER_SECOND) as usize;
         Ok(Speaker {
             id: device.id(),
+            device_format,
             closing: AtomicBool::new(false),
             reading: Mutex::new(Reading {
                 reader: Some(reader),
                 output,
-                samples: vec![0.0; READ_FRAMES],
+                samples: vec![0.0; read_frames * usize::from(channels)],
             }),
             device: Mutex::new(Some(device)),
         })
@@ -1008,6 +1067,18 @@ impl Speaker {
     #[getter]
     fn id(&self) -> u32 {
         self.id
+    }
+
+    /// The rate the speaker runs at.
+    #[getter]
+    fn rate(&self) -> u32 {
+        self.device_format.rate
+    }
+
+    /// The speaker's channels.
+    #[getter]
+    fn channels(&self) -> u16 {
+        self.device_format.channels
     }
 
     #[getter]
@@ -1110,12 +1181,14 @@ impl Speaker {
 #[pyclass(module = "viaduct", frozen, eq)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Interrupted {
-    /// 48 kHz frames of the reply that listeners took.
+    /// Frames of the reply that listeners took, at the microphone's rate.
     #[pyo3(get)]
     heard_frames: u64,
-    /// 48 kHz frames dropped from the queue.
+    /// Frames dropped from the queue.
     #[pyo3(get)]
     discarded_frames: u64,
+    /// `heard_frames` in whole milliseconds, from the SDK (which knows the rate).
+    heard_ms: u64,
 }
 
 #[pymethods]
@@ -1124,7 +1197,7 @@ impl Interrupted {
     /// `conversation.item.truncate` takes as `audio_end_ms`.
     #[getter]
     fn heard_ms(&self) -> u64 {
-        self.heard_frames * 1_000 / 48_000
+        self.heard_ms
     }
 
     fn __repr__(&self) -> String {
@@ -1157,7 +1230,7 @@ impl Playout {
 #[pymethods]
 impl Playout {
     /// Queues audio (in the playout's format) after what's already queued, and
-    /// returns at once. Returns how many 48 kHz frames were queued.
+    /// returns at once. Returns how many of the microphone's frames were queued.
     fn push(&self, data: &Bound<'_, PyAny>) -> PyResult<usize> {
         let bytes = audio_bytes(data)?;
         Ok(self.get()?.push_bytes(&bytes))
@@ -1170,6 +1243,7 @@ impl Playout {
         Ok(Interrupted {
             heard_frames: cut.heard_frames,
             discarded_frames: cut.discarded_frames,
+            heard_ms: cut.heard_ms(),
         })
     }
 
@@ -1182,7 +1256,7 @@ impl Playout {
         Ok(py.detach(|| playout.wait_idle(deadline)))
     }
 
-    /// 48 kHz frames waiting to be played.
+    /// Frames waiting to be played.
     #[getter]
     fn queued_frames(&self) -> PyResult<u64> {
         Ok(self.get()?.queued_frames())

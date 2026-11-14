@@ -33,8 +33,8 @@ __all__ = ["AsyncMicrophone", "AsyncPlayout", "AsyncSpeaker"]
 # The longest one wait in the worker thread lasts: 100 ms.
 _PIECE_SECONDS = 0.1
 
-# One 48 kHz float frame, in bytes: what the Microphone below takes.
-_DEVICE_FRAME_BYTES = 4
+# One float sample, in bytes: a frame of the Microphone below is one per channel.
+_SAMPLE_BYTES = 4
 
 
 class AsyncMicrophone:
@@ -44,6 +44,8 @@ class AsyncMicrophone:
         self,
         name: str,
         *,
+        rate: int = 48_000,
+        channels: int = 1,
         format: Format | None = None,  # noqa: A002
         strict: bool = False,
         _backend: object = None,
@@ -51,9 +53,13 @@ class AsyncMicrophone:
         # The microphone below takes the Device's own format; this class converts
         # first. Then a write cut short by its 100 ms wait says exactly which
         # bytes went in, and the next wait carries on from there.
-        self._format = format or Format.DEVICE
-        self._input = Converter(self._format, Format.DEVICE)
-        self._mic = Microphone(name, strict=strict, _backend=_backend)
+        device = Format(rate, "f32", channels=channels)
+        self._format = format or device
+        self._input = Converter(self._format, device)
+        self._frame_bytes = _SAMPLE_BYTES * channels
+        self._mic = Microphone(
+            name, rate=rate, channels=channels, strict=strict, _backend=_backend
+        )
 
     @property
     def id(self) -> int:
@@ -62,6 +68,14 @@ class AsyncMicrophone:
     @property
     def format(self) -> Format:
         return self._format
+
+    @property
+    def rate(self) -> int:
+        return self._mic.rate
+
+    @property
+    def channels(self) -> int:
+        return self._mic.channels
 
     @property
     def closed(self) -> bool:
@@ -77,11 +91,11 @@ class AsyncMicrophone:
 
     async def write(self, data: Buffer) -> int:
         """Writes ``data`` at the pace listeners take it, without blocking the
-        event loop. Returns how many 48 kHz frames went in."""
+        event loop. Returns how many of the microphone's frames went in."""
         samples = memoryview(self._input.convert(data))
         written = 0
-        while written * _DEVICE_FRAME_BYTES < len(samples):
-            rest = samples[written * _DEVICE_FRAME_BYTES :]
+        while written * self._frame_bytes < len(samples):
+            rest = samples[written * self._frame_bytes :]
             written += await asyncio.to_thread(self._mic.write, rest, _PIECE_SECONDS)
         return written
 
@@ -177,14 +191,26 @@ class AsyncSpeaker:
         self,
         name: str,
         *,
+        rate: int = 48_000,
+        channels: int = 1,
         format: Format | None = None,  # noqa: A002
         _backend: object = None,
     ) -> None:
-        self._speaker = Speaker(name, format=format, _backend=_backend)
+        self._speaker = Speaker(
+            name, rate=rate, channels=channels, format=format, _backend=_backend
+        )
 
     @property
     def id(self) -> int:
         return self._speaker.id
+
+    @property
+    def rate(self) -> int:
+        return self._speaker.rate
+
+    @property
+    def channels(self) -> int:
+        return self._speaker.channels
 
     @property
     def closed(self) -> bool:

@@ -23,6 +23,8 @@ typedef struct vd_ring {
     vd_ring_header *shared;
     float *frames;
     uint32_t capacity_frames;
+    uint32_t sample_rate;      /* read once at attach, like the capacity */
+    uint32_t channels;         /* samples in a frame */
     uint64_t read_frames;      /* Microphone: the driver reads */
     uint64_t gap_frames;
     uint64_t write_frames;     /* Speaker: the driver writes */
@@ -84,8 +86,19 @@ size_t vd_core_owner_closed(vd_core *core, const vd_owner *owner,
  */
 vd_ring *vd_core_device_ring(vd_core *core, uint32_t device_id);
 
-/* Seam B: the Ring, driver side. Attaches to a Ring the SDK laid out at `memory`. */
+/*
+ * Seam B: the Ring, driver side. Attaches to a Ring the SDK laid out at `memory`,
+ * reading its capacity, sample rate and channels once: one of the VD_RATE_*
+ * rates, 1 to VD_RING_MAX_CHANNELS channels (zeros mean 48 kHz mono), and memory
+ * for the whole capacity of frames. Counts everywhere below are in frames.
+ */
 vd_status vd_ring_attach(vd_ring *ring, void *memory, size_t memory_len);
+
+/* Samples in each of this Ring's frames (its channels), as read at attach. */
+uint32_t vd_ring_channels(const vd_ring *ring);
+
+/* This Ring's sample rate in frames a second, as read at attach. */
+uint32_t vd_ring_sample_rate(const vd_ring *ring);
 
 /* Microphone direction: takes `count` frames out of the Ring into `dst`. */
 void vd_ring_read(vd_ring *ring, float *dst, uint32_t count);

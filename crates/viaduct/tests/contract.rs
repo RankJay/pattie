@@ -62,8 +62,14 @@ contract_suite!(
     a_partly_full_ring_accepts_only_the_room_left,
     audio_windows_asks_for_and_doesnt_get_shows_up_as_gap,
     a_speakers_reader_gets_what_was_played_to_it,
-    formats_other_than_48_khz_mono_are_rejected,
-    the_v0_format_is_accepted,
+    formats_outside_three_rates_and_eight_channels_are_rejected,
+    the_three_rates_and_one_to_eight_channels_are_accepted,
+    a_device_reports_its_format,
+    a_stereo_microphone_carries_whole_frames_to_the_system,
+    a_partial_frame_is_refused_whole,
+    a_stereo_speakers_reader_gets_whole_frames,
+    write_paced_on_a_stereo_microphone_counts_frames,
+    a_mono_playout_fills_every_channel_of_a_stereo_microphone,
     a_device_has_at_most_one_writer_or_reader,
     dropping_a_writer_lets_the_device_hand_out_another,
     dropping_a_reader_lets_the_device_hand_out_another,
@@ -91,6 +97,7 @@ contract_suite!(
     a_devices_next_play_time_matches_its_writers,
     a_live_writers_audio_reaches_the_system_after_its_buffer_fills,
     a_live_writer_holds_the_writer_slot_and_only_on_a_microphone,
+    a_live_writer_converts_mono_48_khz_to_a_stereo_96_khz_microphone,
 );
 
 fn creating_a_microphone_gives_a_device_with_id_1(backend: &dyn Backend) {
@@ -197,8 +204,15 @@ fn a_speakers_reader_gets_what_was_played_to_it(backend: &dyn Backend) {
     assert_eq!(&heard[..count], &[0.125, -0.25]);
 }
 
-fn formats_other_than_48_khz_mono_are_rejected(backend: &dyn Backend) {
-    let results = [(44_100, 1), (48_000, 2), (96_000, 1)].map(|(rate, channels)| {
+fn formats_outside_three_rates_and_eight_channels_are_rejected(backend: &dyn Backend) {
+    let results = [
+        (22_050, 1),
+        (44_101, 2),
+        (192_000, 1),
+        (48_000, 0),
+        (48_000, 9),
+    ]
+    .map(|(rate, channels)| {
         builder(backend)
             .name("Agent Mic")
             .format(rate, channels)
@@ -206,16 +220,23 @@ fn formats_other_than_48_khz_mono_are_rejected(backend: &dyn Backend) {
             .err()
     });
 
-    assert_eq!(results, [Some(viaduct::Error::UnsupportedFormat); 3]);
+    assert_eq!(results, [Some(viaduct::Error::UnsupportedFormat); 5]);
 }
 
-fn the_v0_format_is_accepted(backend: &dyn Backend) {
-    let mic = builder(backend)
-        .name("Agent Mic")
-        .format(48_000, 1)
-        .create();
+fn the_three_rates_and_one_to_eight_channels_are_accepted(backend: &dyn Backend) {
+    let refused: Vec<_> = [44_100, 48_000, 96_000]
+        .into_iter()
+        .flat_map(|rate| (1..=8u16).map(move |channels| (rate, channels)))
+        .filter(|&(rate, channels)| {
+            let mic = builder(backend)
+                .name(format!("Mic {rate} {channels}"))
+                .format(rate, channels)
+                .create();
+            mic.is_err()
+        })
+        .collect();
 
-    assert!(mic.is_ok());
+    assert_eq!(refused, []);
 }
 
 fn a_device_has_at_most_one_writer_or_reader(backend: &dyn Backend) {
@@ -717,4 +738,164 @@ fn a_devices_next_play_time_matches_its_writers(backend: &dyn Backend) {
     let (device, writer) = (mic.next_play_time().unwrap(), tx.next_play_time().unwrap());
     assert!(before_any_pass.is_none());
     assert!(device.max(writer) - device.min(writer) < Duration::from_millis(1));
+}
+
+/// `frames` stereo frames: frame n is (n + 0.25, -(n + 0.75)), never zero.
+fn stereo(first: u16, frames: u16) -> Vec<f32> {
+    (first..first + frames)
+        .flat_map(|n| [f32::from(n) + 0.25, -(f32::from(n) + 0.75)])
+        .collect()
+}
+
+fn a_device_reports_its_format(backend: &dyn Backend) {
+    let default = builder(backend).name("Agent Mic").create().unwrap();
+    let stereo = builder(backend)
+        .name("Stereo Mic")
+        .format(44_100, 2)
+        .create()
+        .unwrap();
+
+    assert_eq!(default.format(), viaduct::Format::DEVICE);
+    assert_eq!(
+        stereo.format(),
+        viaduct::Format {
+            rate: 44_100,
+            channels: 2,
+            encoding: viaduct::Encoding::F32
+        }
+    );
+}
+
+fn a_stereo_microphone_carries_whole_frames_to_the_system(backend: &dyn Backend) {
+    let mic = builder(backend)
+        .name("Stereo Mic")
+        .format(44_100, 2)
+        .create()
+        .unwrap();
+    let mut tx = mic.writer().unwrap();
+
+    let written = tx.write(&stereo(0, 100)).unwrap();
+    let taken = backend.driver_read(mic.id(), 100).unwrap();
+
+    assert_eq!(written, 100, "frames");
+    assert_eq!(taken, stereo(0, 100));
+    assert_eq!(mic.stats().buffered_frames, 0);
+}
+
+fn a_partial_frame_is_refused_whole(backend: &dyn Backend) {
+    let mic = builder(backend)
+        .name("Stereo Mic")
+        .format(48_000, 2)
+        .create()
+        .unwrap();
+    let mut tx = mic.writer().unwrap();
+
+    let refused = tx.write(&[0.1, 0.2, 0.3]); // one frame and a half
+
+    assert_eq!(refused, Err(viaduct::Error::PartialFrame));
+    assert_eq!(mic.stats().buffered_frames, 0, "nothing written");
+}
+
+fn a_stereo_speakers_reader_gets_whole_frames(backend: &dyn Backend) {
+    let speaker = builder(backend)
+        .name("Stereo Speaker")
+        .kind(Kind::Speaker)
+        .format(96_000, 2)
+        .create()
+        .unwrap();
+    let mut rx = speaker.reader().unwrap();
+    backend.driver_write(speaker.id(), &stereo(0, 3));
+
+    let mut out = [0.0f32; 5]; // room for two whole frames and a half
+    let frames = rx.read(&mut out).unwrap();
+
+    assert_eq!(frames, 2);
+    assert_eq!(out[..4].to_vec(), stereo(0, 2));
+    assert_eq!(out[4], 0.0, "the half frame is left alone");
+    assert_eq!(speaker.stats().buffered_frames, 1);
+}
+
+fn write_paced_on_a_stereo_microphone_counts_frames(backend: &dyn Backend) {
+    let mic = builder(backend)
+        .name("Stereo Mic")
+        .format(48_000, 2)
+        .create()
+        .unwrap();
+    let mut tx = mic.writer().unwrap();
+    let audio = stereo(0, 2_000);
+
+    let (written, ()) = (
+        std::thread::scope(|scope| {
+            let system = scope.spawn(|| {
+                let give_up = Instant::now() + Duration::from_secs(5);
+                let mut taken = Vec::new();
+                while taken.len() < audio.len() && Instant::now() < give_up {
+                    taken.extend(backend.driver_read(mic.id(), 480).unwrap());
+                    system_pause();
+                }
+                taken
+            });
+            let written = tx
+                .write_paced(&audio, Instant::now() + Duration::from_secs(5))
+                .unwrap();
+            let taken = system.join().unwrap();
+            assert_eq!(taken[..audio.len()], audio[..]);
+            written
+        }),
+        (),
+    );
+
+    assert_eq!(written, 2_000, "frames");
+}
+
+fn a_mono_playout_fills_every_channel_of_a_stereo_microphone(backend: &dyn Backend) {
+    let mic = builder(backend)
+        .name("Stereo Mic")
+        .format(48_000, 2)
+        .create()
+        .unwrap();
+    let mono = viaduct::Format {
+        rate: 48_000,
+        channels: 1,
+        encoding: viaduct::Encoding::F32,
+    };
+    let playout = mic.playout_from(mono).unwrap();
+    let voice: Vec<u8> = reply(480).iter().flat_map(|s| s.to_le_bytes()).collect();
+
+    assert_eq!(playout.push_bytes(&voice), 480, "frames");
+    let (taken, ()) = system_pulls_while(backend, &mic, Duration::from_millis(300), || {});
+
+    let heard: Vec<[f32; 2]> = taken
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .copied()
+        .filter(|[left, _]| *left != 0.0)
+        .collect();
+    assert_eq!(heard.len(), 480);
+    assert!(heard.iter().all(|[left, right]| left == right));
+}
+
+fn a_live_writer_converts_mono_48_khz_to_a_stereo_96_khz_microphone(backend: &dyn Backend) {
+    let mic = builder(backend)
+        .name("Stereo Mic")
+        .format(96_000, 2)
+        .create()
+        .unwrap();
+    let live = mic.live_writer(viaduct::Format::DEVICE).unwrap();
+    let source: Vec<u8> = [0.5f32; 9_600]
+        .iter()
+        .flat_map(|s| s.to_le_bytes())
+        .collect();
+
+    assert_eq!(live.push_bytes(&source), 19_200, "96 kHz frames");
+    let (taken, ()) = system_pulls_while(backend, &mic, Duration::from_millis(300), || {});
+
+    let frames = taken.as_chunks::<2>().0;
+    let audio = frames
+        .iter()
+        .filter(|[left, _]| (left - 0.5).abs() < 1e-3)
+        .count();
+    assert!(audio >= 9_600, "{audio} frames of the source's audio");
+    assert!(frames.iter().all(|[left, right]| left == right));
 }

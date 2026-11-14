@@ -107,8 +107,8 @@ impl TestBackend {
         self.transport.clone()
     }
 
-    /// The audio callback of a Microphone pulls `count` frames. `None` if no live
-    /// Device has that ID.
+    /// The audio callback of a Microphone pulls `count` frames (interleaved
+    /// samples, `count` times the channels). `None` if no live Device has that ID.
     pub fn driver_read(&self, device_id: u32, count: usize) -> Option<Vec<f32>> {
         self.driver_read_at(device_id, count, os_now_ns())
     }
@@ -118,9 +118,10 @@ impl TestBackend {
     pub fn driver_read_at(&self, device_id: u32, count: usize, ns: u64) -> Option<Vec<f32>> {
         let mut rings = self.rings.lock().unwrap_or_else(PoisonError::into_inner);
         let (ring, wake) = rings.get_mut(&device_id)?;
-        let mut out = vec![0.0f32; count];
         // SAFETY: the entry exists, so the Device is live, and the lock makes this
         // the Ring's only user.
+        let mut out = vec![0.0f32; count * unsafe { ring.channels() }];
+        // SAFETY: as above.
         unsafe { ring.read(&mut out) };
         // SAFETY: as above.
         unsafe { ring.publish_clock(Kind::Microphone, ns) };
@@ -128,7 +129,8 @@ impl TestBackend {
         Some(out)
     }
 
-    /// Audio played to a Speaker. `false` if no live Device has that ID.
+    /// Audio played to a Speaker (interleaved samples, whole frames). `false` if
+    /// no live Device has that ID.
     pub fn driver_write(&self, device_id: u32, samples: &[f32]) -> bool {
         let mut rings = self.rings.lock().unwrap_or_else(PoisonError::into_inner);
         let Some((ring, wake)) = rings.get_mut(&device_id) else {

@@ -1,6 +1,7 @@
 //! Converts audio between the formats AI stacks produce and the Device's own
-//! (48 kHz, mono, 32-bit float): sample encodings (32-bit float, 16-bit PCM,
-//! μ-law), mono and stereo, and sample rates from 8 to 48 kHz (ADR 0019). A
+//! (32-bit float at the Device's rate and channels): sample encodings (32-bit
+//! float, 16-bit PCM, μ-law), 1 to 8 channels, and sample rates from 8 to 96 kHz
+//! (ADR 0019, ADR 0023). A
 //! `Converter` keeps its state from one call to the next, so a stream converted in
 //! pieces of any size, even pieces that split a sample, is identical to the same
 //! stream converted at once.
@@ -24,16 +25,17 @@ pub enum Encoding {
 /// A stream's sample rate, channel count and encoding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Format {
-    /// Frames a second: 8,000, 11,025, 16,000, 22,050, 24,000, 32,000, 44,100 or 48,000.
+    /// Frames a second: 8,000, 11,025, 16,000, 22,050, 24,000, 32,000, 44,100,
+    /// 48,000 or 96,000.
     pub rate: u32,
-    /// 1 (mono) or 2 (stereo, interleaved).
+    /// 1 to 8, interleaved.
     pub channels: u16,
     /// How each sample is written.
     pub encoding: Encoding,
 }
 
 impl Format {
-    /// What a v0 Device takes and gives: 48 kHz, mono, 32-bit float.
+    /// A Device's default format: 48 kHz, mono, 32-bit float.
     pub const DEVICE: Format = Format {
         rate: 48_000,
         channels: 1,
@@ -49,13 +51,13 @@ impl Format {
 }
 
 /// The sample rates a `Format` may have.
-const RATES: [u32; 8] = [
-    8_000, 11_025, 16_000, 22_050, 24_000, 32_000, 44_100, 48_000,
+const RATES: [u32; 9] = [
+    8_000, 11_025, 16_000, 22_050, 24_000, 32_000, 44_100, 48_000, 96_000,
 ];
 
 impl Format {
     fn check(&self) -> Result<(), Error> {
-        if RATES.contains(&self.rate) && (1..=2).contains(&self.channels) {
+        if RATES.contains(&self.rate) && (1..=8).contains(&self.channels) {
             Ok(())
         } else {
             Err(Error::UnsupportedFormat)
@@ -95,10 +97,15 @@ impl fmt::Debug for Converter {
 
 impl Converter {
     /// A converter from `from` to `to`; `UnsupportedFormat` for a rate outside the
-    /// list on [`Format::rate`], or more than two channels.
+    /// list on [`Format::rate`], channels outside 1 to 8, or a channel mapping
+    /// other than mono to many (copied), many to mono (averaged) or the same count
+    /// (each channel kept).
     pub fn new(from: Format, to: Format) -> Result<Converter, Error> {
         from.check()?;
         to.check()?;
+        if from.channels != to.channels && from.channels != 1 && to.channels != 1 {
+            return Err(Error::UnsupportedFormat);
+        }
         let channels = from.channels.min(to.channels);
         let resamplers = if from.rate == to.rate {
             Vec::new()
@@ -129,19 +136,28 @@ impl Converter {
         self.pending.drain(..whole);
 
         // Fewer channels first (less to resample), more channels last.
-        let audio = match (self.from.channels, self.to.channels) {
-            (2, 1) => samples
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .map(|[left, right]| (left + right) / 2.0)
-                .collect(),
-            _ => samples,
+        let (from, to) = (
+            usize::from(self.from.channels),
+            usize::from(self.to.channels),
+        );
+        let audio = if from > 1 && to == 1 {
+            #[expect(clippy::cast_precision_loss, reason = "at most 8 channels")]
+            let share = 1.0 / from as f32;
+            samples
+                .chunks_exact(from)
+                .map(|frame| frame.iter().sum::<f32>() * share)
+                .collect()
+        } else {
+            samples
         };
         let audio = self.resample(audio);
-        let audio = match (self.from.channels, self.to.channels) {
-            (1, 2) => audio.iter().flat_map(|&s| [s, s]).collect(),
-            _ => audio,
+        let audio = if from == 1 && to > 1 {
+            audio
+                .iter()
+                .flat_map(|&s| std::iter::repeat_n(s, to))
+                .collect()
+        } else {
+            audio
         };
         for sample in audio {
             encode(self.to.encoding, sample, output);

@@ -27,12 +27,35 @@ fn tone(out: &mut [f32], phase: &mut f32) {
 
 /// RMS and zero-crossing frequency of `samples`.
 fn measure(samples: &[f32]) -> (f32, f32) {
+    measure_at(samples, RATE)
+}
+
+/// RMS and zero-crossing frequency of `samples` at `rate`.
+fn measure_at(samples: &[f32], rate: f32) -> (f32, f32) {
     let rms = (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt();
     let rising = samples
         .windows(2)
         .filter(|w| w[0] < 0.0 && w[1] >= 0.0)
         .count();
-    (rms, rising as f32 / (samples.len() as f32 / RATE))
+    (rms, rising as f32 / (samples.len() as f32 / rate))
+}
+
+/// Interleaved stereo at `rate`: 440 Hz on the left and 660 Hz on the right, at
+/// amplitude 0.5, continuing from `phases`.
+fn stereo_tones(frames: usize, rate: f32, phases: &mut [f32; 2]) -> Vec<f32> {
+    let mut out = Vec::with_capacity(frames * 2);
+    for _ in 0..frames {
+        for (phase, frequency) in phases.iter_mut().zip([440.0, 660.0]) {
+            out.push(0.5 * (*phase * std::f32::consts::TAU).sin());
+            *phase = (*phase + frequency / rate).fract();
+        }
+    }
+    out
+}
+
+/// Channel `c` of interleaved stereo.
+fn channel(samples: &[f32], c: usize) -> Vec<f32> {
+    samples.iter().skip(c).step_by(2).copied().collect()
 }
 
 /// The 32-bit float samples of a WAV file's `data` chunk.
@@ -53,6 +76,11 @@ fn wav_samples(bytes: &[u8]) -> Vec<f32> {
 
 /// A mono 16-bit PCM WAV file of `samples`.
 fn wav_file(samples: &[f32]) -> Vec<u8> {
+    wav_file_format(samples, 48_000, 1)
+}
+
+/// A 16-bit PCM WAV file of `samples` (interleaved) at `rate` with `channels`.
+fn wav_file_format(samples: &[f32], rate: u32, channels: u16) -> Vec<u8> {
     let data: Vec<u8> = samples
         .iter()
         .flat_map(|s| ((s * 32_767.0) as i16).to_le_bytes())
@@ -61,7 +89,14 @@ fn wav_file(samples: &[f32]) -> Vec<u8> {
     file.extend_from_slice(b"RIFF");
     file.extend_from_slice(&(36 + data.len() as u32).to_le_bytes());
     file.extend_from_slice(b"WAVEfmt ");
-    for field in [16u32, 1 | (1 << 16), 48_000, 96_000, 2 | (16 << 16)] {
+    let block = 2 * u32::from(channels);
+    for field in [
+        16u32,
+        1 | (u32::from(channels) << 16),
+        rate,
+        rate * block,
+        block | (16 << 16),
+    ] {
         file.extend_from_slice(&field.to_le_bytes());
     }
     file.extend_from_slice(b"data");
@@ -282,4 +317,128 @@ fn a_device_comes_back_by_itself_after_pipewire_restarts() {
     let (rms, frequency) = measure(steady);
     assert!((rms - 0.354).abs() < 0.02, "rms {rms}");
     assert!((frequency - 440.0).abs() < 5.0, "frequency {frequency}");
+}
+
+#[test]
+#[ignore = "needs a running PipeWire with pw-record (README, Linux)"]
+fn a_stereo_44_1_khz_microphone_reaches_a_recording_channel_by_channel() {
+    let name = format!("Viaduct Stereo Mic {}", std::process::id());
+    let mic = Device::builder()
+        .name(&name)
+        .format(44_100, 2)
+        .create()
+        .unwrap();
+    let mut writer = mic.writer().unwrap();
+    let file = std::env::temp_dir().join(format!("viaduct-stereo-{}.wav", std::process::id()));
+    let stop = AtomicBool::new(false);
+    let mut clocks = Vec::new();
+
+    std::thread::scope(|scope| {
+        let clocks = &mut clocks;
+        let mic = &mic;
+        scope.spawn(move || {
+            for _ in 0..2 {
+                pause(1_000);
+                clocks.push(mic.clock());
+            }
+        });
+        scope.spawn(|| {
+            let mut phases = [0.0; 2];
+            while !stop.load(Ordering::Relaxed) {
+                let chunk = stereo_tones(441, 44_100.0, &mut phases);
+                let _ = writer.write_paced(&chunk, Instant::now() + Duration::from_secs(1));
+            }
+        });
+        let recorded = Command::new("timeout")
+            .args([
+                "3",
+                "pw-record",
+                "--target",
+                &node_name(Kind::Microphone, &name),
+            ])
+            .args(["--rate", "44100", "--channels", "2", "--format", "f32"])
+            .arg(&file)
+            .status()
+            .unwrap();
+        stop.store(true, Ordering::Relaxed);
+        assert!(
+            recorded.code() == Some(124) || recorded.success(),
+            "pw-record: {recorded}"
+        );
+    });
+
+    // PipeWire takes the node's frames at its own rate: 44.1 kHz.
+    let [Some(first), Some(second)] = clocks[..] else {
+        panic!("no clock while recording: {clocks:?}");
+    };
+    let seconds = (second.at - first.at).as_secs_f64();
+    let rate = (second.frames - first.frames) as f64 / seconds;
+    assert!((rate - 44_100.0).abs() < 441.0, "{rate:.0} frames a second");
+
+    let samples = wav_samples(&std::fs::read(&file).unwrap());
+    let _ = std::fs::remove_file(&file);
+    let steady = samples.get(2 * 22_050..).unwrap_or(&[]);
+    assert!(
+        steady.len() > 2 * 44_100,
+        "recorded {} samples",
+        samples.len()
+    );
+    for (c, expected) in [(0, 440.0), (1, 660.0)] {
+        let (rms, frequency) = measure_at(&channel(steady, c), 44_100.0);
+        assert!((rms - 0.354).abs() < 0.02, "channel {c}: rms {rms}");
+        assert!(
+            (frequency - expected).abs() < 5.0,
+            "channel {c}: frequency {frequency}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "needs a running PipeWire with pw-play (README, Linux)"]
+fn a_stereo_96_khz_speaker_hands_the_app_each_channel() {
+    let name = format!("Viaduct Stereo Speaker {}", std::process::id());
+    let speaker = Device::builder()
+        .name(&name)
+        .kind(Kind::Speaker)
+        .format(96_000, 2)
+        .create()
+        .unwrap();
+    let mut reader = speaker.reader().unwrap();
+    let file = std::env::temp_dir().join(format!("viaduct-stereo-out-{}.wav", std::process::id()));
+    let played = stereo_tones(192_000, 96_000.0, &mut [0.0; 2]); // 2 s
+    std::fs::write(&file, wav_file_format(&played, 96_000, 2)).unwrap();
+
+    let mut heard = Vec::new();
+    let mut player = Command::new("pw-play")
+        .args(["--target", &node_name(Kind::Speaker, &name)])
+        .arg(&file)
+        .spawn()
+        .unwrap();
+    let mut buffer = [0.0f32; 2 * 1024];
+    let until = Instant::now() + Duration::from_secs(4);
+    while Instant::now() < until {
+        let frames = reader.read_paced(&mut buffer, until).unwrap();
+        heard.extend_from_slice(&buffer[..2 * frames]);
+    }
+    let _ = player.wait();
+    let _ = std::fs::remove_file(&file);
+
+    // The loud part only, from the first loud frame: whole frames throughout.
+    let first_loud = heard
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .position(|[left, _]| left.abs() >= 0.1)
+        .unwrap_or(heard.len() / 2);
+    let loud = &heard[2 * first_loud..];
+    let steady = loud.get(2 * 9_600..2 * 144_000).unwrap_or(&[]);
+    assert!(!steady.is_empty(), "heard {} samples", heard.len());
+    for (c, expected) in [(0, 440.0), (1, 660.0)] {
+        let (rms, frequency) = measure_at(&channel(steady, c), 96_000.0);
+        assert!((rms - 0.354).abs() < 0.02, "channel {c}: rms {rms}");
+        assert!(
+            (frequency - expected).abs() < 5.0,
+            "channel {c}: frequency {frequency}"
+        );
+    }
 }

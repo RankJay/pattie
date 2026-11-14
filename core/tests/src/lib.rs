@@ -287,14 +287,45 @@ const GUARD: u64 = 0xA5A5_A5A5_A5A5_A5A5;
 const GUARD_WORDS: usize = 8;
 
 impl RingMemory {
-    /// Bytes a correctly sized Ring of `capacity_frames` needs.
+    /// Bytes a correctly sized mono Ring of `capacity_frames` needs.
     pub fn bytes_for(capacity_frames: u32) -> usize {
-        size_of::<vd_ring_header>() + capacity_frames as usize * size_of::<f32>()
+        Self::bytes_for_format(capacity_frames, 1)
+    }
+
+    /// Bytes a correctly sized Ring of `capacity_frames` frames of `channels` needs.
+    pub fn bytes_for_format(capacity_frames: u32, channels: u16) -> usize {
+        size_of::<vd_ring_header>()
+            + capacity_frames as usize * usize::from(channels.max(1)) * size_of::<f32>()
     }
 
     /// A correctly sized Ring claiming `capacity_frames`.
     pub fn new(capacity_frames: u32) -> Self {
         Self::with_claim(capacity_frames, Self::bytes_for(capacity_frames))
+    }
+
+    /// A correctly sized Ring of `capacity_frames` frames at `sample_rate` with
+    /// `channels` (ADR 0017's settings; 0 means 48 kHz, mono).
+    pub fn with_format(capacity_frames: u32, sample_rate: u32, channels: u16) -> Self {
+        let len = Self::bytes_for_format(capacity_frames, channels);
+        Self::with_claim_format(capacity_frames, sample_rate, channels, len)
+    }
+
+    /// `len` bytes whose header claims that capacity and format, agreeing or not.
+    pub fn with_claim_format(
+        capacity_frames: u32,
+        sample_rate: u32,
+        channels: u16,
+        len: usize,
+    ) -> Self {
+        let mut memory = Self::with_claim(capacity_frames, len);
+        memory.header_mut().sample_rate = sample_rate;
+        memory.header_mut().channels = channels;
+        memory
+    }
+
+    /// Samples in a frame, as the header says (0 means mono).
+    pub fn channels(&self) -> usize {
+        usize::from(self.header().channels.max(1))
     }
 
     /// `len` bytes whose header claims `capacity_frames`, agreeing or not.
@@ -346,16 +377,18 @@ impl RingMemory {
     /// memory really holds that many (a test may have changed the header).
     fn assert_frames_backed(&self) {
         let capacity = self.header().capacity_frames;
+        let channels = self.header().channels;
         assert!(
-            capacity > 0 && Self::bytes_for(capacity) <= self.backed_words * 8,
-            "the header claims {capacity} frames, more than this memory holds"
+            capacity > 0 && Self::bytes_for_format(capacity, channels) <= self.backed_words * 8,
+            "the header claims {capacity} frames of {channels} channels, more than this memory holds"
         );
     }
 
-    /// Frame `index` (below the checked capacity) of the frames at `frames`.
+    /// Sample `index` (below the checked capacity times channels) of the frames
+    /// at `frames`.
     fn frame_at(frames: *mut f32, index: usize) -> *mut f32 {
-        // SAFETY: callers pass an index below the capacity `assert_frames_backed`
-        // checked, so the frame is inside the memory.
+        // SAFETY: callers pass an index below the capacity times the channels
+        // `assert_frames_backed` checked, so the sample is inside the memory.
         unsafe { frames.add(index) }
     }
 
@@ -370,33 +403,44 @@ impl RingMemory {
         }
     }
 
-    /// The app appends frames, as the SDK writer does for a Microphone.
+    /// The app appends frames (interleaved samples, whole frames), as the SDK
+    /// writer does for a Microphone.
     pub fn app_write(&mut self, samples: &[f32]) {
         self.assert_frames_backed();
+        let channels = self.channels();
+        assert_eq!(samples.len() % channels, 0, "whole frames only");
         let capacity = self.header().capacity_frames as u64;
         let mut written = self.header().write_frames;
         let frames = self.frames();
-        for &sample in samples {
-            let frame = Self::frame_at(frames, (written % capacity) as usize);
-            // SAFETY: `frame_at` stays inside the frames `assert_frames_backed` checked.
-            unsafe { *frame = sample };
+        for frame in samples.chunks(channels) {
+            let first = (written % capacity) as usize * channels;
+            for (c, &sample) in frame.iter().enumerate() {
+                let slot = Self::frame_at(frames, first + c);
+                // SAFETY: `frame_at` stays inside the frames `assert_frames_backed` checked.
+                unsafe { *slot = sample };
+            }
             written += 1;
         }
         self.header_mut().write_frames = written;
     }
 
-    /// The app takes up to `count` frames out, as the SDK reader does for a Speaker.
+    /// The app takes up to `count` frames out (interleaved samples), as the SDK
+    /// reader does for a Speaker.
     pub fn app_read(&mut self, count: usize) -> Vec<f32> {
         self.assert_frames_backed();
+        let channels = self.channels();
         let capacity = self.header().capacity_frames as u64;
         let written = self.header().write_frames;
         let mut read = self.header().read_frames;
         let frames = self.frames();
         let mut out = Vec::new();
-        while read < written && out.len() < count {
-            let frame = Self::frame_at(frames, (read % capacity) as usize);
-            // SAFETY: as in `app_write`.
-            out.push(unsafe { *frame });
+        while read < written && out.len() < count * channels {
+            let first = (read % capacity) as usize * channels;
+            for c in 0..channels {
+                let slot = Self::frame_at(frames, first + c);
+                // SAFETY: as in `app_write`.
+                out.push(unsafe { *slot });
+            }
             read += 1;
         }
         self.header_mut().read_frames = read;
@@ -426,6 +470,10 @@ impl Ring {
         RingMemory::bytes_for(capacity_frames)
     }
 
+    pub fn bytes_for_format(capacity_frames: u32, channels: u16) -> usize {
+        RingMemory::bytes_for_format(capacity_frames, channels)
+    }
+
     /// A correctly laid-out Ring the driver accepted.
     pub fn new(capacity_frames: u32) -> Self {
         Self::attach(capacity_frames, Self::bytes_for(capacity_frames)).expect("attach failed")
@@ -434,7 +482,37 @@ impl Ring {
     /// Tells the driver the Ring is `memory_len` bytes and claims
     /// `capacity_frames` in its header, whether or not those agree.
     pub fn attach(capacity_frames: u32, memory_len: usize) -> Result<Self, vd_status> {
-        let mut memory = RingMemory::with_claim(capacity_frames, memory_len);
+        Self::attach_memory(RingMemory::with_claim(capacity_frames, memory_len))
+    }
+
+    /// A correctly laid-out Ring of that format the driver accepted.
+    pub fn with_format(capacity_frames: u32, sample_rate: u32, channels: u16) -> Self {
+        Self::attach_format(
+            capacity_frames,
+            sample_rate,
+            channels,
+            RingMemory::bytes_for_format(capacity_frames, channels),
+        )
+        .expect("attach failed")
+    }
+
+    /// As `attach`, with the header also claiming a sample rate and channels.
+    pub fn attach_format(
+        capacity_frames: u32,
+        sample_rate: u32,
+        channels: u16,
+        memory_len: usize,
+    ) -> Result<Self, vd_status> {
+        Self::attach_memory(RingMemory::with_claim_format(
+            capacity_frames,
+            sample_rate,
+            channels,
+            memory_len,
+        ))
+    }
+
+    fn attach_memory(mut memory: RingMemory) -> Result<Self, vd_status> {
+        let memory_len = memory.len();
         // SAFETY: a plain C struct of integers and pointers: all zeros is a valid value, set up by the init call next.
         let mut view = Box::new(unsafe { MaybeUninit::<vd_ring>::zeroed().assume_init() });
         // SAFETY: `view` is borrowed exclusively; the pointer and length describe `memory`, whose heap buffer `Ring` keeps alive with the view.
@@ -479,26 +557,48 @@ impl Ring {
 
     /// The driver puts frames in, as Windows plays audio to a Speaker.
     pub fn driver_write(&mut self, src: &[f32]) {
-        // SAFETY: `view` was attached to `self.memory`, which lives as long as it; the slice goes with its length.
-        unsafe { vd_ring_write(&mut *self.view, src.as_ptr(), src.len() as u32) };
+        let frames = self.whole_frames(src.len());
+        // SAFETY: `view` was attached to `self.memory`, which lives as long as it; the slice holds `frames` whole frames.
+        unsafe { vd_ring_write(&mut *self.view, src.as_ptr(), frames) };
+    }
+
+    /// The driver's own idea of the channels (its private copy, never the
+    /// app's header), and a sample count as whole frames of them.
+    pub fn driver_channels(&self) -> u32 {
+        self.view.channels
+    }
+
+    /// The driver's own idea of the sample rate, through the core's accessor.
+    pub fn driver_sample_rate(&self) -> u32 {
+        // SAFETY: the view is attached and lives as long as `self`.
+        unsafe { vd_ring_sample_rate(&*self.view) }
+    }
+
+    fn whole_frames(&self, samples: usize) -> u32 {
+        let channels = self.view.channels.max(1) as usize;
+        assert_eq!(samples % channels, 0, "whole frames only");
+        (samples / channels) as u32
     }
 
     /// The driver takes frames out, as Windows pulls audio from a Microphone.
     pub fn driver_read(&mut self, dst: &mut [f32]) {
-        // SAFETY: `view` was attached to `self.memory`, which lives as long as it; the slice goes with its length.
-        unsafe { vd_ring_read(&mut *self.view, dst.as_mut_ptr(), dst.len() as u32) };
+        let frames = self.whole_frames(dst.len());
+        // SAFETY: `view` was attached to `self.memory`, which lives as long as it; the slice holds `frames` whole frames.
+        unsafe { vd_ring_read(&mut *self.view, dst.as_mut_ptr(), frames) };
     }
 
     /// As `driver_read`, when Windows streams the Microphone as 16-bit PCM.
     pub fn driver_read_pcm16(&mut self, dst: &mut [i16]) {
-        // SAFETY: `view` was attached to `self.memory`, which lives as long as it; the slice goes with its length.
-        unsafe { vd_ring_read_pcm16(&mut *self.view, dst.as_mut_ptr(), dst.len() as u32) };
+        let frames = self.whole_frames(dst.len());
+        // SAFETY: as in `driver_read`.
+        unsafe { vd_ring_read_pcm16(&mut *self.view, dst.as_mut_ptr(), frames) };
     }
 
     /// As `driver_write`, when Windows plays 16-bit PCM to a Speaker.
     pub fn driver_write_pcm16(&mut self, src: &[i16]) {
-        // SAFETY: `view` was attached to `self.memory`, which lives as long as it; the slice goes with its length.
-        unsafe { vd_ring_write_pcm16(&mut *self.view, src.as_ptr(), src.len() as u32) };
+        let frames = self.whole_frames(src.len());
+        // SAFETY: as in `driver_write`.
+        unsafe { vd_ring_write_pcm16(&mut *self.view, src.as_ptr(), frames) };
     }
 
     /// After a Microphone pass: the driver publishes its read position at `ns`.

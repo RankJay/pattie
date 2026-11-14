@@ -92,12 +92,24 @@ static void unpin(world *w, uint32_t id)
     abort(); /* the core removed a Device the test never saw created */
 }
 
-/* Ring sizes to offer: the valid range, plus nonsense. */
-static size_t ring_len_from(uint8_t choice, uint32_t *capacity_claim)
+/* Ring formats to offer (ADR 0023): the valid ones, plus nonsense. */
+static void format_from(uint8_t choice, uint32_t *rate, uint16_t *channels)
+{
+    static const uint32_t rates[] = {0u, 44100u, 48000u, 96000u, 22050u, 0xFFFFFFFFu, 48000u, 96000u};
+    static const uint16_t counts[] = {0u, 1u, 2u, 6u, 8u, 9u, 64u, 0xFFFFu};
+
+    *rate = rates[choice % 8u];
+    *channels = counts[(choice >> 3) % 8u];
+}
+
+/* Ring sizes to offer, for frames of `channels`: the valid range, plus nonsense. */
+static size_t ring_len_from(uint8_t choice, uint16_t channels, uint32_t *capacity_claim)
 {
     static const uint32_t claims[] = {256u, 512u, 1024u, 0u, 255u, 300u, 65537u, 0xFFFFFFFFu};
     uint32_t claim = claims[choice % (sizeof claims / sizeof claims[0])];
-    size_t exact = sizeof(vd_ring_header) + (size_t)(claim > 65536u ? 0u : claim) * sizeof(float);
+    /* 0 means mono; past the maximum, size as mono (the core must refuse it). */
+    size_t width = channels == 0u || channels > VD_RING_MAX_CHANNELS ? 1u : channels;
+    size_t exact = sizeof(vd_ring_header) + (size_t)(claim > 65536u ? 0u : claim) * width * sizeof(float);
 
     *capacity_claim = claim;
     switch ((choice >> 3) % 4u) {
@@ -111,19 +123,27 @@ static size_t ring_len_from(uint8_t choice, uint32_t *capacity_claim)
 static void create(world *w, cursor *c, vd_owner *owner)
 {
     vd_create_device_request request;
-    uint32_t claim;
-    size_t ring_len = ring_len_from(take_u8(c), &claim);
-    void *memory = malloc(ring_len > 0 ? ring_len : 1u);
     uint8_t reply[sizeof(vd_create_device_reply)];
-    size_t reply_cap = (take_u8(c) & 1u) ? sizeof reply : 2u;
+    size_t reply_cap;
     size_t reply_len = 0;
+    uint32_t claim;
+    uint32_t rate;
+    uint16_t channels;
+    size_t ring_len;
+    void *memory;
 
+    format_from(take_u8(c), &rate, &channels);
+    ring_len = ring_len_from(take_u8(c), channels, &claim);
+    memory = malloc(ring_len > 0 ? ring_len : 1u);
+    reply_cap = (take_u8(c) & 1u) ? sizeof reply : 2u;
     if (memory == NULL) {
         return;
     }
     memset(memory, 0, ring_len > 0 ? ring_len : 1u);
     if (ring_len >= sizeof(vd_ring_header)) {
         ((vd_ring_header *)memory)->capacity_frames = claim;
+        ((vd_ring_header *)memory)->sample_rate = rate;
+        ((vd_ring_header *)memory)->channels = channels;
     }
     take(c, &request, sizeof request); /* every field straight from the input */
     if (vd_core_command(&w->core, owner, VD_CMD_CREATE_DEVICE, &request, sizeof request,
@@ -158,15 +178,18 @@ static void stream(world *w, cursor *c)
     uint32_t count = take_u16(c) % (MAX_FRAMES + 1u);
     vd_ring *ring;
     void *buffer;
+    size_t bytes;
 
     if (slot->id == 0 || (ring = vd_core_device_ring(&w->core, slot->id)) == NULL) {
         return;
     }
-    buffer = malloc(count > 0 ? (size_t)count * sizeof(float) : 1u);
+    /* `count` frames of the Ring's channels, as the core read them at attach. */
+    bytes = (size_t)count * vd_ring_channels(ring) * sizeof(float);
+    buffer = malloc(bytes > 0 ? bytes : 1u);
     if (buffer == NULL) {
         return;
     }
-    memset(buffer, 0, count > 0 ? (size_t)count * sizeof(float) : 1u);
+    memset(buffer, 0, bytes > 0 ? bytes : 1u);
     switch (op % 5u) {
     case 0: vd_ring_read(ring, (float *)buffer, count); break;
     case 1: vd_ring_read_pcm16(ring, (int16_t *)buffer, count); break;

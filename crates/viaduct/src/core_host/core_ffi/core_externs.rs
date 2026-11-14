@@ -17,6 +17,12 @@ unsafe extern "C" {
     ) -> u32;
     fn vd_core_owner_closed(core: *mut VdCore, owner: *const VdOwner, removed: *mut u32) -> usize;
     fn vd_core_device_ring(core: *mut VdCore, device_id: u32) -> *mut VdRing;
+    fn vd_ring_channels(ring: *const VdRing) -> u32;
+    #[cfg_attr(
+        not(target_os = "linux"),
+        allow(dead_code, reason = "only PipeWire's format needs the rate")
+    )]
+    fn vd_ring_sample_rate(ring: *const VdRing) -> u32;
     fn vd_ring_read(ring: *mut VdRing, dst: *mut f32, count: u32);
     fn vd_ring_write(ring: *mut VdRing, src: *const f32, count: u32);
     fn vd_ring_publish_read_clock(ring: *mut VdRing, now_ns: u64);

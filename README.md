@@ -133,7 +133,7 @@ correction) lives in the SDK, where a bug can't crash the machine.
 | **Device** | A virtual mic or speaker an app created. One name, one kind, one Ring. |
 | **Kind** | `Microphone` (app → Windows) or `Speaker` (Windows → app). |
 | **Owner** | The app handle that created a Device. When it closes, its Devices go. |
-| **Ring** | The shared-memory ring buffer for one Device's audio. 32-bit float, 48 kHz, mono in v0. |
+| **Ring** | The shared-memory ring buffer for one Device's audio: 32-bit float frames, one sample per channel, at the Device's rate. |
 | **Gap** | Frames the driver needed but the Ring didn't have (silence was played). |
 | **Overflow** | Frames the app wrote that didn't fit in the Ring (dropped). |
 | **Root device** | The one permanent device, `Root\Viaduct`, that makes Windows load the driver. |
@@ -161,9 +161,11 @@ of its major and replies with its own version, and each connection speaks the
 lower minor, so an app with a newer SDK still works on an older driver. A minor
 only adds; the spare bytes in the header are reserved for formats and timestamps
 (ADR 0017).
-- **v0 scope is fixed:** 48 kHz, mono, float, at most 8 Devices, names up to 63
+- **One format per Device, fixed at creation:** 44.1, 48 or 96 kHz with 1 to 8
+channels (48 kHz mono by default), float; at most 8 Devices, names up to 63
 characters, case-sensitive. Windows may open the endpoint as float or 16-bit PCM;
-the driver converts, the app always sees float.
+the driver converts, the app always sees float. Writers and readers count in
+frames, and a write must end on a whole frame (ADR 0023).
 - **Same name, same endpoint.** A Device gets an ID derived from its kind and name
 (`viaduct::stable_id`), so the system reuses the endpoint and keeps the user's
 settings for it: the circuit device's instance ID on Windows, the PipeWire

@@ -2,7 +2,8 @@
 #include "viaduct_port.h"
 
 _Static_assert(sizeof(vd_ring_header) == 192, "Ring header is three cache lines");
-_Static_assert(VD_RING_MAX_BYTES == sizeof(vd_ring_header) + VD_RING_MAX_FRAMES * sizeof(float),
+_Static_assert(VD_RING_MAX_BYTES == sizeof(vd_ring_header) +
+                                        VD_RING_MAX_FRAMES * VD_RING_MAX_CHANNELS * sizeof(float),
                "VD_RING_MAX_BYTES matches the largest valid Ring");
 
 /*
@@ -18,23 +19,42 @@ vd_status vd_ring_attach(vd_ring *ring, void *memory, size_t memory_len)
 {
     const vd_ring_header *header = (const vd_ring_header *)memory;
     uint32_t capacity;
+    uint32_t rate;
+    uint32_t channels;
 
     if (memory_len < sizeof(vd_ring_header)) {
         return VD_ERR_BAD_RING;
     }
-    /* Read the claim exactly once: the app can rewrite it at any moment. */
+    /* Read each claim exactly once: the app can rewrite them at any moment. */
     capacity = *(const volatile uint32_t *)&header->capacity_frames;
+    rate = *(const volatile uint32_t *)&header->sample_rate;
+    channels = *(const volatile uint16_t *)&header->channels;
+    if (rate == 0u) {
+        rate = VD_RATE_48000;
+    }
+    if (channels == 0u) {
+        channels = 1u;
+    }
     if (capacity < VD_RING_MIN_FRAMES || capacity > VD_RING_MAX_FRAMES ||
         (capacity & (capacity - 1)) != 0) {
         return VD_ERR_BAD_RING;
     }
-    if (memory_len - sizeof(vd_ring_header) < (size_t)capacity * sizeof(float)) {
+    if (rate != VD_RATE_44100 && rate != VD_RATE_48000 && rate != VD_RATE_96000) {
+        return VD_ERR_BAD_RING;
+    }
+    if (channels > VD_RING_MAX_CHANNELS) {
+        return VD_ERR_BAD_RING;
+    }
+    /* At most 65,536 frames of 8 channels: no overflow in size_t. */
+    if (memory_len - sizeof(vd_ring_header) < (size_t)capacity * channels * sizeof(float)) {
         return VD_ERR_BAD_RING;
     }
 
     ring->shared = (vd_ring_header *)memory;
     ring->frames = (float *)((unsigned char *)memory + sizeof(vd_ring_header));
     ring->capacity_frames = capacity;
+    ring->sample_rate = rate;
+    ring->channels = channels;
     ring->read_frames = 0;
     ring->gap_frames = 0;
     ring->write_frames = 0;
@@ -126,16 +146,40 @@ static void vd_ring_write_done(vd_ring *ring, uint32_t stored, uint32_t count)
     vd_store_release_u64(&ring->shared->write_frames, ring->write_frames);
 }
 
+uint32_t vd_ring_channels(const vd_ring *ring)
+{
+    return ring->channels;
+}
+
+uint32_t vd_ring_sample_rate(const vd_ring *ring)
+{
+    return ring->sample_rate;
+}
+
+/* The first sample of Ring frame `position` (a counter value). */
+static size_t vd_ring_sample(const vd_ring *ring, uint64_t position)
+{
+    return (size_t)(position % ring->capacity_frames) * ring->channels;
+}
+
+/*
+ * Each copy moves whole frames: `count` frames are `count * channels` samples,
+ * interleaved, in the caller's buffer and in the Ring alike.
+ */
 void vd_ring_read(vd_ring *ring, float *dst, uint32_t count)
 {
     uint32_t n = vd_ring_readable(ring, count);
+    uint32_t channels = ring->channels;
     const vd_sample_bits *frames = (const vd_sample_bits *)ring->frames;
     vd_sample_bits *out = (vd_sample_bits *)dst;
 
     for (uint32_t i = 0; i < n; i++) {
-        out[i] = frames[(ring->read_frames + i) % ring->capacity_frames];
+        size_t from = vd_ring_sample(ring, ring->read_frames + i);
+        for (uint32_t c = 0; c < channels; c++) {
+            out[(size_t)i * channels + c] = frames[from + c];
+        }
     }
-    for (uint32_t i = n; i < count; i++) {
+    for (size_t i = (size_t)n * channels; i < (size_t)count * channels; i++) {
         out[i] = 0; /* the app fell behind: listeners hear silence */
     }
     vd_ring_read_done(ring, n, count);
@@ -144,12 +188,16 @@ void vd_ring_read(vd_ring *ring, float *dst, uint32_t count)
 void vd_ring_read_pcm16(vd_ring *ring, int16_t *dst, uint32_t count)
 {
     uint32_t n = vd_ring_readable(ring, count);
+    uint32_t channels = ring->channels;
     const vd_sample_bits *frames = (const vd_sample_bits *)ring->frames;
 
     for (uint32_t i = 0; i < n; i++) {
-        dst[i] = vd_pcm16_from_sample(frames[(ring->read_frames + i) % ring->capacity_frames]);
+        size_t from = vd_ring_sample(ring, ring->read_frames + i);
+        for (uint32_t c = 0; c < channels; c++) {
+            dst[(size_t)i * channels + c] = vd_pcm16_from_sample(frames[from + c]);
+        }
     }
-    for (uint32_t i = n; i < count; i++) {
+    for (size_t i = (size_t)n * channels; i < (size_t)count * channels; i++) {
         dst[i] = 0;
     }
     vd_ring_read_done(ring, n, count);
@@ -158,11 +206,15 @@ void vd_ring_read_pcm16(vd_ring *ring, int16_t *dst, uint32_t count)
 void vd_ring_write(vd_ring *ring, const float *src, uint32_t count)
 {
     uint32_t n = vd_ring_writable(ring, count);
+    uint32_t channels = ring->channels;
     vd_sample_bits *frames = (vd_sample_bits *)ring->frames;
     const vd_sample_bits *in = (const vd_sample_bits *)src;
 
     for (uint32_t i = 0; i < n; i++) {
-        frames[(ring->write_frames + i) % ring->capacity_frames] = in[i];
+        size_t to = vd_ring_sample(ring, ring->write_frames + i);
+        for (uint32_t c = 0; c < channels; c++) {
+            frames[to + c] = in[(size_t)i * channels + c];
+        }
     }
     vd_ring_write_done(ring, n, count);
 }
@@ -170,10 +222,14 @@ void vd_ring_write(vd_ring *ring, const float *src, uint32_t count)
 void vd_ring_write_pcm16(vd_ring *ring, const int16_t *src, uint32_t count)
 {
     uint32_t n = vd_ring_writable(ring, count);
+    uint32_t channels = ring->channels;
     vd_sample_bits *frames = (vd_sample_bits *)ring->frames;
 
     for (uint32_t i = 0; i < n; i++) {
-        frames[(ring->write_frames + i) % ring->capacity_frames] = vd_sample_from_pcm16(src[i]);
+        size_t to = vd_ring_sample(ring, ring->write_frames + i);
+        for (uint32_t c = 0; c < channels; c++) {
+            frames[to + c] = vd_sample_from_pcm16(src[(size_t)i * channels + c]);
+        }
     }
     vd_ring_write_done(ring, n, count);
 }

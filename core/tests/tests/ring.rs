@@ -326,3 +326,175 @@ fn the_sdk_gives_up_on_a_pair_stuck_mid_write() {
 
     assert_eq!(sdk_reads(&ring.header().reader_clock), None);
 }
+
+// ---- Formats beyond 48 kHz mono (ADR 0017's settings, made real) ----
+
+/// `frames` stereo frames whose samples say which frame and channel they are:
+/// frame n is (n + 0.25, -(n + 0.75)), never zero.
+fn stereo(first: u32, frames: u32) -> Vec<f32> {
+    (first..first + frames)
+        .flat_map(|n| [n as f32 + 0.25, -(n as f32 + 0.75)])
+        .collect()
+}
+
+#[test]
+fn a_stereo_ring_carries_whole_frames_in_order() {
+    let mut ring = Ring::with_format(256, 48_000, 2);
+    ring.app_write(&stereo(0, 10));
+
+    let mut out = [0.0f32; 20];
+    ring.driver_read(&mut out);
+
+    assert_eq!(out.to_vec(), stereo(0, 10));
+    assert_eq!(ring.driver_counters().read, 10, "counters are in frames");
+}
+
+#[test]
+fn a_stereo_gap_is_whole_silent_frames_counted_once_each() {
+    let mut ring = Ring::with_format(256, 48_000, 2);
+    ring.app_write(&stereo(0, 3));
+
+    let mut out = [9.0f32; 10]; // five frames asked, three there
+    ring.driver_read(&mut out);
+
+    assert_eq!(out[..6].to_vec(), stereo(0, 3));
+    assert_eq!(out[6..], [0.0; 4]);
+    assert_eq!(ring.driver_counters().gap, 2);
+}
+
+#[test]
+fn stereo_audio_wraps_past_the_end_frame_by_frame() {
+    let mut ring = Ring::with_format(256, 48_000, 2);
+    ring.app_write(&stereo(0, 250));
+    ring.driver_read(&mut vec![0.0f32; 500]);
+
+    ring.app_write(&stereo(250, 20)); // frames 256-269 wrap to the start
+    let mut out = vec![0.0f32; 40];
+    ring.driver_read(&mut out);
+
+    assert_eq!(out, stereo(250, 20));
+}
+
+#[test]
+fn a_stereo_speaker_hands_the_app_whole_frames() {
+    let mut ring = Ring::with_format(256, 44_100, 2);
+
+    ring.driver_write(&stereo(0, 7));
+
+    assert_eq!(ring.app_read(7), stereo(0, 7));
+    assert_eq!(ring.driver_counters().write, 7);
+}
+
+#[test]
+fn a_stereo_pcm16_read_converts_every_sample() {
+    let mut ring = Ring::with_format(256, 96_000, 2);
+    ring.app_write(&[0.5, -0.5, 0.25, -0.25]);
+
+    let mut out = [0i16; 4];
+    ring.driver_read_pcm16(&mut out);
+
+    assert_eq!(out, [16_384, -16_384, 8_192, -8_192]);
+}
+
+#[test]
+fn a_stereo_pcm16_write_converts_every_sample() {
+    let mut ring = Ring::with_format(256, 48_000, 2);
+
+    ring.driver_write_pcm16(&[16_384, -16_384, 8_192, -8_192]);
+
+    assert_eq!(ring.app_read(2), [0.5, -0.5, 0.25, -0.25]);
+}
+
+#[test]
+fn a_stereo_stale_skip_keeps_whole_frames() {
+    let mut ring = Ring::with_format(256, 48_000, 2);
+    ring.app_write(&stereo(0, 100));
+
+    ring.driver_skip_stale(10);
+    let mut out = vec![0.0f32; 20];
+    ring.driver_read(&mut out);
+
+    assert_eq!(out, stereo(90, 10));
+}
+
+#[test]
+fn the_three_rates_and_one_to_eight_channels_are_accepted() {
+    let accepted: Vec<_> = [44_100, 48_000, 96_000]
+        .into_iter()
+        .flat_map(|rate| (1..=8u16).map(move |channels| (rate, channels)))
+        .filter(|&(rate, channels)| {
+            let len = Ring::bytes_for_format(256, channels);
+            Ring::attach_format(256, rate, channels, len).is_err()
+        })
+        .collect();
+
+    assert_eq!(accepted, [], "refused");
+}
+
+#[test]
+fn zero_settings_mean_48_khz_mono() {
+    let ring = Ring::with_format(256, 0, 0);
+
+    assert_eq!(
+        (ring.driver_sample_rate(), ring.driver_channels()),
+        (48_000, 1)
+    );
+}
+
+#[test]
+fn the_ring_reports_the_rate_and_channels_it_attached_with() {
+    let reported: Vec<_> = [(44_100, 2), (96_000, 8), (48_000, 6)]
+        .into_iter()
+        .map(|(rate, channels)| {
+            let ring = Ring::with_format(256, rate, channels);
+            (ring.driver_sample_rate(), ring.driver_channels())
+        })
+        .collect();
+
+    assert_eq!(reported, [(44_100, 2), (96_000, 8), (48_000, 6)]);
+}
+
+#[test]
+fn other_rates_and_channel_counts_are_rejected() {
+    let refused: Vec<_> = [
+        (22_050, 1),
+        (44_101, 2),
+        (192_000, 2),
+        (48_000, 9),
+        (48_000, 64),
+    ]
+    .into_iter()
+    .map(|(rate, channels)| {
+        let len = Ring::bytes_for_format(256, channels);
+        Ring::attach_format(256, rate, channels, len).err()
+    })
+    .collect();
+
+    assert_eq!(refused, [Some(VD_ERR_BAD_RING); 5]);
+}
+
+#[test]
+fn memory_sized_for_mono_is_too_small_for_stereo() {
+    let attached = Ring::attach_format(256, 48_000, 2, Ring::bytes_for(256));
+
+    assert_eq!(attached.err(), Some(VD_ERR_BAD_RING));
+}
+
+#[test]
+fn the_largest_ring_is_eight_channels_at_the_most_frames() {
+    assert_eq!(
+        VD_RING_MAX_BYTES as usize,
+        Ring::bytes_for_format(VD_RING_MAX_FRAMES, VD_RING_MAX_CHANNELS as u16)
+    );
+}
+
+#[test]
+fn app_rewriting_channels_after_attach_changes_nothing() {
+    let mut ring = Ring::with_format(256, 48_000, 2);
+    ring.app_header_mut().channels = 8; // the driver keeps its own copy
+
+    ring.driver_write(&stereo(0, 2));
+
+    assert_eq!(ring.driver_channels(), 2);
+    assert_eq!(ring.driver_counters().write, 2);
+}

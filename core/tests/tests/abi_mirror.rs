@@ -32,6 +32,7 @@ fn version_status_command_and_kind_constants_match() {
         rust::RING_MIN_FRAMES,
         rust::RING_MAX_FRAMES,
         rust::RING_MAX_BYTES,
+        rust::RING_MAX_CHANNELS,
     ];
     let c_side = [
         c::VIADUCT_ABI_MAJOR,
@@ -58,6 +59,7 @@ fn version_status_command_and_kind_constants_match() {
         c::VD_RING_MIN_FRAMES,
         c::VD_RING_MAX_FRAMES,
         c::VD_RING_MAX_BYTES,
+        c::VD_RING_MAX_CHANNELS,
     ];
 
     assert_eq!(rust_side, c_side);
@@ -126,6 +128,8 @@ fn field_offsets_match() {
         offset_of!(rust::RingHeader, read_frames),
         offset_of!(rust::RingHeader, gap_frames),
         offset_of!(rust::RingHeader, capacity_frames),
+        offset_of!(rust::RingHeader, sample_rate),
+        offset_of!(rust::RingHeader, channels),
         offset_of!(rust::RingHeader, writer_clock),
         offset_of!(rust::RingHeader, reader_clock),
         offset_of!(rust::RingClock, frames),
@@ -144,6 +148,8 @@ fn field_offsets_match() {
         offset_of!(c::vd_ring_header, read_frames),
         offset_of!(c::vd_ring_header, gap_frames),
         offset_of!(c::vd_ring_header, capacity_frames),
+        offset_of!(c::vd_ring_header, sample_rate),
+        offset_of!(c::vd_ring_header, channels),
         offset_of!(c::vd_ring_header, writer_clock),
         offset_of!(c::vd_ring_header, reader_clock),
         offset_of!(c::vd_ring_clock, frames),

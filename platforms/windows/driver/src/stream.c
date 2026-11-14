@@ -19,6 +19,7 @@ typedef struct _VD_STREAM_CONTEXT {
     ULONG PacketCount;
     ULONG PacketSize;               /* bytes */
     ULONG BytesPerFrame;            /* from the stream's format */
+    ULONG SampleRate;               /* the Device's, which the stream's format matches (ADR 0023) */
     BOOLEAN Pcm16;                  /* 16-bit PCM, converted in the copy; else float, copied (ADR 0005) */
     ULONG FirstPacketOffset;
     ULONGLONG TickHz;
@@ -108,7 +109,7 @@ static ULONGLONG VdPosition(const VD_STREAM_CONTEXT *StreamCtx)
         return StreamCtx->PausedFrames;
     }
     return StreamCtx->RunStartFrames +
-           vd_clock_frames(StreamCtx->RunStartTicks, VdNow(), StreamCtx->TickHz, VD_SAMPLE_RATE);
+           vd_clock_frames(StreamCtx->RunStartTicks, VdNow(), StreamCtx->TickHz, StreamCtx->SampleRate);
 }
 
 /*
@@ -127,7 +128,7 @@ static VOID VdScheduleNextPass(VD_STREAM_CONTEXT *StreamCtx)
 
     if (vd_clock_next_pass(&start, StreamCtx->PacketsSinceRun,
                            StreamCtx->PacketSize / StreamCtx->BytesPerFrame,
-                           StreamCtx->PacketCount, now, StreamCtx->TickHz, VD_SAMPLE_RATE,
+                           StreamCtx->PacketCount, now, StreamCtx->TickHz, StreamCtx->SampleRate,
                            &due)) {
         StreamCtx->RunStartTicks = start;
         StreamCtx->Stalls++;
@@ -214,17 +215,26 @@ NTSTATUS VdEvtCircuitCreateStream(WDFDEVICE Device, ACXCIRCUIT Circuit, ACXPIN P
     VD_STREAM_CONTEXT *streamCtx;
     LARGE_INTEGER frequency;
     ACXSTREAM stream;
+    VD_CIRCUIT_DEVICE_CONTEXT *device = VdCircuitDeviceContext(Device);
     ULONG bytesPerFrame = AcxDataFormatGetBlockAlign(StreamFormat);
     ULONG bitsPerSample = AcxDataFormatGetBitsPerSample(StreamFormat);
-    BOOLEAN pcm16 = bitsPerSample == 16 && bytesPerFrame == VD_PCM16_BYTES_PER_FRAME;
-    BOOLEAN ringFloat = bitsPerSample == 32 && bytesPerFrame == VD_FLOAT_BYTES_PER_FRAME;
+    ULONG sampleRate = AcxDataFormatGetSampleRate(StreamFormat);
+    ULONG channels = AcxDataFormatGetChannelsCount(StreamFormat);
+    BOOLEAN deviceShape = sampleRate == device->SampleRate && channels == device->Channels;
+    BOOLEAN pcm16 = deviceShape && bitsPerSample == 16 &&
+                    bytesPerFrame == VD_PCM16_BYTES_PER_SAMPLE * channels;
+    BOOLEAN ringFloat = deviceShape && bitsPerSample == 32 &&
+                        bytesPerFrame == VD_FLOAT_BYTES_PER_SAMPLE * channels;
     NTSTATUS status;
 
     UNREFERENCED_PARAMETER(Pin);
     UNREFERENCED_PARAMETER(SignalProcessingMode);
     UNREFERENCED_PARAMETER(VarArguments);
 
-    /* Only the host pin's two mono formats (circuit.c); refuse before anything is created. */
+    /*
+     * Only the host pin's two formats, at the Device's rate and channels
+     * (circuit.c); refuse before anything is created.
+     */
     if (!pcm16 && !ringFloat) {
         return STATUS_NOT_SUPPORTED;
     }
@@ -245,7 +255,7 @@ NTSTATUS VdEvtCircuitCreateStream(WDFDEVICE Device, ACXCIRCUIT Circuit, ACXPIN P
     rtCallbacks.EvtAcxStreamFreeRtPackets = VdEvtStreamFreeRtPackets;
     rtCallbacks.EvtAcxStreamGetCurrentPacket = VdEvtStreamGetCurrentPacket;
     rtCallbacks.EvtAcxStreamGetPresentationPosition = VdEvtStreamGetPresentationPosition;
-    if (VdCircuitDeviceContext(Device)->Kind == VD_KIND_MICROPHONE) {
+    if (device->Kind == VD_KIND_MICROPHONE) {
         rtCallbacks.EvtAcxStreamGetCapturePacket = VdEvtStreamGetCapturePacket;
     } else {
         rtCallbacks.EvtAcxStreamSetRenderPacket = VdEvtStreamSetRenderPacket;
@@ -264,8 +274,9 @@ NTSTATUS VdEvtCircuitCreateStream(WDFDEVICE Device, ACXCIRCUIT Circuit, ACXPIN P
 
     streamCtx = VdStreamContext(stream);
     streamCtx->Stream = stream;
-    streamCtx->Device = VdCircuitDeviceContext(Device);
+    streamCtx->Device = device;
     streamCtx->BytesPerFrame = bytesPerFrame;
+    streamCtx->SampleRate = sampleRate;
     streamCtx->Pcm16 = pcm16;
     KeQueryPerformanceCounter(&frequency);
     streamCtx->TickHz = (ULONGLONG)frequency.QuadPart;
@@ -278,7 +289,8 @@ NTSTATUS VdEvtCircuitCreateStream(WDFDEVICE Device, ACXCIRCUIT Circuit, ACXPIN P
                       TraceLoggingBoolean(pcm16, "Pcm16"),
                       TraceLoggingUInt32(bitsPerSample, "BitsPerSample"),
                       TraceLoggingUInt32(bytesPerFrame, "BlockAlign"),
-                      TraceLoggingUInt32(AcxDataFormatGetSampleRate(StreamFormat), "SampleRate"));
+                      TraceLoggingUInt32(sampleRate, "SampleRate"),
+                      TraceLoggingUInt32(channels, "Channels"));
     return STATUS_SUCCESS;
 }
 
@@ -545,6 +557,6 @@ static NTSTATUS VdEvtStreamGetPresentationPosition(ACXSTREAM Stream, PULONGLONG 
     VD_STREAM_CONTEXT *streamCtx = VdStreamContext(Stream);
 
     *QPCPosition = VdNow();
-    *PositionInBlocks = VdPosition(streamCtx); /* one block is one mono frame */
+    *PositionInBlocks = VdPosition(streamCtx); /* one block is one frame, every channel */
     return STATUS_SUCCESS;
 }

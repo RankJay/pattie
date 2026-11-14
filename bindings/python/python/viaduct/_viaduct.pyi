@@ -41,7 +41,8 @@ class Format:
 
 @final
 class Stats:
-    """Audio a Device lost so far, and how much is waiting now, in 48 kHz frames."""
+    """Audio a Device lost so far, and how much is waiting now, in frames at the
+    Device's rate."""
 
     @property
     def gap_frames(self) -> int: ...
@@ -63,7 +64,7 @@ class Interrupted:
 
 @final
 class Clock:
-    """Where the system's side of a Device had got to: ``frames`` (48 kHz) at
+    """Where the system's side of a Device had got to: ``frames`` (at its rate) at
     ``at``, a ``time.perf_counter()`` time."""
 
     @property
@@ -126,6 +127,8 @@ class Microphone:
         cls,
         name: str,
         *,
+        rate: int = 48_000,
+        channels: int = 1,
         format: Format | None = None,  # noqa: A002
         strict: bool = False,
         _backend: object = None,
@@ -134,6 +137,10 @@ class Microphone:
     def id(self) -> int: ...
     @property
     def format(self) -> Format: ...
+    @property
+    def rate(self) -> int: ...
+    @property
+    def channels(self) -> int: ...
     @property
     def closed(self) -> bool: ...
     def write(self, data: Buffer, timeout: float | None = None) -> int: ...
@@ -168,11 +175,17 @@ class Speaker:
         cls,
         name: str,
         *,
+        rate: int = 48_000,
+        channels: int = 1,
         format: Format | None = None,  # noqa: A002
         _backend: object = None,
     ) -> Self: ...
     @property
     def id(self) -> int: ...
+    @property
+    def rate(self) -> int: ...
+    @property
+    def channels(self) -> int: ...
     @property
     def closed(self) -> bool: ...
     def read(self, timeout: float | None = 0.0) -> bytes: ...

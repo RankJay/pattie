@@ -16,63 +16,54 @@ DECLARE_CONST_UNICODE_STRING(VdMicrophoneCircuitName, L"Microphone0");
 DECLARE_CONST_UNICODE_STRING(VdSpeakerCircuitName, L"Speaker0");
 
 /*
- * The host pin's formats (ADR 0005), both 48 kHz mono, offered in this order.
- * 32-bit float is the Ring's own format and is copied as is. 16-bit PCM is what
- * Windows' audio endpoint builder needs as the device format: offering float
- * alone left the endpoint NOTPRESENT (VM, 2026-11-07). stream.c converts it with
- * the core's integer-only conversion.
+ * The host pin's formats (ADR 0005, ADR 0023): the Device's own rate and
+ * channels, in two encodings, offered in this order. 32-bit float is the Ring's
+ * own format and is copied as is. 16-bit PCM is what Windows' audio endpoint
+ * builder needs as the device format: offering float alone left the endpoint
+ * NOTPRESENT (VM, 2026-11-07). stream.c converts it with the core's integer-only
+ * conversion. Apps in any other format are converted by Windows' audio engine.
+ *
+ * The channel layouts are the standard masks, in WAVEFORMATEXTENSIBLE's order;
+ * the Linux backend offers the same positions (ADR 0023). Indexed by channels.
  */
-static KSDATAFORMAT_WAVEFORMATEXTENSIBLE VdFormatFloat = {
-    {
-        sizeof(KSDATAFORMAT_WAVEFORMATEXTENSIBLE),
-        0,
-        0,
-        0,
-        STATICGUIDOF(KSDATAFORMAT_TYPE_AUDIO),
-        STATICGUIDOF(KSDATAFORMAT_SUBTYPE_IEEE_FLOAT),
-        STATICGUIDOF(KSDATAFORMAT_SPECIFIER_WAVEFORMATEX),
-    },
-    {
-        {
-            WAVE_FORMAT_EXTENSIBLE,
-            1,                                              /* channels */
-            VD_SAMPLE_RATE,
-            VD_SAMPLE_RATE * VD_FLOAT_BYTES_PER_FRAME,      /* bytes per second */
-            VD_FLOAT_BYTES_PER_FRAME,                       /* block align */
-            32,                                             /* bits per sample */
-            sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX),
-        },
-        { 32 },                                             /* valid bits per sample */
-        KSAUDIO_SPEAKER_MONO,
-        STATICGUIDOF(KSDATAFORMAT_SUBTYPE_IEEE_FLOAT),
-    },
+static const DWORD VdChannelMasks[VD_RING_MAX_CHANNELS + 1] = {
+    0,
+    KSAUDIO_SPEAKER_MONO,                                           /* mono */
+    KSAUDIO_SPEAKER_STEREO,                                         /* stereo */
+    SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT | SPEAKER_FRONT_CENTER,/* 3.0 */
+    KSAUDIO_SPEAKER_QUAD,                                           /* quad */
+    SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT | SPEAKER_FRONT_CENTER |
+        SPEAKER_BACK_LEFT | SPEAKER_BACK_RIGHT,                     /* 5.0 */
+    KSAUDIO_SPEAKER_5POINT1,                                        /* 5.1 */
+    KSAUDIO_SPEAKER_5POINT1 | SPEAKER_BACK_CENTER,                  /* 6.1 */
+    KSAUDIO_SPEAKER_7POINT1_SURROUND,                               /* 7.1 */
 };
 
-static KSDATAFORMAT_WAVEFORMATEXTENSIBLE VdFormatPcm16 = {
-    {
-        sizeof(KSDATAFORMAT_WAVEFORMATEXTENSIBLE),
-        0,
-        0,
-        0,
-        STATICGUIDOF(KSDATAFORMAT_TYPE_AUDIO),
-        STATICGUIDOF(KSDATAFORMAT_SUBTYPE_PCM),
-        STATICGUIDOF(KSDATAFORMAT_SPECIFIER_WAVEFORMATEX),
-    },
-    {
-        {
-            WAVE_FORMAT_EXTENSIBLE,
-            1,                                              /* channels */
-            VD_SAMPLE_RATE,
-            VD_SAMPLE_RATE * VD_PCM16_BYTES_PER_FRAME,      /* bytes per second */
-            VD_PCM16_BYTES_PER_FRAME,                       /* block align */
-            16,                                             /* bits per sample */
-            sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX),
-        },
-        { 16 },                                             /* valid bits per sample */
-        KSAUDIO_SPEAKER_MONO,
-        STATICGUIDOF(KSDATAFORMAT_SUBTYPE_PCM),
-    },
-};
+/*
+ * Fills Format: SampleRate, Channels (1 to VD_RING_MAX_CHANNELS, as the core
+ * checked), BytesPerSample of SubFormat (float or PCM).
+ */
+static VOID VdFillFormat(KSDATAFORMAT_WAVEFORMATEXTENSIBLE *Format, UINT32 SampleRate, UINT32 Channels,
+                         UINT32 BytesPerSample, const GUID *SubFormat)
+{
+    UINT32 blockAlign = BytesPerSample * Channels;
+
+    RtlZeroMemory(Format, sizeof *Format);
+    Format->DataFormat.FormatSize = sizeof *Format;
+    Format->DataFormat.MajorFormat = KSDATAFORMAT_TYPE_AUDIO;
+    Format->DataFormat.SubFormat = *SubFormat;
+    Format->DataFormat.Specifier = KSDATAFORMAT_SPECIFIER_WAVEFORMATEX;
+    Format->WaveFormatExt.Format.wFormatTag = WAVE_FORMAT_EXTENSIBLE;
+    Format->WaveFormatExt.Format.nChannels = (WORD)Channels;
+    Format->WaveFormatExt.Format.nSamplesPerSec = SampleRate;
+    Format->WaveFormatExt.Format.nAvgBytesPerSec = SampleRate * blockAlign;
+    Format->WaveFormatExt.Format.nBlockAlign = (WORD)blockAlign;
+    Format->WaveFormatExt.Format.wBitsPerSample = (WORD)(8 * BytesPerSample);
+    Format->WaveFormatExt.Format.cbSize = sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX);
+    Format->WaveFormatExt.Samples.wValidBitsPerSample = (WORD)(8 * BytesPerSample);
+    Format->WaveFormatExt.dwChannelMask = VdChannelMasks[Channels];
+    Format->WaveFormatExt.SubFormat = *SubFormat;
+}
 
 _Use_decl_annotations_
 PCUNICODE_STRING VdCircuitName(UINT32 Kind)
@@ -169,10 +160,17 @@ NTSTATUS VdCircuitCreate(WDFDEVICE Device, VD_CIRCUIT_DEVICE_CONTEXT *DeviceCtx)
     if (formatList == NULL) {
         return STATUS_INSUFFICIENT_RESOURCES;
     }
+    if (DeviceCtx->Channels == 0 || DeviceCtx->Channels > VD_RING_MAX_CHANNELS) {
+        return STATUS_INVALID_PARAMETER; /* the core never attaches such a Ring */
+    }
+    VdFillFormat(&DeviceCtx->FormatFloat, DeviceCtx->SampleRate, DeviceCtx->Channels,
+                 VD_FLOAT_BYTES_PER_SAMPLE, &KSDATAFORMAT_SUBTYPE_IEEE_FLOAT);
+    VdFillFormat(&DeviceCtx->FormatPcm16, DeviceCtx->SampleRate, DeviceCtx->Channels,
+                 VD_PCM16_BYTES_PER_SAMPLE, &KSDATAFORMAT_SUBTYPE_PCM);
     /* Float first, then PCM16: the order the VM endpoint went ACTIVE with. */
-    status = VdAddFormat(Device, circuit, formatList, &VdFormatFloat);
+    status = VdAddFormat(Device, circuit, formatList, &DeviceCtx->FormatFloat);
     if (NT_SUCCESS(status)) {
-        status = VdAddFormat(Device, circuit, formatList, &VdFormatPcm16);
+        status = VdAddFormat(Device, circuit, formatList, &DeviceCtx->FormatPcm16);
     }
     if (NT_SUCCESS(status)) {
         status = AcxCircuitAddPins(circuit, pins, ARRAYSIZE(pins));

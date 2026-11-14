@@ -184,6 +184,9 @@ NTSTATUS VdCircuitDeviceAdd(VD_DRIVER_CONTEXT *Ctx, UINT32 DeviceId,
     deviceCtx->DeviceId = DeviceId;
     deviceCtx->Kind = Request->kind;
     deviceCtx->Ring = vd_core_device_ring(&Ctx->Core, DeviceId);
+    /* Read once: the core's own copies, checked when it attached the Ring. */
+    deviceCtx->SampleRate = vd_ring_sample_rate(deviceCtx->Ring);
+    deviceCtx->Channels = vd_ring_channels(deviceCtx->Ring);
     deviceCtx->WakeEvent = WakeEvent; /* the slot holds the reference */
     ExInitializeRundownProtection(&deviceCtx->Rundown);
     RtlCopyMemory(deviceCtx->NameBuffer, Request->name, name.Length);

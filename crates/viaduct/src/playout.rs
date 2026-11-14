@@ -7,7 +7,7 @@
 
 use crate::Error;
 use crate::convert::{Converter, Format};
-use crate::device::{Inner, Kind, V0_FORMAT};
+use crate::device::{Inner, Kind};
 use crate::mmcss::ProAudio;
 use std::collections::VecDeque;
 use std::fmt;
@@ -16,15 +16,15 @@ use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::Instant;
 
-/// The most audio the queue holds: 10 minutes at 48 kHz. Only a runaway producer
-/// reaches it; `push` then accepts no more.
-const QUEUE_LIMIT: usize = 48_000 * 600;
+/// The most audio the queue holds: 10 minutes. Only a runaway producer reaches
+/// it; `push` then accepts no more.
+const QUEUE_SECONDS: usize = 600;
 
 /// What a voice agent pushes and interrupts. See [`crate::Device::playout`].
 pub struct Playout {
     shared: Arc<Shared>,
     /// Converts what `push_bytes` is given (the playout's input format) to the
-    /// Device's 48 kHz mono float, keeping its state from one push to the next.
+    /// Device's own format (float at its rate and channels), keeping its state from one push to the next.
     converter: Mutex<Converter>,
     /// The thread that tops the Ring up each time the system's side rings the
     /// Device's doorbell; `None` for the tests' hand-driven playouts.
@@ -77,18 +77,20 @@ impl Reply {
 /// was already in the Ring and still plays.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Interrupted {
-    /// Frames of the reply the system took (48 kHz). Frames the driver skipped as
-    /// stale when a recording started (ADR 0014) count as taken.
+    /// Frames of the reply the system took, at the Device's rate. Frames the
+    /// driver skipped as stale when a recording started (ADR 0014) count as taken.
     pub heard_frames: u64,
     /// Frames of the reply dropped before they reached the Ring.
     pub discarded_frames: u64,
+    /// The Device's rate, for `heard_ms`.
+    rate: u32,
 }
 
 impl Interrupted {
     /// `heard_frames` in whole milliseconds, as OpenAI Realtime's
     /// `conversation.item.truncate` takes it (`audio_end_ms`).
     pub fn heard_ms(&self) -> u64 {
-        self.heard_frames * 1_000 / u64::from(V0_FORMAT.0)
+        self.heard_frames * 1_000 / u64::from(self.rate)
     }
 }
 
@@ -123,7 +125,7 @@ impl Playout {
 
     /// A playout nobody feeds: tests call `pump` by hand.
     fn manual(inner: Arc<Inner>, input: Format) -> Result<Playout, Error> {
-        let converter = Mutex::new(Converter::new(input, Format::DEVICE)?);
+        let converter = Mutex::new(Converter::new(input, inner.format)?);
         inner.take_endpoint(Kind::Microphone)?;
         Ok(Playout {
             converter,
@@ -137,24 +139,27 @@ impl Playout {
         })
     }
 
-    /// Queues 48 kHz mono samples to play after what's already queued. Returns how
-    /// many were accepted: all of them, unless the queue holds 10 minutes.
+    /// Queues samples in the Device's own format (interleaved) to play after
+    /// what's already queued. Returns how many whole frames that adds: all of
+    /// them, unless the queue holds 10 minutes. A frame split across pushes plays
+    /// once its last sample arrives.
     pub fn push(&self, samples: &[f32]) -> usize {
         let mut state = self.shared.lock();
-        let accepted = samples
-            .len()
-            .min(QUEUE_LIMIT.saturating_sub(state.queue.len()));
+        let channels = self.shared.channels();
+        let limit = QUEUE_SECONDS * self.shared.inner.format.rate as usize * channels;
+        let accepted = samples.len().min(limit.saturating_sub(state.queue.len()));
+        let frames_before = state.queue.len() / channels;
         if accepted > 0 {
             self.shared.end_reply_if_played(&mut state);
             state.reply.get_or_insert_with(Reply::default);
             state.queue.extend(&samples[..accepted]);
         }
-        accepted
+        state.queue.len() / channels - frames_before
     }
 
     /// Queues bytes in the playout's input format (see `Device::playout_from`),
-    /// converted to 48 kHz mono float: a model's audio deltas as they arrive, in
-    /// pieces of any size. Returns how many 48 kHz frames were queued.
+    /// converted to the Device's own: a model's audio deltas as they arrive, in
+    /// pieces of any size. Returns how many of the Device's frames were queued.
     pub fn push_bytes(&self, bytes: &[u8]) -> usize {
         let mut converted = Vec::new();
         self.converter
@@ -175,7 +180,7 @@ impl Playout {
     /// `push` starts a new reply.
     pub fn interrupt(&self) -> Interrupted {
         let mut state = self.shared.lock();
-        let discarded_frames = state.queue.len() as u64;
+        let discarded_frames = (state.queue.len() / self.shared.channels()) as u64;
         state.queue.clear();
         let heard_frames = state
             .reply
@@ -184,12 +189,13 @@ impl Playout {
         Interrupted {
             heard_frames,
             discarded_frames,
+            rate: self.shared.inner.format.rate,
         }
     }
 
     /// Frames waiting in the queue, not yet in the Ring.
     pub fn queued_frames(&self) -> u64 {
-        self.shared.lock().queue.len() as u64
+        (self.shared.lock().queue.len() / self.shared.channels()) as u64
     }
 
     /// Waits until everything pushed has been taken by the system: true then,
@@ -238,22 +244,29 @@ impl Shared {
         self.progress.notify_all();
     }
 
+    /// Samples in each of the Device's frames.
+    fn channels(&self) -> usize {
+        usize::from(self.inner.format.channels)
+    }
+
     fn fill(&self, state: &mut State) {
         let ring = &self.inner.ring;
+        let channels = self.channels();
         let room = self.inner.room_below_lead();
         if room == 0 {
             return;
         }
-        let take = room.min(state.queue.len());
+        // Whole frames only: a frame still missing samples waits for its push.
+        let take = room.min(state.queue.len() / channels);
         if take > 0
             && let Some(reply) = state.reply.as_mut()
         {
             reply.pieces.push((ring.written(), take as u64));
         }
-        let mut audio: Vec<f32> = state.queue.drain(..take).collect();
+        let mut audio: Vec<f32> = state.queue.drain(..take * channels).collect();
         // Silence for the rest: an idle agent keeps the stream running without
         // counting Gap, so Gap means only real starvation.
-        audio.resize(room, 0.0);
+        audio.resize(room * channels, 0.0);
         ring.write(&audio);
     }
 }
@@ -362,6 +375,7 @@ mod tests {
             Interrupted {
                 heard_frames: 14_400,
                 discarded_frames: 48_000 - 14_400 - lead,
+                rate: 48_000,
             }
         );
         assert_eq!(cut.heard_ms(), 300);
@@ -400,7 +414,8 @@ mod tests {
             playout.interrupt(),
             Interrupted {
                 heard_frames: 0,
-                discarded_frames: 0
+                discarded_frames: 0,
+                rate: 48_000,
             }
         );
     }
@@ -438,7 +453,8 @@ mod tests {
             playout.interrupt(),
             Interrupted {
                 heard_frames: 4_800,
-                discarded_frames: 0
+                discarded_frames: 0,
+                rate: 48_000,
             }
         );
     }

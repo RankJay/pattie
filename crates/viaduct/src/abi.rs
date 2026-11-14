@@ -46,7 +46,11 @@ pub const DEVICE_NAME_MAX: usize = 63;
 
 pub const RING_MIN_FRAMES: u32 = 256;
 pub const RING_MAX_FRAMES: u32 = 65536;
-pub const RING_MAX_BYTES: u32 = 192 + RING_MAX_FRAMES * 4;
+pub const RING_MAX_CHANNELS: u32 = 8;
+pub const RING_MAX_BYTES: u32 = 192 + RING_MAX_FRAMES * RING_MAX_CHANNELS * 4;
+pub const RATE_44100: u32 = 44_100;
+pub const RATE_48000: u32 = 48_000;
+pub const RATE_96000: u32 = 96_000;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
@@ -110,7 +114,11 @@ pub struct RingHeader {
     pub reader_clock: RingClock,
     pub reader_pad: [u8; 24],
     pub capacity_frames: u32,
-    pub config_pad: [u8; 60],
+    /// `RATE_*`; 0 means 48 kHz.
+    pub sample_rate: u32,
+    /// 1 to `RING_MAX_CHANNELS`; 0 means mono.
+    pub channels: u16,
+    pub config_pad: [u8; 54],
 }
 
 /// A side's clock pair (ADR 0022): its counter was `frames` at `ns`, under the

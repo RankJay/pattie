@@ -5,23 +5,40 @@
 
 use viaduct::Stats;
 
-pub const SAMPLE_RATE: u32 = 48_000;
+pub const USAGE: &str = "usage:\n  viaduct-cli mic <name> [--tone <hz>] [--rate <hz>] [--channels <n>]\n  viaduct-cli speaker <name> [--rate <hz>] [--channels <n>]\n  viaduct-cli measure mic|speaker <name> [--seconds <n>] [--rate <hz>] [--channels <n>]\n  viaduct-cli measure drift <name> [--seconds <n>] [--ppm <p>] [--uncorrected]\n  viaduct-cli install <package folder or viaduct.inf>\n  viaduct-cli uninstall";
 
-pub const USAGE: &str = "usage:\n  viaduct-cli mic <name> [--tone <hz>]\n  viaduct-cli speaker <name>\n  viaduct-cli measure mic|speaker <name> [--seconds <n>]\n  viaduct-cli measure drift <name> [--seconds <n>] [--ppm <p>] [--uncorrected]\n  viaduct-cli install <package folder or viaduct.inf>\n  viaduct-cli uninstall";
+/// The rate and channels a Device runs at (ADR 0023): 48 kHz mono by default.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DeviceFormat {
+    pub rate: u32,
+    pub channels: u16,
+}
+
+impl Default for DeviceFormat {
+    fn default() -> Self {
+        DeviceFormat {
+            rate: 48_000,
+            channels: 1,
+        }
+    }
+}
 
 #[derive(Debug, PartialEq)]
 pub enum Command<'a> {
     Mic {
         name: &'a str,
         hz: f32,
+        format: DeviceFormat,
     },
     Speaker {
         name: &'a str,
+        format: DeviceFormat,
     },
     Measure {
         direction: &'a str,
         name: &'a str,
         seconds: u64,
+        format: DeviceFormat,
     },
     /// A live source `ppm` off the device, through a `LiveWriter`, logged.
     Drift {
@@ -39,24 +56,44 @@ pub enum Command<'a> {
 /// The command `args` (without the program name) ask for, or the message to show.
 pub fn parse<'a>(args: &[&'a str]) -> Result<Command<'a>, String> {
     match *args {
-        ["mic", name] => Ok(Command::Mic { name, hz: 440.0 }),
-        ["mic", name, "--tone", hz] => match hz.parse::<f32>() {
-            Ok(hz) if hz > 0.0 && hz < SAMPLE_RATE as f32 / 2.0 => Ok(Command::Mic { name, hz }),
-            _ => Err(format!(
-                "--tone needs a frequency between 0 and {} Hz",
-                SAMPLE_RATE / 2
-            )),
-        },
-        ["speaker", name] => Ok(Command::Speaker { name }),
+        ["mic", name, ref options @ ..] => {
+            let options = options_of(options, &["--tone"])?;
+            let hz = match options.tone {
+                None => 440.0,
+                Some(hz) => match hz.parse::<f32>() {
+                    Ok(hz) if hz > 0.0 && hz < options.format.rate as f32 / 2.0 => hz,
+                    _ => {
+                        return Err(format!(
+                            "--tone needs a frequency between 0 and {} Hz",
+                            options.format.rate / 2
+                        ));
+                    }
+                },
+            };
+            Ok(Command::Mic {
+                name,
+                hz,
+                format: options.format,
+            })
+        }
+        ["speaker", name, ref options @ ..] => Ok(Command::Speaker {
+            name,
+            format: options_of(options, &[])?.format,
+        }),
         ["measure", "drift", name, ref options @ ..] => drift(name, options),
         ["measure", direction, name, ref options @ ..] => {
             if direction != "mic" && direction != "speaker" {
                 return Err("measure needs `mic` or `speaker`".to_string());
             }
+            let options = options_of(options, &["--seconds"])?;
             Ok(Command::Measure {
                 direction,
                 name,
-                seconds: measure_seconds(options)?,
+                seconds: match options.seconds {
+                    None => 60,
+                    Some(value) => measure_seconds(&["--seconds", value])?,
+                },
+                format: options.format,
             })
         }
         ["install", package] => Ok(Command::Install { package }),
@@ -65,13 +102,59 @@ pub fn parse<'a>(args: &[&'a str]) -> Result<Command<'a>, String> {
     }
 }
 
+/// The options of `mic`, `speaker` and `measure`, in any order.
+struct Options<'a> {
+    format: DeviceFormat,
+    tone: Option<&'a str>,
+    seconds: Option<&'a str>,
+}
+
+/// Reads `--rate` and `--channels`, and those of `also` (`--tone`, `--seconds`).
+fn options_of<'a>(options: &[&'a str], also: &[&str]) -> Result<Options<'a>, String> {
+    let mut parsed = Options {
+        format: DeviceFormat::default(),
+        tone: None,
+        seconds: None,
+    };
+    let mut rest = options;
+    while let Some((&option, tail)) = rest.split_first() {
+        let known = matches!(option, "--rate" | "--channels") || also.contains(&option);
+        let Some((&value, tail)) = tail.split_first().filter(|_| known) else {
+            if known && option == "--seconds" {
+                return Err(SECONDS.to_string());
+            }
+            return Err(USAGE.to_string());
+        };
+        match option {
+            "--rate" => {
+                parsed.format.rate = match value.parse::<u32>() {
+                    Ok(rate @ (44_100 | 48_000 | 96_000)) => rate,
+                    _ => return Err("--rate needs 44100, 48000 or 96000".to_string()),
+                }
+            }
+            "--channels" => {
+                parsed.format.channels = match value.parse::<u16>() {
+                    Ok(channels @ 1..=8) => channels,
+                    _ => return Err("--channels needs 1 to 8".to_string()),
+                }
+            }
+            "--tone" => parsed.tone = Some(value),
+            _ => parsed.seconds = Some(value),
+        }
+        rest = tail;
+    }
+    Ok(parsed)
+}
+
+const SECONDS: &str = "--seconds needs a whole number from 1 to 86400";
+
 /// `--seconds <n>`, 60 by default.
 fn measure_seconds(options: &[&str]) -> Result<u64, String> {
     match *options {
         [] => Ok(60),
         ["--seconds", ref value @ ..] => match value.first().map(|v| v.parse::<u64>()) {
             Some(Ok(n)) if (1..=86_400).contains(&n) && value.len() == 1 => Ok(n),
-            _ => Err("--seconds needs a whole number from 1 to 86400".to_string()),
+            _ => Err(SECONDS.to_string()),
         },
         _ => Err(USAGE.to_string()),
     }
@@ -109,13 +192,14 @@ fn drift<'a>(name: &'a str, options: &[&str]) -> Result<Command<'a>, String> {
     })
 }
 
-/// One line of Device health: missing audio so far, and what's waiting now.
-pub fn health(stats: Stats) -> String {
+/// One line of Device health: missing audio so far, and what's waiting now, for
+/// a Device at `rate`.
+pub fn health(stats: Stats, rate: u32) -> String {
     format!(
         "gap {} frames, overflow {} frames, buffered {:.1} ms",
         stats.gap_frames,
         stats.overflow_frames,
-        stats.buffered_frames as f64 * 1000.0 / SAMPLE_RATE as f64
+        stats.buffered_frames as f64 * 1000.0 / f64::from(rate)
     )
 }
 
@@ -129,14 +213,16 @@ mod tests {
             parse(&["mic", "Agent Mic"]),
             Ok(Command::Mic {
                 name: "Agent Mic",
-                hz: 440.0
+                hz: 440.0,
+                format: DeviceFormat::default(),
             })
         );
         assert_eq!(
             parse(&["mic", "Agent Mic", "--tone", "1000"]),
             Ok(Command::Mic {
                 name: "Agent Mic",
-                hz: 1000.0
+                hz: 1000.0,
+                format: DeviceFormat::default(),
             })
         );
     }
@@ -157,6 +243,7 @@ mod tests {
                 direction: "mic",
                 name: "Agent Mic",
                 seconds: 60,
+                format: DeviceFormat::default(),
             })
         );
         assert_eq!(
@@ -165,6 +252,7 @@ mod tests {
                 direction: "speaker",
                 name: "S",
                 seconds: 5,
+                format: DeviceFormat::default(),
             })
         );
     }
@@ -198,7 +286,10 @@ mod tests {
     fn speaker_install_and_uninstall_parse() {
         assert_eq!(
             parse(&["speaker", "Out"]),
-            Ok(Command::Speaker { name: "Out" })
+            Ok(Command::Speaker {
+                name: "Out",
+                format: DeviceFormat::default(),
+            })
         );
         assert_eq!(
             parse(&["install", r"C:\pkg"]),
@@ -223,8 +314,12 @@ mod tests {
         };
 
         assert_eq!(
-            health(stats),
+            health(stats, 48_000),
             "gap 480 frames, overflow 0 frames, buffered 20.0 ms"
+        );
+        assert_eq!(
+            health(stats, 96_000),
+            "gap 480 frames, overflow 0 frames, buffered 10.0 ms"
         );
     }
 
@@ -265,5 +360,88 @@ mod tests {
             let error = parse(&["measure", "drift", "Agent Mic", "--ppm", ppm]).unwrap_err();
             assert!(error.starts_with("--ppm needs"), "{ppm}: {error}");
         }
+    }
+
+    #[test]
+    fn mic_speaker_and_measure_take_a_rate_and_channels_in_any_order() {
+        let stereo_44 = DeviceFormat {
+            rate: 44_100,
+            channels: 2,
+        };
+        assert_eq!(
+            parse(&[
+                "mic",
+                "M",
+                "--channels",
+                "2",
+                "--tone",
+                "1000",
+                "--rate",
+                "44100"
+            ]),
+            Ok(Command::Mic {
+                name: "M",
+                hz: 1000.0,
+                format: stereo_44,
+            })
+        );
+        assert_eq!(
+            parse(&["speaker", "S", "--rate", "96000", "--channels", "8"]),
+            Ok(Command::Speaker {
+                name: "S",
+                format: DeviceFormat {
+                    rate: 96_000,
+                    channels: 8
+                },
+            })
+        );
+        assert_eq!(
+            parse(&[
+                "measure",
+                "mic",
+                "M",
+                "--rate",
+                "44100",
+                "--seconds",
+                "5",
+                "--channels",
+                "2"
+            ]),
+            Ok(Command::Measure {
+                direction: "mic",
+                name: "M",
+                seconds: 5,
+                format: stereo_44,
+            })
+        );
+    }
+
+    #[test]
+    fn a_rate_or_channel_count_a_device_cannot_run_at_is_refused() {
+        for rate in ["22050", "192000", "fast"] {
+            let error = parse(&["mic", "M", "--rate", rate]).unwrap_err();
+            assert_eq!(error, "--rate needs 44100, 48000 or 96000", "{rate}");
+        }
+        for channels in ["0", "9", "two"] {
+            let error = parse(&["speaker", "S", "--channels", channels]).unwrap_err();
+            assert_eq!(error, "--channels needs 1 to 8", "{channels}");
+        }
+        // Options belong to their commands.
+        assert_eq!(
+            parse(&["speaker", "S", "--tone", "440"]),
+            Err(USAGE.to_string())
+        );
+        assert_eq!(
+            parse(&["mic", "M", "--seconds", "5"]),
+            Err(USAGE.to_string())
+        );
+        assert_eq!(parse(&["mic", "M", "--rate"]), Err(USAGE.to_string()));
+    }
+
+    #[test]
+    fn a_tone_must_be_below_half_the_devices_rate() {
+        assert!(parse(&["mic", "M", "--rate", "96000", "--tone", "30000"]).is_ok());
+        let error = parse(&["mic", "M", "--tone", "22050", "--rate", "44100"]).unwrap_err();
+        assert_eq!(error, "--tone needs a frequency between 0 and 22050 Hz");
     }
 }

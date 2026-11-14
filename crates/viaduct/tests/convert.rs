@@ -128,11 +128,11 @@ fn stereo_is_averaged_to_mono_and_mono_is_copied_to_stereo() {
 }
 
 #[test]
-fn rates_outside_the_list_and_more_than_two_channels_are_refused() {
+fn rates_outside_the_list_and_more_than_eight_channels_are_refused() {
     let refused = [
         format(44_000, 1, Encoding::F32),
-        format(96_000, 1, Encoding::F32),
-        format(48_000, 3, Encoding::F32),
+        format(192_000, 1, Encoding::F32),
+        format(48_000, 9, Encoding::F32),
         format(48_000, 0, Encoding::F32),
     ]
     .map(|bad| {
@@ -151,8 +151,8 @@ fn rates_outside_the_list_and_more_than_two_channels_are_refused() {
     );
 }
 
-const RATES: [u32; 8] = [
-    8_000, 11_025, 16_000, 22_050, 24_000, 32_000, 44_100, 48_000,
+const RATES: [u32; 9] = [
+    8_000, 11_025, 16_000, 22_050, 24_000, 32_000, 44_100, 48_000, 96_000,
 ];
 
 /// `seconds` of a sine at `hz`, amplitude 0.5, at `rate`.
@@ -241,6 +241,10 @@ fn a_resampled_sine_stays_within_minus_60_db_of_a_pure_sine() {
         (44_100, 48_000),
         (48_000, 16_000),
         (8_000, 48_000),
+        (48_000, 96_000),
+        (96_000, 48_000),
+        (44_100, 96_000),
+        (24_000, 96_000),
     ] {
         let out = f32_samples(&convert(
             mono(from),
@@ -300,4 +304,79 @@ fn each_stereo_channel_is_resampled_exactly_as_it_would_be_alone() {
         .unzip();
     assert_eq!(out_left, alone(&left));
     assert_eq!(out_right, alone(&right));
+}
+
+fn f32_format(rate: u32, channels: u16) -> Format {
+    format(rate, channels, Encoding::F32)
+}
+
+#[test]
+fn mono_is_copied_to_every_channel_of_a_wider_format() {
+    let out = f32_samples(&convert(
+        f32_format(48_000, 1),
+        f32_format(48_000, 6),
+        &f32_bytes(&[0.25, -0.5]),
+    ));
+
+    assert_eq!(out, [[0.25; 6], [-0.5; 6]].concat());
+}
+
+#[test]
+fn many_channels_are_averaged_to_mono() {
+    let frame = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8];
+
+    let out = f32_samples(&convert(
+        f32_format(48_000, 8),
+        f32_format(48_000, 1),
+        &f32_bytes(&frame),
+    ));
+
+    assert_eq!(out.len(), 1);
+    assert!((out[0] - 0.45).abs() < 1e-6, "{out:?}");
+}
+
+#[test]
+fn the_same_channel_count_passes_each_channel_through() {
+    let frames: Vec<f32> = (0..60).map(|i| i as f32 / 100.0).collect(); // 10 frames of 6
+
+    let out = f32_samples(&convert(
+        f32_format(48_000, 6),
+        f32_format(48_000, 6),
+        &f32_bytes(&frames),
+    ));
+
+    assert_eq!(out, frames);
+}
+
+#[test]
+fn surround_mapping_between_different_layouts_is_refused() {
+    let refused = [(2, 6), (6, 2), (4, 8), (8, 6)]
+        .map(|(from, to)| Converter::new(f32_format(48_000, from), f32_format(48_000, to)).err());
+
+    assert_eq!(refused, [Some(Error::UnsupportedFormat); 4]);
+}
+
+#[test]
+fn each_of_six_channels_is_resampled_exactly_as_it_would_be_alone() {
+    let channel = |c: usize| -> Vec<f32> { sine(44_100, 300.0 + 100.0 * c as f64, 0.5) };
+    let interleaved: Vec<f32> = (0..channel(0).len())
+        .flat_map(|n| (0..6).map(move |c| (n, c)))
+        .map(|(n, c)| channel(c)[n])
+        .collect();
+
+    let out = f32_samples(&convert(
+        f32_format(44_100, 6),
+        f32_format(96_000, 6),
+        &f32_bytes(&interleaved),
+    ));
+
+    for c in 0..6 {
+        let alone = f32_samples(&convert(
+            f32_format(44_100, 1),
+            f32_format(96_000, 1),
+            &f32_bytes(&channel(c)),
+        ));
+        let mine: Vec<f32> = out.iter().skip(c).step_by(6).copied().collect();
+        assert_eq!(mine, alone, "channel {c}");
+    }
 }

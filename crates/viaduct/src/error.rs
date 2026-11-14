@@ -24,8 +24,12 @@ pub enum Error {
     NoBackend,
     /// The installed driver serves another major ABI version than this SDK (ADR 0003).
     VersionMismatch,
-    /// Only 48 kHz, mono is supported in v0 (ADR 0005).
+    /// A rate other than 44.1, 48 or 96 kHz, or a channel count outside 1 to 8
+    /// (ADR 0023); for a conversion, a pair of formats it can't join.
     UnsupportedFormat,
+    /// Interleaved audio that ends partway through a frame: a whole frame is one
+    /// sample for each of the Device's channels.
+    PartialFrame,
     /// Ring size isn't a power of two from 256 to 65,536 frames.
     BadBufferSize,
     /// The name is empty, longer than 63 UTF-16 units, or has control characters.
@@ -70,7 +74,16 @@ impl fmt::Display for Error {
                 f,
                 "the installed Viaduct driver is incompatible with this SDK"
             ),
-            Error::UnsupportedFormat => write!(f, "only 48 kHz mono is supported"),
+            Error::UnsupportedFormat => write!(
+                f,
+                "unsupported format: a Device runs at 44.1, 48 or 96 kHz with 1 to 8 \
+                 channels; audio converts from 8, 11.025, 16, 22.05, 24, 32, 44.1, 48 \
+                 or 96 kHz, and between channel counts only to or from mono"
+            ),
+            Error::PartialFrame => write!(
+                f,
+                "the audio ends partway through a frame (one sample per channel)"
+            ),
             Error::BadBufferSize => write!(
                 f,
                 "buffer size must be a power of two from 256 to 65536 frames"
@@ -97,7 +110,7 @@ mod tests {
     use super::Error;
 
     /// Every variant, so a new one without its own message fails here.
-    const ALL: [Error; 17] = [
+    const ALL: [Error; 18] = [
         Error::DriverNotInstalled,
         Error::AudioServerUnavailable,
         Error::PulseAudioInUse,
@@ -106,6 +119,7 @@ mod tests {
         Error::NoBackend,
         Error::VersionMismatch,
         Error::UnsupportedFormat,
+        Error::PartialFrame,
         Error::BadBufferSize,
         Error::BadName,
         Error::DuplicateName,

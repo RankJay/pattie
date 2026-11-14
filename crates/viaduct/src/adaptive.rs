@@ -1,7 +1,10 @@
-//! The variable-ratio resampler behind drift compensation (ADR 0022): 48 kHz in,
-//! 48 kHz out, consuming input a few ppm faster or slower than it produces
-//! output, as the drift controller asks. Output-driven: the feeder asks for
-//! exactly the frames it needs, and it takes whatever input that costs.
+//! The variable-ratio resampler behind drift compensation (ADR 0022): the
+//! Device's rate in and out, consuming input a few ppm faster or slower than it
+//! produces output, as the drift controller asks. Output-driven: the feeder asks
+//! for exactly the frames it needs, and it takes whatever input that costs.
+//! Interleaved frames of any channel count, every channel at the same position
+//! with the same filter (ADR 0023): in lockstep, each exactly as it would be
+//! alone.
 
 use crate::convert::bessel_i0;
 use std::collections::VecDeque;
@@ -24,15 +27,19 @@ pub(crate) struct Adaptive {
     /// `PHASES + 1` rows of `2 * HALF` coefficients: row `p` is the filter for a
     /// fraction `p / PHASES` (the last row is the next sample's row 0).
     table: Vec<f64>,
-    /// The inputs around the next output: it sits between `window[HALF - 1]`
-    /// and `window[HALF]`, at `frac`.
+    /// Samples in each frame.
+    channels: usize,
+    /// The input frames around the next output, interleaved: it sits between
+    /// frames `HALF - 1` and `HALF`, at `frac`.
     window: VecDeque<f32>,
     frac: u64,
     step: u64,
 }
 
 impl Adaptive {
-    pub(crate) fn new() -> Adaptive {
+    /// For frames of `channels` samples (at least 1).
+    pub(crate) fn new(channels: usize) -> Adaptive {
+        let channels = channels.max(1);
         let taps = 2 * HALF;
         let mut table = vec![0.0f64; (PHASES + 1) * taps];
         for p in 0..=PHASES {
@@ -59,8 +66,9 @@ impl Adaptive {
         }
         Adaptive {
             table,
+            channels,
             // Silence before the first input, so output 0 is input 0.
-            window: std::iter::repeat_n(0.0, HALF - 1).collect(),
+            window: std::iter::repeat_n(0.0, (HALF - 1) * channels).collect(),
             frac: 0,
             step: ONE,
         }
@@ -79,34 +87,41 @@ impl Adaptive {
         self.step = step;
     }
 
-    /// Up to `n` outputs, taking input from the front of `input` as they need
-    /// it; fewer if `input` runs out first.
+    /// Up to `n` output frames (interleaved), taking input frames from the front
+    /// of `input` as they need them; fewer if `input` runs out of whole frames
+    /// first (a frame still missing samples stays in `input`).
     pub(crate) fn pull(&mut self, input: &mut VecDeque<f32>, n: usize) -> Vec<f32> {
-        let taps = 2 * HALF;
-        let mut out = Vec::with_capacity(n);
-        while out.len() < n {
-            while self.window.len() < taps {
-                match input.pop_front() {
-                    Some(sample) => self.window.push_back(sample),
-                    None => return out,
+        const TAPS: usize = 2 * HALF;
+        let channels = self.channels;
+        let mut out = Vec::with_capacity(n * channels);
+        let mut coefficients = [0.0f64; TAPS];
+        while out.len() < n * channels {
+            while self.window.len() < TAPS * channels {
+                if input.len() < channels {
+                    return out;
                 }
+                self.window.extend(input.drain(..channels));
             }
-            // The two tabulated rows around the fraction, and the weight between.
+            // The two tabulated rows around the fraction, and the weight between:
+            // one filter for every channel of this frame.
             let p = usize::try_from(self.frac >> 24).unwrap_or(0);
             let weight = (self.frac & 0xFF_FFFF) as f64 / f64::from(1u32 << 24);
-            let (lower, upper) = (&self.table[p * taps..], &self.table[(p + 1) * taps..]);
-            let mut sum = 0.0f64;
-            for (k, &sample) in self.window.iter().enumerate() {
-                let coefficient = lower[k] + (upper[k] - lower[k]) * weight;
-                sum += f64::from(sample) * coefficient;
+            let (lower, upper) = (&self.table[p * TAPS..], &self.table[(p + 1) * TAPS..]);
+            for (k, coefficient) in coefficients.iter_mut().enumerate() {
+                *coefficient = lower[k] + (upper[k] - lower[k]) * weight;
             }
-            #[expect(clippy::cast_possible_truncation, reason = "samples are f32")]
-            out.push(sum as f32);
-            // Advance: whole input samples leave the window's front.
+            for c in 0..channels {
+                let mut sum = 0.0f64;
+                for (k, &coefficient) in coefficients.iter().enumerate() {
+                    sum += f64::from(self.window[k * channels + c]) * coefficient;
+                }
+                #[expect(clippy::cast_possible_truncation, reason = "samples are f32")]
+                out.push(sum as f32);
+            }
+            // Advance: whole input frames leave the window's front.
             self.frac += self.step;
-            for _ in 0..(self.frac >> 32) {
-                self.window.pop_front();
-            }
+            let frames = usize::try_from(self.frac >> 32).unwrap_or(0);
+            self.window.drain(..frames * channels);
             self.frac &= ONE - 1;
         }
         out
@@ -130,7 +145,7 @@ mod tests {
             .map(|i| ((i * 37) % 101) as f32 / 101.0 - 0.5)
             .collect();
         let mut queue: VecDeque<f32> = input.iter().copied().collect();
-        let mut resampler = Adaptive::new();
+        let mut resampler = Adaptive::new(1);
 
         let out = resampler.pull(&mut queue, 900);
 
@@ -172,7 +187,7 @@ mod tests {
     )]
     fn a_tone_resampled_50_ppm_fast_stays_clean() {
         let mut input = tone_input(60_000);
-        let mut resampler = Adaptive::new();
+        let mut resampler = Adaptive::new(1);
         resampler.set_ppm(50.0);
 
         let out = resampler.pull(&mut input, 48_000);
@@ -189,7 +204,7 @@ mod tests {
     )]
     fn changing_the_correction_mid_tone_leaves_no_click() {
         let mut input = tone_input(60_000);
-        let mut resampler = Adaptive::new();
+        let mut resampler = Adaptive::new(1);
         let mut out = resampler.pull(&mut input, 24_000);
         resampler.set_ppm(MAX_PPM);
         out.extend(resampler.pull(&mut input, 24_000));
@@ -218,7 +233,7 @@ mod tests {
     fn the_output_is_the_same_however_the_requests_are_split() {
         let source = tone_input(20_000);
         let run = |pieces: &[usize]| {
-            let (mut input, mut resampler) = (source.clone(), Adaptive::new());
+            let (mut input, mut resampler) = (source.clone(), Adaptive::new(1));
             let mut out = Vec::new();
             for &piece in pieces.iter().cycle() {
                 if out.len() >= 15_000 {
@@ -246,12 +261,59 @@ mod tests {
     )]
     fn a_correction_past_the_limit_is_held_at_the_limit() {
         let run = |ppm: f64| {
-            let (mut input, mut resampler) = (tone_input(10_000), Adaptive::new());
+            let (mut input, mut resampler) = (tone_input(10_000), Adaptive::new(1));
             resampler.set_ppm(ppm);
             resampler.pull(&mut input, 9_000)
         };
 
         assert_eq!(run(5_000.0), run(MAX_PPM));
         assert_eq!(run(-5_000.0), run(-MAX_PPM));
+    }
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "millions of steps: hours under Miri, and no unsafe code to check"
+    )]
+    fn each_channel_of_a_stereo_stream_is_resampled_exactly_as_it_would_be_alone() {
+        let left: Vec<f32> = tone_input(12_000).into_iter().collect();
+        let right: Vec<f32> = (0..12_000)
+            .map(|i| ((i * 37) % 101) as f32 / 101.0 - 0.5)
+            .collect();
+        let run = |input: &mut VecDeque<f32>, channels: usize| {
+            let mut resampler = Adaptive::new(channels);
+            resampler.set_ppm(-400.0);
+            let mut out = resampler.pull(input, 4_000);
+            resampler.set_ppm(250.0);
+            out.extend(resampler.pull(input, 6_000));
+            out
+        };
+        let mut stereo: VecDeque<f32> = left
+            .iter()
+            .zip(&right)
+            .flat_map(|(&l, &r)| [l, r])
+            .collect();
+
+        let out = run(&mut stereo, 2);
+
+        assert_eq!(out.len(), 2 * 10_000, "frames of two samples");
+        for (c, source) in [left, right].into_iter().enumerate() {
+            let alone = run(&mut source.into_iter().collect(), 1);
+            let mine: Vec<f32> = out.iter().skip(c).step_by(2).copied().collect();
+            assert_eq!(mine, alone, "channel {c}");
+        }
+    }
+
+    #[test]
+    fn a_frame_still_missing_samples_stays_queued() {
+        let mut resampler = Adaptive::new(2);
+        // 17 frames make the first output (after 15 frames of silence), and
+        // half of the 18th.
+        let mut input: VecDeque<f32> = (0..2 * 17 + 1).map(|i| i as f32).collect();
+
+        let first = resampler.pull(&mut input, 2);
+
+        assert_eq!(first.len(), 2, "one whole frame");
+        assert_eq!(input, [34.0], "the half frame waits for its other sample");
     }
 }

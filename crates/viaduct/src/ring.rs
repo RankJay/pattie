@@ -22,10 +22,22 @@ unsafe impl Send for RingMemory {}
 unsafe impl Sync for RingMemory {}
 
 impl RingMemory {
-    /// A Ring of `capacity_frames` with its header filled in. Out of memory ends
-    /// the process the way `Vec` does (`handle_alloc_error`).
+    /// A 48 kHz mono Ring of `capacity_frames` (the default format).
+    #[cfg_attr(not(test), allow(dead_code, reason = "the Ring's own tests use it"))]
     pub(crate) fn new(capacity_frames: u32) -> Result<Self, Error> {
-        let bytes = size_of::<RingHeader>() + capacity_frames as usize * size_of::<f32>();
+        Self::with_format(capacity_frames, 48_000, 1)
+    }
+
+    /// A Ring of `capacity_frames` frames of `channels` at `sample_rate`, with its
+    /// header filled in (ADR 0017's settings). Out of memory ends the process the
+    /// way `Vec` does (`handle_alloc_error`).
+    pub(crate) fn with_format(
+        capacity_frames: u32,
+        sample_rate: u32,
+        channels: u16,
+    ) -> Result<Self, Error> {
+        let samples = capacity_frames as usize * usize::from(channels.max(1));
+        let bytes = size_of::<RingHeader>() + samples * size_of::<f32>();
         let layout = Layout::from_size_align(bytes, 64).map_err(|_| Error::BadBufferSize)?;
         // SAFETY: the layout has a non-zero size (the header alone is 192 bytes).
         let raw = unsafe { alloc_zeroed(layout) };
@@ -33,18 +45,29 @@ impl RingMemory {
             handle_alloc_error(layout)
         };
         let ring = RingMemory { ptr, layout };
-        // SAFETY: freshly allocated, aligned, and large enough for the header.
-        unsafe { (*ring.header()).capacity_frames = capacity_frames };
+        // SAFETY: freshly allocated, aligned, and large enough for the header;
+        // written once, before the driver ever sees the Ring, and nothing else
+        // refers to it yet.
+        let header = unsafe { &mut *ring.header() };
+        header.capacity_frames = capacity_frames;
+        header.sample_rate = sample_rate;
+        header.channels = channels.max(1);
         Ok(ring)
     }
 
-    /// Where frame counter `position` falls in the frames area.
+    /// Where frame counter `position` falls in the frames area, as a frame index.
     #[expect(
         clippy::cast_possible_truncation,
         reason = "a remainder of the capacity (at most 65,536) fits any usize"
     )]
     fn slot(&self, position: u64) -> usize {
         (position % self.capacity()) as usize
+    }
+
+    /// Samples in each frame.
+    pub(crate) fn channels(&self) -> usize {
+        // SAFETY: written once in `with_format`, before the driver saw the Ring.
+        usize::from(unsafe { (*self.header()).channels })
     }
 
     pub(crate) fn address(&self) -> u64 {
@@ -60,16 +83,17 @@ impl RingMemory {
     }
 
     fn capacity(&self) -> u64 {
-        // SAFETY: written once in `new`, before the driver ever saw the Ring.
+        // SAFETY: written once in `with_format`, before the driver ever saw the Ring.
         unsafe { (*self.header()).capacity_frames as u64 }
     }
 
-    /// Frame `index` (below the capacity) of the frames area after the header.
+    /// Sample `index` (below the capacity times the channels) of the frames area
+    /// after the header; frame f's channel c is sample `f * channels + c`.
     fn frame(&self, index: usize) -> *mut f32 {
-        debug_assert!((index as u64) < self.capacity());
+        debug_assert!((index as u64) < self.capacity() * self.channels() as u64);
         let offset = size_of::<RingHeader>() + index * size_of::<f32>();
-        // SAFETY: the allocation is the header plus `capacity` frames, and
-        // `index < capacity`, so the frame lies inside it.
+        // SAFETY: the allocation is the header plus `capacity` frames of
+        // `channels` samples, and `index` is below that, so the sample lies inside.
         unsafe { self.ptr.as_ptr().add(offset) }.cast()
     }
 
@@ -99,8 +123,9 @@ impl RingMemory {
         self.counter(offset_of!(RingHeader, overflow_frames))
     }
 
-    /// The Microphone side: appends what fits of `samples` for the driver to read,
-    /// never overwriting unread audio; the rest is dropped and counted as Overflow.
+    /// The Microphone side: appends what fits of `samples` (interleaved, whole
+    /// frames) for the driver to read, never overwriting unread audio; the rest is
+    /// dropped and counted as Overflow. Returns frames accepted.
     pub(crate) fn write(&self, samples: &[f32]) -> usize {
         let (write, read, overflow) = (
             self.write_frames(),
@@ -113,15 +138,23 @@ impl RingMemory {
             .saturating_sub(read.load(Ordering::Acquire))
             .min(capacity);
         let room = usize::try_from(capacity - unread).unwrap_or(usize::MAX);
-        let accepted = samples.len().min(room);
+        let channels = self.channels();
+        debug_assert_eq!(samples.len() % channels, 0, "callers pass whole frames");
+        let frames = samples.len() / channels;
+        let accepted = frames.min(room);
 
-        for (i, &sample) in samples[..accepted].iter().enumerate() {
-            let index = self.slot(start + i as u64);
-            // SAFETY: `frame` points inside the allocation; this side alone
-            // writes the unread-free frames it was given.
-            unsafe { self.frame(index).write(sample) };
+        for (i, frame) in samples[..accepted * channels]
+            .chunks_exact(channels)
+            .enumerate()
+        {
+            let first = self.slot(start + i as u64) * channels;
+            for (c, &sample) in frame.iter().enumerate() {
+                // SAFETY: `frame` points inside the allocation; this side alone
+                // writes the unread-free frames it was given.
+                unsafe { self.frame(first + c).write(sample) };
+            }
         }
-        let dropped = (samples.len() - accepted) as u64;
+        let dropped = (frames - accepted) as u64;
         // Only this side stores Overflow, so a load and store can't lose a count.
         overflow.store(
             overflow.load(Ordering::Relaxed) + dropped,
@@ -131,7 +164,8 @@ impl RingMemory {
         accepted
     }
 
-    /// The Speaker side: takes up to `out.len()` frames the driver has played.
+    /// The Speaker side: takes the whole frames that fit in `out` (interleaved)
+    /// of what the driver has played; returns how many frames.
     pub(crate) fn read(&self, out: &mut [f32]) -> usize {
         let (write, read) = (self.write_frames(), self.read_frames());
         let capacity = self.capacity();
@@ -140,15 +174,19 @@ impl RingMemory {
             .load(Ordering::Acquire)
             .saturating_sub(start)
             .min(capacity);
-        let count = out
-            .len()
-            .min(usize::try_from(available).unwrap_or(usize::MAX));
+        let channels = self.channels();
+        let count = (out.len() / channels).min(usize::try_from(available).unwrap_or(usize::MAX));
 
-        for (i, slot) in out[..count].iter_mut().enumerate() {
-            let index = self.slot(start + i as u64);
-            // SAFETY: `frame` points inside the allocation, at a frame the
-            // driver has published (below the write counter read above).
-            *slot = unsafe { self.frame(index).read() };
+        for (i, frame) in out[..count * channels]
+            .chunks_exact_mut(channels)
+            .enumerate()
+        {
+            let first = self.slot(start + i as u64) * channels;
+            for (c, slot) in frame.iter_mut().enumerate() {
+                // SAFETY: `frame` points inside the allocation, at a frame the
+                // driver has published (below the write counter read above).
+                *slot = unsafe { self.frame(first + c).read() };
+            }
         }
         read.store(start + count as u64, Ordering::Release);
         count

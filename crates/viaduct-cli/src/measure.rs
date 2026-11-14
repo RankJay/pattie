@@ -21,6 +21,7 @@
     reason = "each block is one WASAPI/COM call sequence with a single safety argument"
 )]
 
+use crate::cli::DeviceFormat;
 use crate::latency::{ClickDetector, HNS_PER_SECOND, Sent, frames_to_hns, pair_clicks, spread};
 use crate::pace::GapMeter;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -45,11 +46,14 @@ use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerforma
 use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
 use windows::core::GUID;
 
-const RING_RATE: u64 = 48_000;
+/// `measure drift` runs its Device at 48 kHz mono.
+const DRIFT_RATE: u64 = 48_000;
 const CLICK_PERIOD: Duration = Duration::from_millis(500);
-const CLICK_FRAMES: usize = 48; // 1 ms at 48 kHz
-/// The mic side writes 10 ms at a time; `write_paced` decides when each goes in.
-const CHUNK_FRAMES: usize = 480;
+/// A click lasts 1 ms: a thousandth of a second of frames.
+const CLICKS_PER_SECOND: u64 = 1_000;
+/// The mic side writes 10 ms at a time (a hundredth of a second of frames);
+/// `write_paced` decides when each goes in.
+const CHUNKS_PER_SECOND: u64 = 100;
 /// A writer gap longer than this (Windows' 20 ms lead) starves the Ring.
 const GAP_LIMIT: Duration = Duration::from_millis(20);
 const CLICK_LEVEL: f32 = 0.8;
@@ -97,15 +101,15 @@ struct Run {
     gap_limit: Duration,
 }
 
-pub fn run(direction: &str, name: &str, seconds: u64) -> Result<(), String> {
+pub fn run(direction: &str, name: &str, seconds: u64, format: DeviceFormat) -> Result<(), String> {
     // SAFETY: initializes COM for this thread; the threads we spawn do their own.
     unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }
         .ok()
         .map_err(|e| format!("COM: {e}"))?;
     let duration = Duration::from_secs(seconds);
     let (run, stats_before, stats_after) = match direction {
-        "mic" => measure_mic(name, duration)?,
-        "speaker" => measure_speaker(name, duration)?,
+        "mic" => measure_mic(name, duration, format)?,
+        "speaker" => measure_speaker(name, duration, format)?,
         _ => return Err("measure needs `mic` or `speaker`".into()),
     };
     report(direction, &run, stats_before, stats_after);
@@ -275,11 +279,12 @@ impl Drop for Stream {
 fn measure_mic(
     name: &str,
     duration: Duration,
+    format: DeviceFormat,
 ) -> Result<(Run, viaduct::Stats, viaduct::Stats), String> {
     let mic = Device::builder()
         .name(name)
         .kind(Kind::Microphone)
-        .format(48_000, 1)
+        .format(format.rate, format.channels)
         .create()
         .map_err(|e| format!("couldn't create the microphone: {e}"))?;
     let mut tx = mic.writer().map_err(|e| e.to_string())?;
@@ -301,9 +306,11 @@ fn measure_mic(
     // (a backlog would add its length to every click).
     let mut meter = GapMeter::new(GAP_LIMIT);
     let mut next_click = Duration::from_secs(1); // let the capture side settle first
-    let silence = [0.0f32; CHUNK_FRAMES];
-    let mut click = [0.0f32; CHUNK_FRAMES];
-    click[..CLICK_FRAMES].fill(CLICK_LEVEL);
+    // Interleaved: the click is on every channel.
+    let (rate, channels) = (u64::from(format.rate), usize::from(format.channels));
+    let silence = vec![0.0f32; (rate / CHUNKS_PER_SECOND) as usize * channels];
+    let mut click = silence.clone();
+    click[..(rate / CLICKS_PER_SECOND) as usize * channels].fill(CLICK_LEVEL);
     let write = |tx: &mut viaduct::Writer, samples: &[f32]| {
         tx.write_paced(samples, Instant::now() + Duration::from_secs(1))
             .map_err(|e| e.to_string())
@@ -317,13 +324,13 @@ fn measure_mic(
         if start.elapsed() >= next_click {
             // The click's first frame alone, so it's stamped the moment it enters
             // the Ring, with what was already queued ahead of it.
-            write(&mut tx, &click[..1])?;
+            write(&mut tx, &click[..channels])?;
             let ahead = mic.stats().buffered_frames.saturating_sub(1);
             run.lock().unwrap().sent.push(Sent {
                 at_hns: now_hns(),
-                ahead_hns: frames_to_hns(ahead, RING_RATE),
+                ahead_hns: frames_to_hns(ahead, rate),
             });
-            write(&mut tx, &click[1..])?;
+            write(&mut tx, &click[channels..])?;
             next_click += CLICK_PERIOD;
         } else {
             write(&mut tx, &silence)?;
@@ -400,11 +407,12 @@ fn capture_clicks(endpoint: SendDevice, stop: &AtomicBool, run: &Mutex<Run>) -> 
 fn measure_speaker(
     name: &str,
     duration: Duration,
+    format: DeviceFormat,
 ) -> Result<(Run, viaduct::Stats, viaduct::Stats), String> {
     let speaker = Device::builder()
         .name(name)
         .kind(Kind::Speaker)
-        .format(48_000, 1)
+        .format(format.rate, format.channels)
         .create()
         .map_err(|e| format!("couldn't create the speaker: {e}"))?;
     let mut rx = speaker.reader().map_err(|e| e.to_string())?;
@@ -420,7 +428,9 @@ fn measure_speaker(
 
     let stats_before = speaker.stats();
     let start = Instant::now();
-    let mut buffer = vec![0.0f32; 4800];
+    // 100 ms of frames; clicks are found on the first channel.
+    let (rate, channels) = (u64::from(format.rate), usize::from(format.channels));
+    let mut buffer = vec![0.0f32; (rate / 10) as usize * channels];
     let mut detector = ClickDetector::default();
     // The reader wakes on each of the driver's 10 ms packets (the Device's
     // doorbell), so arrival is known to within a wake-up: report gaps over two
@@ -443,10 +453,9 @@ fn measure_speaker(
             .first_at
             .map(|at| read_at.saturating_sub(hns_since(at)));
         let mut run = run.lock().unwrap();
-        for (frame, &sample) in buffer[..timed.frames].iter().enumerate() {
-            let at = first_hns.map_or(read_at, |first| {
-                first + frames_to_hns(frame as u64, RING_RATE)
-            });
+        let first_channel = buffer[..timed.frames * channels].iter().step_by(channels);
+        for (frame, &sample) in first_channel.enumerate() {
+            let at = first_hns.map_or(read_at, |first| first + frames_to_hns(frame as u64, rate));
             if detector.detect(at, sample) {
                 run.seen_hns.push(at);
                 run.delivered_hns.push(read_at); // the reader is the app
@@ -502,8 +511,9 @@ fn render_clicks(endpoint: SendDevice, stop: &AtomicBool, run: &Mutex<Run>) -> R
             };
             let samples = frames as usize * stream.channels;
             let click = start.elapsed() >= next_click;
+            let click_frames = (stream.rate / CLICKS_PER_SECOND) as usize;
             for i in 0..samples {
-                let value = if click && i / stream.channels < CLICK_FRAMES {
+                let value = if click && i / stream.channels < click_frames {
                     CLICK_LEVEL
                 } else {
                     0.0
@@ -610,14 +620,14 @@ pub fn drift(name: &str, seconds: u64, ppm: f64, correct: bool) -> Result<(), St
         if correct { "on" } else { "off" }
     );
     println!("seconds,latency_ms,correction_ppm,starved_frames,dropped_frames");
-    let rate = RING_RATE as f64 * (1.0 + ppm / 1e6);
-    let step = 2.0 * std::f64::consts::PI * 440.0 / RING_RATE as f64;
+    let rate = DRIFT_RATE as f64 * (1.0 + ppm / 1e6);
+    let step = 2.0 * std::f64::consts::PI * 440.0 / DRIFT_RATE as f64;
     let (start, mut sent, mut next_log) = (Instant::now(), 0u64, 0u64);
     while start.elapsed() < Duration::from_secs(seconds) {
         // The source's clock: `rate` frames per second of this PC's clock.
         let due = (start.elapsed().as_secs_f64() * rate) as u64;
         let chunk: Vec<f32> = (sent..due)
-            .map(|i| 0.2 * (step * (i % RING_RATE) as f64).sin() as f32)
+            .map(|i| 0.2 * (step * (i % DRIFT_RATE) as f64).sin() as f32)
             .collect();
         live.push(&chunk);
         sent = due;
@@ -625,7 +635,7 @@ pub fn drift(name: &str, seconds: u64, ppm: f64, correct: bool) -> Result<(), St
             let stats = live.stats();
             println!(
                 "{next_log},{:.2},{:.1},{},{}",
-                stats.queued_frames as f64 * 1_000.0 / RING_RATE as f64,
+                stats.queued_frames as f64 * 1_000.0 / DRIFT_RATE as f64,
                 stats.correction_ppm,
                 stats.starved_frames,
                 stats.dropped_frames

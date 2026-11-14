@@ -7,17 +7,11 @@
 
 use crate::adaptive::MAX_PPM;
 
-/// How the fill responds to the correction: each ppm consumes 48 kHz × 10⁻⁶ =
-/// 0.048 more frames a second.
-const GAIN: f64 = 48_000.0 / 1e6;
 /// The loop's natural frequency (rad/s) and damping: it settles in about three
 /// minutes, slow enough that the smoothing below doesn't destabilise it, and
 /// slow enough that no correction is ever heard.
 const OMEGA: f64 = 0.03;
 const ZETA: f64 = 0.9;
-/// Proportional and integral gains of a PI loop around an integrating plant.
-const KP: f64 = 2.0 * ZETA * OMEGA / GAIN;
-const KI: f64 = OMEGA * OMEGA / GAIN;
 /// Smoothing of the measured fill (s): network bursts move it by tens of
 /// milliseconds from one pass to the next; drift moves it by microseconds.
 const SMOOTHING_S: f64 = 10.0;
@@ -26,15 +20,25 @@ const SMOOTHING_S: f64 = 10.0;
 #[derive(Debug)]
 pub(crate) struct Controller {
     target: f64,
+    /// Proportional and integral gains of a PI loop around an integrating
+    /// plant, whose gain is the rate: each ppm consumes `rate` × 10⁻⁶ more
+    /// frames a second (0.048 at 48 kHz). So the loop settles alike, in time, at
+    /// every rate.
+    kp: f64,
+    ki: f64,
     smoothed: Option<f64>,
     /// The integral of the error (frame-seconds).
     integral: f64,
 }
 
 impl Controller {
-    pub(crate) fn new(target: f64) -> Controller {
+    /// For a device at `rate` frames a second.
+    pub(crate) fn new(target: f64, rate: u32) -> Controller {
+        let gain = f64::from(rate) / 1e6;
         Controller {
             target,
+            kp: 2.0 * ZETA * OMEGA / gain,
+            ki: OMEGA * OMEGA / gain,
             smoothed: None,
             integral: 0.0,
         }
@@ -50,7 +54,7 @@ impl Controller {
         self.smoothed = Some(smoothed);
         let error = smoothed - self.target;
         let integral = self.integral + error * dt;
-        let ppm = KP * error + KI * integral;
+        let ppm = self.kp * error + self.ki * integral;
         if ppm.abs() <= MAX_PPM {
             self.integral = integral; // no wind-up while held at the limit
         }
@@ -63,8 +67,7 @@ mod tests {
     use super::*;
 
     const PASS_S: f64 = 0.01; // the system pulls 10 ms per pass
-    const PASS: f64 = 480.0;
-    const TARGET: f64 = 1_920.0; // 40 ms
+    const TARGET: f64 = 1_920.0; // 40 ms at 48 kHz
     const HOURS_8: usize = 8 * 3_600 * 100; // passes
 
     /// A tiny seeded generator (xorshift64*), uniform in [-1, 1).
@@ -79,19 +82,34 @@ mod tests {
         }
     }
 
-    /// What 8 hours of a source `drift_ppm` off the device do to the latency,
-    /// sampled after each pass, with the controller on or off. The source's
-    /// arrivals jitter by up to ±`jitter` frames (network bursts): bounded, not a
-    /// random walk. Returns (worst error after `settle_s`, error at the end), in
-    /// frames.
+    /// What 8 hours of a source `drift_ppm` off a 48 kHz device do to the
+    /// latency: as `simulate_at`.
     fn simulate(drift_ppm: f64, jitter: f64, correct: bool, settle_s: f64) -> (f64, f64) {
-        let mut controller = Controller::new(TARGET);
+        simulate_at(48_000, drift_ppm, jitter, correct, settle_s)
+    }
+
+    /// What 8 hours of a source `drift_ppm` off a device at `rate` do to the
+    /// latency (held at 40 ms), sampled after each pass, with the controller on
+    /// or off. The source's arrivals jitter by up to ±`jitter` frames at 48 kHz
+    /// (network bursts; scaled to the rate): bounded, not a random walk. Returns
+    /// (worst error after `settle_s`, error at the end), in 48 kHz frames.
+    fn simulate_at(
+        rate: u32,
+        drift_ppm: f64,
+        jitter: f64,
+        correct: bool,
+        settle_s: f64,
+    ) -> (f64, f64) {
+        let scale = f64::from(rate) / 48_000.0;
+        let (target, jitter) = (TARGET * scale, jitter * scale);
+        let pass = f64::from(rate) * PASS_S;
+        let mut controller = Controller::new(target, rate);
         let mut noise = Noise(0x9E37_79B9_7F4A_7C15);
-        let (mut fill, mut ppm, mut last_jitter, mut worst) = (TARGET, 0.0, 0.0, 0.0f64);
-        for pass in 0..HOURS_8 {
+        let (mut fill, mut ppm, mut last_jitter, mut worst) = (target, 0.0, 0.0, 0.0f64);
+        for n in 0..HOURS_8 {
             let this_jitter = jitter * noise.next();
-            fill += PASS * (1.0 + drift_ppm / 1e6) + this_jitter - last_jitter; // arrivals
-            fill -= PASS * (1.0 + ppm / 1e6); // what the resampler consumed
+            fill += pass * (1.0 + drift_ppm / 1e6) + this_jitter - last_jitter; // arrivals
+            fill -= pass * (1.0 + ppm / 1e6); // what the resampler consumed
             last_jitter = this_jitter;
             if correct {
                 ppm = controller.update(fill, PASS_S);
@@ -99,12 +117,12 @@ mod tests {
             }
             // The latency drift moves: the fill without the source's own bounded
             // jitter, which comes and goes whatever the clocks do.
-            let error = (fill - last_jitter - TARGET).abs();
-            if pass as f64 * PASS_S >= settle_s {
+            let error = (fill - last_jitter - target).abs() / scale;
+            if n as f64 * PASS_S >= settle_s {
                 worst = worst.max(error);
             }
         }
-        (worst, (fill - last_jitter - TARGET).abs())
+        (worst, (fill - last_jitter - target).abs() / scale)
     }
 
     const ONE_MS: f64 = 48.0;
@@ -169,7 +187,7 @@ mod tests {
         ignore = "millions of steps: hours under Miri, and no unsafe code to check"
     )]
     fn jitter_alone_barely_moves_the_correction() {
-        let mut controller = Controller::new(TARGET);
+        let mut controller = Controller::new(TARGET, 48_000);
         let mut noise = Noise(7);
         let mut widest = 0.0f64;
         for pass in 0..60_000 {
@@ -186,12 +204,46 @@ mod tests {
 
     #[test]
     fn a_huge_error_asks_for_no_more_than_the_limit() {
-        let mut controller = Controller::new(TARGET);
+        let mut controller = Controller::new(TARGET, 48_000);
 
         let fast = controller.update(TARGET * 100.0, PASS_S);
-        let slow = Controller::new(TARGET).update(0.0, PASS_S);
+        let slow = Controller::new(TARGET, 48_000).update(0.0, PASS_S);
 
         assert!(fast <= crate::adaptive::MAX_PPM && slow >= -crate::adaptive::MAX_PPM);
         assert!(fast > 0.0 && slow < 0.0);
+    }
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "millions of steps: hours under Miri, and no unsafe code to check"
+    )]
+    fn at_96_and_44_1_khz_a_source_50_ppm_fast_stays_within_1_ms_for_8_hours() {
+        for rate in [96_000, 44_100] {
+            let (worst, end) = simulate_at(rate, 50.0, 480.0, true, 300.0);
+
+            assert!(
+                worst < ONE_MS && end < ONE_MS,
+                "{rate}: worst {worst:.1}, end {end:.1} (48 kHz frames)"
+            );
+        }
+    }
+
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "millions of steps: hours under Miri, and no unsafe code to check"
+    )]
+    fn the_loop_settles_alike_at_every_rate() {
+        // Errors in time, not frames: the same drift is the same time off at
+        // any rate, so a controller that ignored the rate would differ here.
+        let at = |rate| simulate_at(rate, 500.0, 0.0, true, 120.0).0;
+
+        let (low, mid, high) = (at(44_100), at(48_000), at(96_000));
+
+        assert!(
+            (low - mid).abs() < 0.05 * mid && (high - mid).abs() < 0.05 * mid,
+            "{low:.2} {mid:.2} {high:.2}"
+        );
     }
 }

@@ -1,7 +1,8 @@
 //! The slice of PipeWire's stable public C API the Linux backend uses, bound by
 //! hand (ADR 0018): the stream and buffer structs (`pipewire/stream.h`,
-//! `spa/buffer/buffer.h`), the constants, the stream's one format as a SPA POD, and
-//! the functions, resolved from `libpipewire-0.3.so.0` at run time.
+//! `spa/buffer/buffer.h`), the constants, the stream's one format as a SPA POD
+//! (built for the Device's rate and channels), and the functions, resolved from
+//! `libpipewire-0.3.so.0` at run time.
 
 use libloading::Library;
 use std::ffi::{c_char, c_int, c_void};
@@ -95,21 +96,115 @@ pub(super) const STATE_UNCONNECTED: c_int = 0;
 pub(super) const STATE_PAUSED: c_int = 2;
 pub(super) const STATE_STREAMING: c_int = 3;
 /// The stream's one format, as a SPA POD (docs.pipewire.org, "SPA POD"): an
-/// EnumFormat object of audio, raw, F32LE, 48 kHz, 1 channel, position MONO.
-/// Every pod is (size, type) then its payload padded to 8 bytes; an object's
-/// payload is (object type, object id) then (key, flags, pod) properties.
+/// EnumFormat object of audio, raw, F32LE, at the Device's rate, channels and
+/// channel positions. Every pod is (size, type) then its payload padded to 8
+/// bytes; an object's payload is (object type, object id) then (key, flags, pod)
+/// properties.
 #[repr(C, align(8))]
-pub(super) struct Pod(pub(super) [u32; 42]);
+pub(super) struct Pod {
+    /// Room for 8 channel positions; only `len` words are the pod.
+    words: [u32; 48],
+    len: usize,
+}
 
-pub(super) static FORMAT: Pod = Pod([
-    160, 15, 0x4_0003, 3, // Object of 160 bytes: SPA_TYPE_OBJECT_Format, SPA_PARAM_EnumFormat
-    1, 0, 4, 3, 1, 0, // SPA_FORMAT_mediaType: Id SPA_MEDIA_TYPE_audio
-    2, 0, 4, 3, 1, 0, // SPA_FORMAT_mediaSubtype: Id SPA_MEDIA_SUBTYPE_raw
-    0x1_0001, 0, 4, 3, 0x11b, 0, // SPA_FORMAT_AUDIO_format: Id SPA_AUDIO_FORMAT_F32_LE
-    0x1_0003, 0, 4, 4, 48_000, 0, // SPA_FORMAT_AUDIO_rate: Int 48000
-    0x1_0004, 0, 4, 4, 1, 0, // SPA_FORMAT_AUDIO_channels: Int 1
-    0x1_0005, 0, 12, 13, 4, 3, 2, 0, // SPA_FORMAT_AUDIO_position: Array of Id [MONO]
-]);
+impl Pod {
+    /// The pod's words, for its tests.
+    #[cfg_attr(not(test), expect(dead_code, reason = "the pod's tests read it"))]
+    pub(super) fn words(&self) -> &[u32] {
+        &self.words[..self.len]
+    }
+
+    /// For `pw_stream_connect`'s params, which PipeWire copies.
+    pub(super) fn as_ptr(&self) -> *const c_void {
+        self.words.as_ptr().cast()
+    }
+}
+
+/// `enum spa_audio_channel` (`spa/param/audio/raw.h`).
+const MONO: u32 = 2;
+const FL: u32 = 3;
+const FR: u32 = 4;
+const FC: u32 = 5;
+const LFE: u32 = 6;
+const SL: u32 = 7;
+const SR: u32 = 8;
+const RC: u32 = 11;
+const RL: u32 = 12;
+const RR: u32 = 13;
+
+/// The channel positions for 1 to 8 channels: the standard layouts, in the
+/// order Windows' channel masks give them (ADR 0023): mono, stereo, 3.0, quad,
+/// 5.0, 5.1, 6.1, 7.1 surround.
+const LAYOUTS: [&[u32]; 8] = [
+    &[MONO],
+    &[FL, FR],
+    &[FL, FR, FC],
+    &[FL, FR, RL, RR],
+    &[FL, FR, FC, RL, RR],
+    &[FL, FR, FC, LFE, RL, RR],
+    &[FL, FR, FC, LFE, RL, RR, RC],
+    &[FL, FR, FC, LFE, RL, RR, SL, SR],
+];
+
+/// The format pod for a Device at `rate` with `channels` (1 to 8, as the core
+/// checked at attach).
+pub(super) fn format_pod(rate: u32, channels: u16) -> Pod {
+    let positions = LAYOUTS[usize::from(channels.clamp(1, 8)) - 1];
+    let mut words = [0u32; 48];
+    let body = [
+        0x4_0003,
+        3, // SPA_TYPE_OBJECT_Format, SPA_PARAM_EnumFormat
+        1,
+        0,
+        4,
+        3,
+        1,
+        0, // SPA_FORMAT_mediaType: Id SPA_MEDIA_TYPE_audio
+        2,
+        0,
+        4,
+        3,
+        1,
+        0, // SPA_FORMAT_mediaSubtype: Id SPA_MEDIA_SUBTYPE_raw
+        0x1_0001,
+        0,
+        4,
+        3,
+        0x11b,
+        0, // SPA_FORMAT_AUDIO_format: Id SPA_AUDIO_FORMAT_F32_LE
+        0x1_0003,
+        0,
+        4,
+        4,
+        rate,
+        0, // SPA_FORMAT_AUDIO_rate: Int
+        0x1_0004,
+        0,
+        4,
+        4,
+        u32::from(channels),
+        0, // SPA_FORMAT_AUDIO_channels: Int
+    ];
+    words[2..2 + body.len()].copy_from_slice(&body);
+    let mut len = 2 + body.len();
+    // SPA_FORMAT_AUDIO_position: Array (13) of Id (child size 4, type 3).
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "at most 8 positions: a few dozen bytes"
+    )]
+    let array_bytes = (8 + 4 * positions.len()) as u32;
+    words[len..len + 6].copy_from_slice(&[0x1_0005, 0, array_bytes, 13, 4, 3]);
+    len += 6;
+    words[len..len + positions.len()].copy_from_slice(positions);
+    len += positions.len().next_multiple_of(2); // padded to 8 bytes with zeros
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "at most 48 words: 192 bytes"
+    )]
+    let object_bytes = (len * 4 - 8) as u32;
+    words[..2].copy_from_slice(&[object_bytes, 15]); // Object (SPA_TYPE_Object)
+    Pod { words, len }
+}
 
 // ---- runtime-loaded functions ----
 
@@ -195,15 +290,77 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_format_pod_is_one_object_sized_by_its_header() {
-        let words = &FORMAT.0;
-        let bytes = words.len() * 4;
+    fn the_mono_48_khz_pod_is_word_for_word_the_one_v0_offered() {
+        // v0's static pod, which PipeWire accepted (ADR 0018).
+        let v0: [u32; 42] = [
+            160, 15, 0x4_0003, 3, 1, 0, 4, 3, 1, 0, 2, 0, 4, 3, 1, 0, 0x1_0001, 0, 4, 3, 0x11b, 0,
+            0x1_0003, 0, 4, 4, 48_000, 0, 0x1_0004, 0, 4, 4, 1, 0, 0x1_0005, 0, 12, 13, 4, 3, 2, 0,
+        ];
 
-        // The size field counts the body after the 8-byte (size, type) header.
-        assert_eq!(words[0] as usize, bytes - 8);
-        assert_eq!(words[1], 15); // SPA_TYPE_Object
-        assert_eq!(bytes % 8, 0);
+        assert_eq!(format_pod(48_000, 1).words(), v0);
+    }
+
+    #[test]
+    fn a_stereo_44_1_khz_pod_gives_its_rate_channels_and_front_left_and_right() {
+        let pod = format_pod(44_100, 2);
+        let words = pod.words();
+
+        assert_eq!(words[22..28], [0x1_0003, 0, 4, 4, 44_100, 0]); // rate
+        assert_eq!(words[28..34], [0x1_0004, 0, 4, 4, 2, 0]); // channels
+        // Array of 2 Ids: 8 bytes of child header and 8 of FL, FR; no padding.
+        assert_eq!(words[34..], [0x1_0005, 0, 16, 13, 4, 3, 3, 4]);
+    }
+
+    #[test]
+    fn every_layout_is_one_object_sized_by_its_header_and_padded_to_8_bytes() {
+        for channels in 1..=8u16 {
+            let pod = format_pod(96_000, channels);
+            let words = pod.words();
+            let bytes = words.len() * 4;
+
+            // The size field counts the body after the 8-byte (size, type) header.
+            assert_eq!(words[0] as usize, bytes - 8, "{channels}");
+            assert_eq!(words[1], 15, "{channels}"); // SPA_TYPE_Object
+            assert_eq!(bytes % 8, 0, "{channels}");
+            assert_eq!(
+                words[36] as usize,
+                8 + 4 * usize::from(channels),
+                "{channels}"
+            );
+            assert_eq!(positions(&pod).len(), usize::from(channels));
+        }
         assert_eq!(std::mem::align_of::<Pod>(), 8);
+    }
+
+    /// The channel positions a pod gives.
+    fn positions(pod: &Pod) -> &[u32] {
+        let words = pod.words();
+        let count = (words[36] as usize - 8) / 4;
+        &words[40..40 + count]
+    }
+
+    #[test]
+    fn the_layouts_are_the_standard_ones_windows_also_offers() {
+        // spa/param/audio/raw.h: MONO 2, FL 3, FR 4, FC 5, LFE 6, SL 7, SR 8,
+        // RC 11, RL 12, RR 13. Windows' masks, in its order: 3.0, quad, 5.0,
+        // 5.1, 6.1, 7.1 surround.
+        let layouts: Vec<Vec<u32>> = (1..=8)
+            .map(|channels| positions(&format_pod(48_000, channels)).to_vec())
+            .collect();
+
+        assert_eq!(
+            layouts,
+            [
+                vec![2],
+                vec![3, 4],
+                vec![3, 4, 5],
+                vec![3, 4, 12, 13],
+                vec![3, 4, 5, 12, 13],
+                vec![3, 4, 5, 6, 12, 13],
+                vec![3, 4, 5, 6, 12, 13, 11],
+                vec![3, 4, 5, 6, 12, 13, 7, 8],
+            ]
+        );
     }
 
     #[test]

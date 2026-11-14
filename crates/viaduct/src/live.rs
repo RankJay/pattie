@@ -17,12 +17,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
 
-/// The latency a `LiveWriter` holds: 40 ms of queue, enough for the network
-/// bursts a relay sees (on top of the Ring's lead).
-pub(crate) const TARGET_FRAMES: usize = 1_920;
-/// Past this much queue (1 s) the source burst or stalled and caught up: the
-/// oldest audio is dropped back to the target instead of played late.
-const QUEUE_LIMIT: usize = 48_000;
+/// The latency a `LiveWriter` holds, as a share of a second: 40 ms of queue,
+/// enough for the network bursts a relay sees (on top of the Ring's lead).
+const TARGET_PER_SECOND: u32 = 25;
 
 /// What a live source writes. See [`crate::Device::live_writer`].
 pub struct LiveWriter {
@@ -34,7 +31,8 @@ pub struct LiveWriter {
 /// How a [`LiveWriter`] is doing.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LiveStats {
-    /// Frames waiting in the jitter buffer (48 kHz): the latency it holds.
+    /// Frames waiting in the jitter buffer (at the Device's rate): the latency
+    /// it holds.
     pub queued_frames: u64,
     /// The drift correction in use, in ppm: positive when the source runs fast.
     pub correction_ppm: f64,
@@ -52,10 +50,18 @@ struct Shared {
 }
 
 struct State {
+    /// Interleaved, in the Device's format; a frame split across pushes waits
+    /// at the end for its last sample.
     queue: VecDeque<f32>,
+    channels: usize,
     adaptive: Adaptive,
     controller: Controller,
+    /// Frames: 40 ms.
     target: usize,
+    /// Frames: past this much queue (1 s) the source burst or stalled and caught
+    /// up, and the oldest audio is dropped back to the target instead of played
+    /// late.
+    limit: usize,
     /// Playing from the queue; false while it fills to the target.
     playing: bool,
     /// The system's last pass seen: (frames, ns) of its clock pair.
@@ -96,17 +102,22 @@ impl LiveWriter {
 
     /// A live writer nobody feeds: tests call `pump` by hand.
     fn manual(inner: Arc<Inner>, input: Format) -> Result<LiveWriter, Error> {
-        let converter = Mutex::new(Converter::new(input, Format::DEVICE)?);
+        let format = inner.format;
+        let converter = Mutex::new(Converter::new(input, format)?);
         inner.take_endpoint(Kind::Microphone)?;
+        let channels = usize::from(format.channels);
+        let target = (format.rate / TARGET_PER_SECOND) as usize;
         Ok(LiveWriter {
             converter,
             shared: Arc::new(Shared {
                 inner,
                 state: Mutex::new(State {
                     queue: VecDeque::new(),
-                    adaptive: Adaptive::new(),
-                    controller: Controller::new(TARGET_FRAMES as f64),
-                    target: TARGET_FRAMES,
+                    channels,
+                    adaptive: Adaptive::new(channels),
+                    controller: Controller::new(target as f64, format.rate),
+                    target,
+                    limit: format.rate as usize,
                     playing: false,
                     last_pass: None,
                     ppm: 0.0,
@@ -120,21 +131,26 @@ impl LiveWriter {
         })
     }
 
-    /// Queues 48 kHz mono samples as they arrive from the source. Returns how
-    /// many were queued (all of them).
+    /// Queues samples in the Device's own format (interleaved) as they arrive
+    /// from the source. Returns how many whole frames that adds (all of them); a
+    /// frame split across pushes counts once its last sample arrives.
     pub fn push(&self, samples: &[f32]) -> usize {
         let mut state = self.shared.lock();
+        let channels = state.channels;
+        let before = state.queue.len() / channels;
         state.queue.extend(samples);
-        if state.queue.len() > QUEUE_LIMIT {
-            let excess = state.queue.len() - state.target;
-            state.queue.drain(..excess);
+        let frames = state.queue.len() / channels;
+        if frames > state.limit {
+            let excess = frames - state.target;
+            state.queue.drain(..excess * channels);
             state.dropped += excess as u64;
         }
-        samples.len()
+        frames - before
     }
 
     /// Queues bytes in the writer's input format (see `Device::live_writer`),
-    /// converted to 48 kHz mono float. Returns how many 48 kHz frames were queued.
+    /// converted to the Device's own. Returns how many of the Device's frames
+    /// were queued.
     pub fn push_bytes(&self, bytes: &[u8]) -> usize {
         let mut converted = Vec::new();
         self.converter
@@ -161,7 +177,7 @@ impl LiveWriter {
     pub fn stats(&self) -> LiveStats {
         let state = self.shared.lock();
         LiveStats {
-            queued_frames: state.queue.len() as u64,
+            queued_frames: (state.queue.len() / state.channels) as u64,
             correction_ppm: state.ppm,
             starved_frames: state.starved,
             dropped_frames: state.dropped,
@@ -189,7 +205,10 @@ impl Shared {
                 let dt = ns.saturating_sub(last_ns) as f64 / 1e9;
                 state.ppm = match state.held {
                     Some(ppm) => ppm,
-                    None => state.controller.update(state.queue.len() as f64, dt),
+                    None => {
+                        let queued = state.queue.len() / state.channels;
+                        state.controller.update(queued as f64, dt)
+                    }
                 };
                 state.adaptive.set_ppm(state.ppm);
             }
@@ -200,7 +219,8 @@ impl Shared {
         if room == 0 {
             return;
         }
-        if !state.playing && state.queue.len() >= state.target {
+        let channels = state.channels;
+        if !state.playing && state.queue.len() / channels >= state.target {
             state.playing = true;
         }
         let mut audio = if state.playing {
@@ -208,12 +228,13 @@ impl Shared {
         } else {
             Vec::new()
         };
-        if state.playing && audio.len() < room {
+        let pulled = audio.len() / channels;
+        if state.playing && pulled < room {
             // The source fell behind: silence, and fill to the target again.
-            state.starved += (room - audio.len()) as u64;
+            state.starved += (room - pulled) as u64;
             state.playing = false;
         }
-        audio.resize(room, 0.0);
+        audio.resize(room * channels, 0.0);
         self.inner.ring.write(&audio);
     }
 }
@@ -247,21 +268,31 @@ mod tests {
     }
 
     /// As `setup`, with the Backend's lead.
+    fn setup_with_lead() -> (TestBackend, Device, LiveWriter, usize) {
+        setup_format(48_000, 1)
+    }
+
+    /// A Microphone at `rate` with `channels`, its live writer taking its own
+    /// format, and the Backend's lead in frames.
     #[expect(
         clippy::unwrap_used,
         reason = "a test helper: a failure should stop the test loudly"
     )]
-    fn setup_with_lead() -> (TestBackend, Device, LiveWriter, usize) {
+    fn setup_format(rate: u32, channels: u16) -> (TestBackend, Device, LiveWriter, usize) {
         let backend = TestBackend::new().unwrap();
         let mic = Device::builder()
             .name("Agent Mic")
+            .format(rate, channels)
             .transport(backend.transport())
             .create()
             .unwrap();
-        let live = LiveWriter::manual(mic.inner().clone(), Format::DEVICE).unwrap();
-        let lead = backend.transport().lead_frames() as usize;
+        let live = LiveWriter::manual(mic.inner().clone(), mic.format()).unwrap();
+        let lead = usize::try_from(mic.inner().lead_frames).unwrap();
         (backend, mic, live, lead)
     }
+
+    /// The 48 kHz target: 40 ms.
+    const TARGET_FRAMES: usize = 1_920;
 
     #[test]
     fn it_plays_silence_until_the_buffer_holds_its_target_then_the_audio() {
@@ -368,5 +399,83 @@ mod tests {
         assert!(starved > 0);
         assert!(refilling.iter().all(|&s| s == 0.0));
         assert_eq!(live.stats().queued_frames, 960);
+    }
+
+    #[test]
+    fn a_stereo_source_at_44_1_khz_200_ppm_fast_holds_40_ms_in_lockstep() {
+        let (backend, mic, live, _) = setup_format(44_100, 2);
+        let (mut sent, mut owed) = (0u64, 0.0f64);
+        let (mut heard, mut worst) = (Vec::new(), 0.0f64);
+        let tone = |i: u64| {
+            (0.5 * (2.0 * std::f64::consts::PI * 1_000.0 * i as f64 / 44_100.0).sin()) as f32
+        };
+        let passes = 6 * 60 * 100u64;
+        live.shared.pump();
+        for pass in 0..passes {
+            // 441.0882 frames per 10 ms: 200 ppm fast. The right channel is the
+            // left one inverted.
+            owed += 441.0 * (1.0 + 200e-6);
+            let whole = owed.floor();
+            owed -= whole;
+            let chunk: Vec<f32> = (sent..sent + whole as u64)
+                .flat_map(|i| [tone(i), -tone(i)])
+                .collect();
+            sent += whole as u64;
+            assert_eq!(live.push(&chunk), whole as usize, "frames");
+            heard.extend(
+                backend
+                    .driver_read_at(mic.id(), 441, pass * 10_000_000)
+                    .unwrap(),
+            );
+            if pass >= 4 * 60 * 100 {
+                // 40 ms at 44.1 kHz is 1,764 frames; 1 ms is 44.1.
+                let error = live.stats().queued_frames as f64 - 1_764.0;
+                worst = worst.max(error.abs());
+            }
+            live.shared.pump();
+        }
+
+        let stats = live.stats();
+        let left: Vec<f32> = heard.iter().step_by(2).copied().collect();
+        let steepest = left
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0, f32::max);
+        assert!(worst < 44.1, "latency off by {worst:.0} frames");
+        assert!((stats.correction_ppm - 200.0).abs() < 20.0, "{stats:?}");
+        assert_eq!((stats.starved_frames, stats.dropped_frames), (0, 0));
+        // The tone's steepest step is 0.5 * 2 pi * 1 kHz / 44.1 kHz = 0.0712.
+        assert!(steepest < 0.0713 * 1.001, "a jump of {steepest}");
+        assert!(
+            heard.as_chunks::<2>().0.iter().all(|[l, r]| *r == -*l),
+            "the channels move in lockstep"
+        );
+    }
+
+    #[test]
+    fn a_stereo_queue_past_one_second_drops_whole_frames_back_to_the_target() {
+        let (_backend, _mic, live, _) = setup_format(44_100, 2);
+        let older: Vec<f32> = [0.1, -0.1].repeat(30_000);
+        let newer: Vec<f32> = [0.9, -0.9].repeat(20_000);
+
+        live.push(&older);
+        live.push(&newer);
+
+        let stats = live.stats();
+        assert_eq!(stats.queued_frames, 1_764, "40 ms at 44.1 kHz");
+        assert_eq!(stats.dropped_frames, 50_000 - 1_764);
+        let queue: Vec<f32> = live.shared.lock().queue.iter().copied().collect();
+        assert_eq!(queue, [0.9, -0.9].repeat(1_764), "the newest, whole frames");
+    }
+
+    #[test]
+    fn a_frame_split_across_pushes_counts_once_its_last_sample_arrives() {
+        let (_backend, _mic, live, _) = setup_format(48_000, 2);
+
+        let first = live.push(&[0.1, 0.2, 0.3]);
+        let second = live.push(&[0.4]);
+
+        assert_eq!((first, second), (1, 1));
+        assert_eq!(live.stats().queued_frames, 2);
     }
 }

@@ -111,16 +111,25 @@ typedef struct vd_remove_device_request {
 /*
  * Ring layout (ADR 0007). Lives in app-allocated memory the driver pins
  * (ADR 0006). Counters only grow and never wrap; each side stores only to its
- * own cache line. Audio frames (32-bit float, mono in v0) follow the header
- * immediately; frame n lives at index n % capacity_frames.
+ * own cache line. Audio frames (`channels` interleaved 32-bit floats, ADR 0023)
+ * follow the header immediately; frame n lives at index n % capacity_frames.
  */
 /* Ring capacity: a power of two within these bounds (about 5 ms to 1.4 s at 48 kHz);
  * this version's limits, which a later minor may widen (ADR 0017). */
 #define VD_RING_MIN_FRAMES 256u
 #define VD_RING_MAX_FRAMES 65536u
 
-/* Largest Ring the driver will pin: the header plus VD_RING_MAX_FRAMES frames. */
-#define VD_RING_MAX_BYTES (192u + VD_RING_MAX_FRAMES * 4u)
+/* Channels a frame may hold (interleaved, one 32-bit float each): mono to 7.1. */
+#define VD_RING_MAX_CHANNELS 8u
+
+/* Largest Ring the driver will pin: the header plus VD_RING_MAX_FRAMES frames of
+ * VD_RING_MAX_CHANNELS. */
+#define VD_RING_MAX_BYTES (192u + VD_RING_MAX_FRAMES * VD_RING_MAX_CHANNELS * 4u)
+
+/* The sample rates a Ring may run at. 0 in the header means 48 kHz. */
+#define VD_RATE_44100 44100u
+#define VD_RATE_48000 48000u
+#define VD_RATE_96000 96000u
 
 /*
  * A side's clock (ADR 0022): after each pass the system's side (the driver,
@@ -149,7 +158,9 @@ typedef struct vd_ring_header {
     uint8_t reader_pad[24];   /* reserved; zero */
     /* Fixed by the SDK before Create Device. */
     uint32_t capacity_frames;
-    uint8_t config_pad[60];   /* reserved: sample rate, channels (ADR 0017); zero */
+    uint32_t sample_rate;     /* VD_RATE_*; 0 means 48 kHz */
+    uint16_t channels;        /* 1 to VD_RING_MAX_CHANNELS; 0 means mono */
+    uint8_t config_pad[54];   /* reserved; zero */
 } vd_ring_header;
 
 #endif /* VIADUCT_ABI_H */

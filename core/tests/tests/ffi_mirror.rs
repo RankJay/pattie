@@ -41,6 +41,7 @@ mod sdk {
         type OwnerClosed =
             unsafe extern "C" fn(*mut c::vd_core, *const c::vd_owner, *mut u32) -> usize;
         type DeviceRing = unsafe extern "C" fn(*mut c::vd_core, u32) -> *mut c::vd_ring;
+        type Channels = unsafe extern "C" fn(*const c::vd_ring) -> u32;
         type Read = unsafe extern "C" fn(*mut c::vd_ring, *mut f32, u32);
         type Write = unsafe extern "C" fn(*mut c::vd_ring, *const f32, u32);
         type Publish = unsafe extern "C" fn(*mut c::vd_ring, u64);
@@ -49,6 +50,8 @@ mod sdk {
         same::<Command>(vd_core_command, c::vd_core_command);
         same::<OwnerClosed>(vd_core_owner_closed, c::vd_core_owner_closed);
         same::<DeviceRing>(vd_core_device_ring, c::vd_core_device_ring);
+        same::<Channels>(vd_ring_channels, c::vd_ring_channels);
+        same::<Channels>(vd_ring_sample_rate, c::vd_ring_sample_rate);
         same::<Read>(vd_ring_read, c::vd_ring_read);
         same::<Write>(vd_ring_write, c::vd_ring_write);
         same::<Publish>(vd_ring_publish_read_clock, c::vd_ring_publish_read_clock);

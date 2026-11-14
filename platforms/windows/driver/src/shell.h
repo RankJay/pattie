@@ -48,10 +48,9 @@
 #include "trace.h"
 
 #define VD_POOL_TAG 'dvaV'
-#define VD_SAMPLE_RATE 48000u
-/* Frame sizes of the two mono formats Windows may stream in (ADR 0005). */
-#define VD_FLOAT_BYTES_PER_FRAME 4u   /* 32-bit float: the Ring's own format */
-#define VD_PCM16_BYTES_PER_FRAME 2u   /* 16-bit PCM: converted in the copy */
+/* Sample sizes of the two encodings Windows may stream in (ADR 0005, ADR 0023). */
+#define VD_FLOAT_BYTES_PER_SAMPLE 4u  /* 32-bit float: the Ring's own format */
+#define VD_PCM16_BYTES_PER_SAMPLE 2u  /* 16-bit PCM: converted in the copy */
 
 /* Identifies Viaduct's circuits to ACX. */
 DEFINE_GUID(VIADUCT_COMPONENT_GUID,
@@ -62,6 +61,15 @@ typedef struct _VD_CIRCUIT_DEVICE_CONTEXT {
     UINT32 DeviceId;
     UINT32 Kind;                    /* VD_KIND_MICROPHONE or VD_KIND_SPEAKER */
     vd_ring *Ring;                  /* in the core's table; only under Rundown */
+    UINT32 SampleRate;              /* the Ring's, as the core checked it at attach (ADR 0023) */
+    UINT32 Channels;                /* likewise: samples in each frame */
+    /*
+     * The host pin's two formats at that rate and channel count (circuit.c). Kept
+     * here, with the device, so they outlive the circuit whose format objects
+     * were made from them.
+     */
+    KSDATAFORMAT_WAVEFORMATEXTENSIBLE FormatFloat;
+    KSDATAFORMAT_WAVEFORMATEXTENSIBLE FormatPcm16;
     EX_RUNDOWN_REF Rundown;         /* streaming access to Ring and WakeEvent */
     PKEVENT WakeEvent;              /* the app's doorbell (ADR 0021); only under Rundown */
     volatile LONG Deleted;          /* set once Windows starts deleting the device */

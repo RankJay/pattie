@@ -2,7 +2,7 @@
 
 use crate::Error;
 use crate::abi;
-use crate::convert::Format;
+use crate::convert::{Encoding, Format};
 use crate::doorbell::Doorbell;
 use crate::live::LiveWriter;
 use crate::mmcss::ProAudio;
@@ -34,8 +34,8 @@ impl Kind {
     }
 }
 
-/// The one format v0 supports: 48 kHz, mono (ADR 0005).
-pub(crate) const V0_FORMAT: (u32, u16) = (48_000, 1);
+/// The sample rates a Device may run at (ADR 0023).
+const RATES: [u32; 3] = [abi::RATE_44100, abi::RATE_48000, abi::RATE_96000];
 
 /// Default Ring size: 4,096 frames, about 85 ms at 48 kHz.
 const DEFAULT_BUFFER_FRAMES: u32 = 4096;
@@ -62,7 +62,10 @@ impl DeviceBuilder {
         self
     }
 
-    /// Sample rate and channel count. v0 supports only 48 kHz mono (ADR 0005).
+    /// Sample rate (44,100, 48,000 or 96,000) and channel count (1 to 8: mono,
+    /// stereo, quad, 5.1 or 7.1 layouts). Default 48 kHz mono. Fixed for the
+    /// Device's lifetime; apps that use another format are converted by the
+    /// system's own audio engine (ADR 0023).
     pub fn format(mut self, sample_rate: u32, channels: u16) -> Self {
         self.format = (sample_rate, channels);
         self
@@ -83,7 +86,8 @@ impl DeviceBuilder {
 
     /// Creates the Device. It lives until the returned value is dropped.
     pub fn create(self) -> Result<Device, Error> {
-        if self.format != V0_FORMAT {
+        let (rate, channels) = self.format;
+        if !RATES.contains(&rate) || !(1..=8).contains(&channels) {
             return Err(Error::UnsupportedFormat);
         }
         // Checked before allocating: the driver would reject it anyway (ADR 0007).
@@ -97,9 +101,10 @@ impl DeviceBuilder {
             Some(transport) => transport,
             None => default_transport()?,
         };
-        let lead_frames = u64::from(transport.lead_frames());
+        // The Backend's lead is set at 48 kHz; the same time at this Device's rate.
+        let lead_frames = (u64::from(transport.lead_frames()) * u64::from(rate)).div_ceil(48_000);
         let mut session = Session::open(transport.as_ref())?;
-        let ring = RingMemory::new(self.buffer_frames)?;
+        let ring = RingMemory::with_format(self.buffer_frames, rate, channels)?;
         let doorbell = Doorbell::new()?;
         let id = session.create_device(self.kind.abi(), &self.name, &ring, doorbell.raw())?;
 
@@ -110,6 +115,11 @@ impl DeviceBuilder {
                 doorbell,
                 id,
                 kind: self.kind,
+                format: Format {
+                    rate,
+                    channels,
+                    encoding: Encoding::F32,
+                },
                 lead_frames,
                 endpoint_taken: AtomicBool::new(false),
             }),
@@ -138,13 +148,27 @@ pub(crate) struct Inner {
     pub(crate) doorbell: Doorbell,
     pub(crate) id: u32,
     kind: Kind,
-    /// How far ahead `Writer::write_paced` keeps the Ring filled (the Backend's).
+    /// The Device's own rate and channels (32-bit float).
+    pub(crate) format: Format,
+    /// How far ahead `Writer::write_paced` keeps the Ring filled (the Backend's
+    /// lead, in this Device's frames).
     pub(crate) lead_frames: u64,
     /// The Ring has one app-side party: a single Writer or Reader at a time.
     endpoint_taken: AtomicBool,
 }
 
 impl Inner {
+    /// How many whole frames `samples` (interleaved) holds; `PartialFrame` if it
+    /// ends partway through one.
+    pub(crate) fn whole_frames(&self, samples: &[f32]) -> Result<usize, Error> {
+        let channels = usize::from(self.format.channels);
+        if samples.len().is_multiple_of(channels) {
+            Ok(samples.len() / channels)
+        } else {
+            Err(Error::PartialFrame)
+        }
+    }
+
     /// How much a paced writer may add now: what tops the Ring up to the lead
     /// (ADR 0020), so it never holds more than the system's next pull or two.
     pub(crate) fn room_below_lead(&self) -> usize {
@@ -225,9 +249,10 @@ pub struct Timed {
 }
 
 /// The time of frame `position`, from the clock pair `(frames, at)` at the
-/// nominal 48 kHz: the pair is at most one pass old, too recent for drift to show.
-fn time_of(position: u64, clock: ClockPoint) -> Instant {
-    let rate = u64::from(V0_FORMAT.0);
+/// Device's nominal `rate`: the pair is at most one pass old, too recent for
+/// drift to show.
+fn time_of(position: u64, clock: ClockPoint, rate: u32) -> Instant {
+    let rate = u64::from(rate);
     let span = |frames: u64| Duration::from_nanos(frames * 1_000_000_000 / rate);
     if position >= clock.frames {
         clock.at + span(position - clock.frames)
@@ -262,7 +287,17 @@ impl Device {
     /// the system's first pass.
     pub fn next_play_time(&self) -> Option<Instant> {
         let clock = self.inner.clock()?;
-        Some(time_of(self.inner.ring.written(), clock))
+        Some(time_of(
+            self.inner.ring.written(),
+            clock,
+            self.inner.format.rate,
+        ))
+    }
+
+    /// The Device's own format: its rate and channels, as 32-bit float (what
+    /// writers and readers take and give, interleaved).
+    pub fn format(&self) -> Format {
+        self.inner.format
     }
 
     /// Starts configuring a Device: a Microphone, 48 kHz mono, with a
@@ -271,7 +306,7 @@ impl Device {
         DeviceBuilder {
             name: String::new(),
             kind: Kind::Microphone,
-            format: V0_FORMAT,
+            format: (48_000, 1),
             buffer_frames: DEFAULT_BUFFER_FRAMES,
             transport: None,
         }
@@ -287,7 +322,7 @@ impl Device {
     /// how much was heard (ADR 0020). It takes the Device's one writer slot, like
     /// `writer`: one or the other, until dropped.
     pub fn playout(&self) -> Result<Playout, Error> {
-        Playout::start(self.inner.clone(), Format::DEVICE)
+        Playout::start(self.inner.clone(), self.inner.format)
     }
 
     /// As `playout`, for audio in another format: `push_bytes` takes it (16-bit
@@ -357,7 +392,9 @@ impl fmt::Debug for Reader {
 }
 
 impl Reader {
-    /// Takes up to `out.len()` 48 kHz mono samples without blocking; returns how many.
+    /// Takes the whole frames that fit in `out` (interleaved, in the Device's
+    /// format) without blocking; returns how many frames. Samples past the last
+    /// whole frame that fits are left as they were.
     pub fn read(&mut self, out: &mut [f32]) -> Result<usize, Error> {
         Ok(self.inner.ring.read(out))
     }
@@ -370,20 +407,21 @@ impl Reader {
         let first_at = (frames > 0)
             .then(|| self.inner.clock())
             .flatten()
-            .map(|clock| time_of(first, clock));
+            .map(|clock| time_of(first, clock, self.inner.format.rate));
         Ok(Timed { frames, first_at })
     }
 
-    /// Takes up to `out.len()` samples, blocking until there are some: returns
-    /// as soon as the system has played audio to this Speaker (it wakes once per
-    /// pass the system makes, not by polling), or 0 once `deadline` passes.
+    /// As [`Reader::read`], blocking until there are some frames: returns as soon
+    /// as the system has played audio to this Speaker (it wakes once per pass the
+    /// system makes, not by polling), or 0 once `deadline` passes (or at once if
+    /// `out` can't hold a whole frame).
     pub fn read_paced(&mut self, out: &mut [f32], deadline: Instant) -> Result<usize, Error> {
         // As for `write_paced`: once rung, the thread runs at once, even while the
         // audio engine's own MMCSS threads are busy with the same packet.
         let _pro_audio = ProAudio::register();
         loop {
             let read = self.inner.ring.read(out);
-            if read > 0 || out.is_empty() {
+            if read > 0 || out.len() < self.inner.ring.channels() {
                 return Ok(read);
             }
             let now = Instant::now();
@@ -429,24 +467,33 @@ impl fmt::Debug for Writer {
 }
 
 impl Writer {
-    /// Appends 48 kHz mono samples without blocking; returns how many were accepted.
+    /// Appends `samples` (interleaved, in the Device's format) without blocking;
+    /// returns how many frames were accepted. What doesn't fit is dropped and
+    /// counted as Overflow. `PartialFrame`, and nothing written, if `samples`
+    /// ends partway through a frame.
     pub fn write(&mut self, samples: &[f32]) -> Result<usize, Error> {
+        self.inner.whole_frames(samples)?;
         Ok(self.inner.ring.write(samples))
     }
 
     /// Writes `samples` at the pace the system takes them, blocking: it keeps the
     /// Ring filled only a little ahead of the system (the Backend's lead, about
     /// 20 ms on Windows), so nothing is dropped and an interruption has little
-    /// left to cut (ADR 0020). Returns how many samples went in: all of them,
-    /// unless `deadline` passed first.
+    /// left to cut (ADR 0020). Returns how many frames went in: all of them,
+    /// unless `deadline` passed first. `PartialFrame` as for `write`.
     pub fn write_paced(&mut self, samples: &[f32], deadline: Instant) -> Result<usize, Error> {
+        let frames = self.inner.whole_frames(samples)?;
+        let channels = self.inner.ring.channels();
         let _pro_audio = ProAudio::register();
         let mut written = 0;
-        while written < samples.len() {
+        while written < frames {
             let room = self.inner.room_below_lead();
             if room > 0 {
-                let end = samples.len().min(written + room);
-                written += self.inner.ring.write(&samples[written..end]);
+                let end = frames.min(written + room);
+                written += self
+                    .inner
+                    .ring
+                    .write(&samples[written * channels..end * channels]);
                 continue;
             }
             let now = Instant::now();
@@ -479,7 +526,11 @@ impl Writer {
     /// system's first pass.
     pub fn next_play_time(&self) -> Option<Instant> {
         let clock = self.inner.clock()?;
-        Some(time_of(self.inner.ring.written(), clock))
+        Some(time_of(
+            self.inner.ring.written(),
+            clock,
+            self.inner.format.rate,
+        ))
     }
 
     /// Frames the system has taken from this Microphone since it was created:
@@ -489,10 +540,10 @@ impl Writer {
         self.inner.ring.taken()
     }
 
-    /// `played_frames` in whole milliseconds at 48 kHz, as OpenAI Realtime's
-    /// `audio_end_ms` takes it.
+    /// `played_frames` in whole milliseconds at the Device's rate, as OpenAI
+    /// Realtime's `audio_end_ms` takes it.
     pub fn played_ms(&self) -> u64 {
-        self.played_frames() * 1_000 / u64::from(V0_FORMAT.0)
+        self.played_frames() * 1_000 / u64::from(self.inner.format.rate)
     }
 }
 
