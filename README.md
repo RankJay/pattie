@@ -174,6 +174,11 @@ PipeWire `node.name` on Linux. Another format is another endpoint, because Windo
 keeps a saved format per endpoint (ADR 0015).
 - **Any interactive user's app may create a Device, without elevation.** Sandboxed
 Store apps may not. Abuse protections are post-v0.
+- **One interactive user at a time.** A Device is an ordinary system-wide endpoint,
+so on a machine shared by several signed-in users (fast user switching, Remote
+Desktop) every session lists it, and another user who picks one user's Speaker
+sends that app their audio. v0 is supported on single-user machines (ADR 0011
+amendment).
 - **Installing is a separate admin step,** done once: `viaduct-cli install`. The SDK
 never installs anything and returns `Error::DriverNotInstalled` if the driver isn't
 there.

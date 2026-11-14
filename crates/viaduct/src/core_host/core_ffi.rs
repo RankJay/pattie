@@ -97,8 +97,9 @@ impl Core {
         (status, reply_len)
     }
 
-    /// The Owner closed: removes every Device it owned and returns their IDs.
-    pub(crate) fn owner_closed(&mut self, owner: &Owner) -> Vec<u32> {
+    /// The Owner closed: removes every Device it owned and returns their IDs,
+    /// and refuses its later commands.
+    pub(crate) fn owner_closed(&mut self, owner: &mut Owner) -> Vec<u32> {
         let mut removed = [0u32; MAX_DEVICES];
         // SAFETY: core and owner are live; `removed` holds VD_MAX_DEVICES IDs, the
         // most the core reports.

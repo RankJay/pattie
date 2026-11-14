@@ -90,9 +90,21 @@ VOID VdUnpinRing(PMDL Mdl)
     IoFreeMdl(Mdl);
 }
 
+/*
+ * One open is one Owner. Only the device itself may be opened: `\\.\Viaduct`,
+ * never `\\.\Viaduct\anything`. KMDF sets FILE_DEVICE_SECURE_OPEN, so the ACL
+ * applies to such opens anyway; refusing them keeps that from resting on a
+ * framework default (security review 2026-11-14, finding 5).
+ */
 static VOID VdEvtFileCreate(WDFDEVICE Device, WDFREQUEST Request, WDFFILEOBJECT FileObject)
 {
+    PUNICODE_STRING name = WdfFileObjectGetFileName(FileObject);
+
     UNREFERENCED_PARAMETER(Device);
+    if (name != NULL && name->Length != 0) {
+        WdfRequestComplete(Request, STATUS_OBJECT_NAME_NOT_FOUND);
+        return;
+    }
     vd_owner_init(&VdFileContext(FileObject)->Owner);
     WdfRequestComplete(Request, STATUS_SUCCESS);
 }
@@ -163,6 +175,7 @@ static PKEVENT VdTryReferenceWake(WDFREQUEST Request)
 
 static VOID VdEvtIoInCallerContext(WDFDEVICE Device, WDFREQUEST Request)
 {
+    VD_DRIVER_CONTEXT *ctx = VdDriverContext(WdfGetDriver());
     WDF_REQUEST_PARAMETERS params;
     NTSTATUS status;
 
@@ -170,6 +183,13 @@ static VOID VdEvtIoInCallerContext(WDFDEVICE Device, WDFREQUEST Request)
     WdfRequestGetParameters(Request, &params);
     if (params.Type == WdfRequestTypeDeviceControl &&
         params.Parameters.DeviceIoControl.IoControlCode == VD_IOCTL(VD_CMD_CREATE_DEVICE)) {
+        /* Bounded: no app may hold more than a few pinned Rings in flight. */
+        if ((ULONG)InterlockedIncrement(&ctx->PinnedRequests) > VD_MAX_PINNED_REQUESTS) {
+            InterlockedDecrement(&ctx->PinnedRequests);
+            WdfRequestComplete(Request, STATUS_DEVICE_BUSY);
+            return;
+        }
+        VdRequestContext(Request)->CountedPinned = TRUE; /* released in request cleanup */
         VdRequestContext(Request)->Mdl = VdTryPinRing(Request);
         VdRequestContext(Request)->WakeEvent = VdTryReferenceWake(Request);
     }
@@ -191,6 +211,10 @@ static VOID VdEvtRequestCleanup(WDFOBJECT Object)
     if (requestCtx->WakeEvent != NULL) {
         ObDereferenceObject(requestCtx->WakeEvent);
         requestCtx->WakeEvent = NULL;
+    }
+    if (requestCtx->CountedPinned) {
+        InterlockedDecrement(&VdDriverContext(WdfGetDriver())->PinnedRequests);
+        requestCtx->CountedPinned = FALSE;
     }
 }
 

@@ -40,7 +40,7 @@ mod sdk {
             *mut usize,
         ) -> c::vd_status;
         type OwnerClosed =
-            unsafe extern "C" fn(*mut c::vd_core, *const c::vd_owner, *mut u32) -> usize;
+            unsafe extern "C" fn(*mut c::vd_core, *mut c::vd_owner, *mut u32) -> usize;
         type DeviceRing = unsafe extern "C" fn(*mut c::vd_core, u32) -> *mut c::vd_ring;
         type Channels = unsafe extern "C" fn(*const c::vd_ring) -> u32;
         type Read = unsafe extern "C" fn(*mut c::vd_ring, *mut f32, u32);

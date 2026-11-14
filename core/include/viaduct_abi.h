@@ -9,6 +9,7 @@
 #ifndef VIADUCT_ABI_H
 #define VIADUCT_ABI_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #define VIADUCT_ABI_MAJOR 1u
@@ -119,7 +120,9 @@ typedef struct vd_remove_device_request {
 #define VD_RING_MIN_FRAMES 256u
 #define VD_RING_MAX_FRAMES 65536u
 
-/* Channels a frame may hold (interleaved, one 32-bit float each): mono to 7.1. */
+/* Channels a frame may hold (interleaved, one 32-bit float each): mono to 7.1.
+ * This version's limit, which a later minor may raise (ADR 0017): `channels` is
+ * a u16, and a channel layout fits in `config_pad`. */
 #define VD_RING_MAX_CHANNELS 8u
 
 /* Largest Ring the driver will pin: the header plus VD_RING_MAX_FRAMES frames of
@@ -162,5 +165,55 @@ typedef struct vd_ring_header {
     uint16_t channels;        /* 1 to VD_RING_MAX_CHANNELS; 0 means mono */
     uint8_t config_pad[54];   /* reserved; zero */
 } vd_ring_header;
+
+/*
+ * ABI 1.0 is frozen (ADR 0017, amendment 2026-11-14): every size and offset
+ * below is part of it, for 32- and 64-bit callers alike. Any compiler that
+ * includes this header refuses to build if one changes. A later minor only adds
+ * (ADR 0003): new commands, kinds and statuses, the spare bytes, or new request
+ * shapes for its own connections.
+ */
+#define VD_ABI_SIZE(type, bytes) _Static_assert(sizeof(type) == (bytes), #type " is frozen")
+#define VD_ABI_AT(type, field, at) \
+    _Static_assert(offsetof(type, field) == (at), #type "." #field " is frozen")
+
+VD_ABI_SIZE(vd_reply_envelope, 4);
+VD_ABI_SIZE(vd_hello_request, 4);
+VD_ABI_AT(vd_hello_request, minor, 2);
+VD_ABI_SIZE(vd_hello_reply, 4);
+VD_ABI_AT(vd_hello_reply, minor, 2);
+
+VD_ABI_SIZE(vd_create_device_request, 160);
+VD_ABI_AT(vd_create_device_request, kind, 0);
+VD_ABI_AT(vd_create_device_request, name_len, 4);
+VD_ABI_AT(vd_create_device_request, name, 8);
+VD_ABI_AT(vd_create_device_request, reserved, 134);
+VD_ABI_AT(vd_create_device_request, ring_address, 136);
+VD_ABI_AT(vd_create_device_request, ring_bytes, 144);
+VD_ABI_AT(vd_create_device_request, wake_event, 152);
+VD_ABI_SIZE(vd_create_device_reply, 4);
+VD_ABI_SIZE(vd_remove_device_request, 4);
+
+VD_ABI_SIZE(vd_ring_clock, 24);
+VD_ABI_AT(vd_ring_clock, frames, 8);
+VD_ABI_AT(vd_ring_clock, ns, 16);
+
+/* Three 64-byte lines: the writer's, the reader's, the settings. */
+VD_ABI_SIZE(vd_ring_header, 192);
+VD_ABI_AT(vd_ring_header, write_frames, 0);
+VD_ABI_AT(vd_ring_header, overflow_frames, 8);
+VD_ABI_AT(vd_ring_header, writer_clock, 16);
+VD_ABI_AT(vd_ring_header, writer_pad, 40);
+VD_ABI_AT(vd_ring_header, read_frames, 64);
+VD_ABI_AT(vd_ring_header, gap_frames, 72);
+VD_ABI_AT(vd_ring_header, reader_clock, 80);
+VD_ABI_AT(vd_ring_header, reader_pad, 104);
+VD_ABI_AT(vd_ring_header, capacity_frames, 128);
+VD_ABI_AT(vd_ring_header, sample_rate, 132);
+VD_ABI_AT(vd_ring_header, channels, 136);
+VD_ABI_AT(vd_ring_header, config_pad, 138);
+
+#undef VD_ABI_SIZE
+#undef VD_ABI_AT
 
 #endif /* VIADUCT_ABI_H */

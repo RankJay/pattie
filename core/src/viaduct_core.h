@@ -35,6 +35,7 @@ typedef struct vd_ring {
 /* Per-Owner state. One per open handle, stored in the shell's file context. */
 typedef struct vd_owner {
     bool greeted;
+    bool closed;    /* its handle closed: every later command is refused */
     uint16_t minor; /* the minor this connection speaks, once greeted (ADR 0003) */
 } vd_owner;
 
@@ -84,9 +85,12 @@ vd_status vd_core_command(vd_core *core, vd_owner *owner, uint32_t command,
 /*
  * Seam A, continued: the Owner's handle closed (crash included). Removes every
  * Device it owned, writes their IDs to `removed` and returns how many, so the
- * shell can tear the Devices down and unpin their Rings.
+ * shell can tear the Devices down and unpin their Rings. The Owner is marked
+ * closed: a command of its still queued or in flight when the handle closed is
+ * refused (VD_ERR_BAD_REQUEST), so no Device outlives its Owner (security review
+ * 2026-11-14). Only vd_owner_init opens it again.
  */
-size_t vd_core_owner_closed(vd_core *core, const vd_owner *owner,
+size_t vd_core_owner_closed(vd_core *core, vd_owner *owner,
                             uint32_t removed[VD_MAX_DEVICES]);
 
 /*

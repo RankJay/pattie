@@ -184,7 +184,7 @@ impl Driver {
         let count = unsafe {
             vd_core_owner_closed(
                 &mut *self.core,
-                &*self.owners[owner.0],
+                &mut *self.owners[owner.0],
                 removed.as_mut_ptr(),
             )
         };
@@ -216,6 +216,12 @@ impl Driver {
 }
 
 impl Driver {
+    /// Sets the ID the core gives the next Device, as if that many had been
+    /// created before: for the wrap-around at 2^32.
+    pub fn set_next_device_id(&mut self, id: u32) {
+        self.core.next_device_id = id;
+    }
+
     /// The core's live Devices, sorted by ID, with each Owner as its `OwnerRef`.
     pub fn live_devices(&self) -> Vec<LiveDevice> {
         let mut live: Vec<LiveDevice> = self

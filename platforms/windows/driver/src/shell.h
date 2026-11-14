@@ -49,6 +49,13 @@
 #include "trace.h"
 
 #define VD_POOL_TAG 'dvaV'
+/*
+ * Create Device requests that may hold a pinned Ring at once, between the
+ * caller's context and their completion: twice the Device limit. More are
+ * refused at once (STATUS_DEVICE_BUSY), so no app can lock memory without bound
+ * by sending many at a time (security review 2026-11-14, finding 2).
+ */
+#define VD_MAX_PINNED_REQUESTS (2u * VD_MAX_DEVICES)
 /* Sample sizes of the two encodings Windows may stream in (ADR 0005, ADR 0023). */
 #define VD_FLOAT_BYTES_PER_SAMPLE 4u  /* 32-bit float: the Ring's own format */
 #define VD_PCM16_BYTES_PER_SAMPLE 2u  /* 16-bit PCM: converted in the copy */
@@ -102,6 +109,7 @@ typedef struct _VD_DRIVER_CONTEXT {
      * released lock-free by the device's cleanup. 0: free. ADR 0015.
      */
     volatile LONG64 ChildIds[2 * VD_MAX_DEVICES];
+    volatile LONG PinnedRequests;   /* Create requests counted against VD_MAX_PINNED_REQUESTS */
 } VD_DRIVER_CONTEXT;
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(VD_DRIVER_CONTEXT, VdDriverContext)
 
@@ -115,6 +123,7 @@ WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(VD_FILE_CONTEXT, VdFileContext)
 typedef struct _VD_REQUEST_CONTEXT {
     PMDL Mdl;
     PKEVENT WakeEvent;              /* referenced in the caller's context too */
+    BOOLEAN CountedPinned;          /* holds one of VD_MAX_PINNED_REQUESTS until cleanup */
 } VD_REQUEST_CONTEXT;
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(VD_REQUEST_CONTEXT, VdRequestContext)
 
@@ -142,8 +151,12 @@ vd_status VdDeviceRemove(_In_ VD_DRIVER_CONTEXT *Ctx, _In_ vd_owner *Owner,
                          _In_reads_bytes_(InputLength) const UCHAR *Input, _In_ size_t InputLength,
                          _Out_writes_bytes_to_(ReplyCap, *ReplyLength) UCHAR *Reply, _In_ size_t ReplyCap,
                          _Out_ size_t *ReplyLength);
-/* An Owner's handle closed, crash included: removes and tears down all its Devices. */
-VOID VdOwnerDevicesRemove(_In_ VD_DRIVER_CONTEXT *Ctx, _In_ const vd_owner *Owner);
+/*
+ * An Owner's handle closed, crash included: removes and tears down all its
+ * Devices, and the core refuses the Owner's later commands, so a Create still
+ * queued or in flight can't make a Device that outlives it.
+ */
+VOID VdOwnerDevicesRemove(_In_ VD_DRIVER_CONTEXT *Ctx, _Inout_ vd_owner *Owner);
 
 /* circuit.c */
 PCUNICODE_STRING VdCircuitName(_In_ UINT32 Kind);

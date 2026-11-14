@@ -336,7 +336,7 @@ vd_status VdDeviceRemove(VD_DRIVER_CONTEXT *Ctx, vd_owner *Owner, const UCHAR *I
 }
 
 _Use_decl_annotations_
-VOID VdOwnerDevicesRemove(VD_DRIVER_CONTEXT *Ctx, const vd_owner *Owner)
+VOID VdOwnerDevicesRemove(VD_DRIVER_CONTEXT *Ctx, vd_owner *Owner)
 {
     uint32_t removed[VD_MAX_DEVICES];
     size_t count = vd_core_owner_closed(&Ctx->Core, Owner, removed);

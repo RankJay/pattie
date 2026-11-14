@@ -605,3 +605,62 @@ fn the_core_hashes_the_format_its_ring_attached_with() {
         [Some(0x92A1_23DF_D87A_F89B), Some(0x2939_5CD2_B4F8_7993)]
     );
 }
+
+#[test]
+fn a_create_that_arrives_after_its_owner_closed_creates_nothing() {
+    // The driver's cleanup runs when the last handle closes, while a Create
+    // can still be queued or waiting on the driver lock (security review
+    // 2026-11-14, finding 1). It must not make a Device nobody will remove.
+    let (mut driver, owner) = greeted_driver();
+    driver.close(owner);
+
+    let late = driver.create_device(owner, VD_KIND_MICROPHONE, "Agent Mic");
+
+    assert_eq!(late, Err(VD_ERR_BAD_REQUEST));
+    assert_eq!(driver.live_devices(), []);
+}
+
+#[test]
+fn a_closed_owner_can_neither_greet_again_nor_remove() {
+    let (mut driver, owner) = greeted_driver();
+    let other = driver.connect();
+    driver.greet(other);
+    let kept = driver
+        .create_device(other, VD_KIND_MICROPHONE, "Agent Mic")
+        .unwrap();
+    driver.close(owner);
+
+    let hello = driver.hello(owner, VIADUCT_ABI_MAJOR as u16, VIADUCT_ABI_MINOR as u16);
+    let remove = driver.remove_device(owner, kept);
+
+    assert_eq!((hello, remove), (VD_ERR_BAD_REQUEST, VD_ERR_BAD_REQUEST));
+    assert_eq!(
+        driver.live_devices().len(),
+        1,
+        "the other Owner's Device stays"
+    );
+}
+
+#[test]
+fn device_ids_wrap_past_zero_and_skip_ids_still_live() {
+    // 0 means "free" to the core and the shell, and a live ID must name one
+    // Device only (ABI freeze review 2026-11-14, finding C).
+    let (mut driver, owner) = greeted_driver();
+    let first = driver
+        .create_device(owner, VD_KIND_MICROPHONE, "A")
+        .unwrap();
+    driver.set_next_device_id(u32::MAX);
+
+    let last = driver
+        .create_device(owner, VD_KIND_MICROPHONE, "B")
+        .unwrap();
+    let wrapped = driver
+        .create_device(owner, VD_KIND_MICROPHONE, "C")
+        .unwrap();
+
+    assert_eq!(
+        (first, last, wrapped),
+        (1, u32::MAX, 2),
+        "0 and the live 1 skipped"
+    );
+}

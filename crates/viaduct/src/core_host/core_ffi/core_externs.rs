@@ -16,7 +16,7 @@ unsafe extern "C" {
         output_cap: usize,
         output_len: *mut usize,
     ) -> u32;
-    fn vd_core_owner_closed(core: *mut VdCore, owner: *const VdOwner, removed: *mut u32) -> usize;
+    fn vd_core_owner_closed(core: *mut VdCore, owner: *mut VdOwner, removed: *mut u32) -> usize;
     fn vd_core_device_ring(core: *mut VdCore, device_id: u32) -> *mut VdRing;
     fn vd_core_device_info(core: *const VdCore, device_id: u32, info: *mut VdDeviceInfo) -> bool;
     fn vd_ring_channels(ring: *const VdRing) -> u32;

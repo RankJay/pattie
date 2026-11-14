@@ -21,6 +21,7 @@ void vd_core_init(vd_core *core)
 void vd_owner_init(vd_owner *owner)
 {
     owner->greeted = false;
+    owner->closed = false;
     owner->minor = 0;
 }
 
@@ -54,6 +55,26 @@ static bool same_name(const vd_device *device, const vd_create_device_request *r
         }
     }
     return true;
+}
+
+/*
+ * The next Device ID: counting up from 1, and past 2^32 skipping 0 ("free" to
+ * the core and the shell) and any ID still live. At most VD_MAX_DEVICES are
+ * live, so this takes at most VD_MAX_DEVICES + 2 steps.
+ */
+static uint32_t next_device_id(vd_core *core)
+{
+    for (;;) {
+        uint32_t id = core->next_device_id++;
+        bool live = false;
+
+        for (uint32_t i = 0; i < VD_MAX_DEVICES; i++) {
+            live = live || core->devices[i].id == id;
+        }
+        if (id != 0 && !live) {
+            return id;
+        }
+    }
 }
 
 static vd_status create_device(vd_core *core, const vd_owner *owner,
@@ -95,7 +116,7 @@ static vd_status create_device(vd_core *core, const vd_owner *owner,
         return VD_ERR_BUFFER_TOO_SMALL;
     }
 
-    free_slot->id = core->next_device_id++;
+    free_slot->id = next_device_id(core);
     free_slot->kind = request->kind;
     free_slot->owner = owner;
     free_slot->name_len = request->name_len;
@@ -131,6 +152,10 @@ vd_status vd_core_command(vd_core *core, vd_owner *owner, uint32_t command,
 {
     *output_len = 0;
 
+    /* A late command from a closed Owner, still queued when its handle closed. */
+    if (owner->closed) {
+        return VD_ERR_BAD_REQUEST;
+    }
     if (command == VD_CMD_HELLO) {
         vd_hello_request hello;
         vd_hello_reply reply;
@@ -179,11 +204,12 @@ vd_status vd_core_command(vd_core *core, vd_owner *owner, uint32_t command,
     return VD_ERR_BAD_REQUEST;
 }
 
-size_t vd_core_owner_closed(vd_core *core, const vd_owner *owner,
+size_t vd_core_owner_closed(vd_core *core, vd_owner *owner,
                             uint32_t removed[VD_MAX_DEVICES])
 {
     size_t count = 0;
 
+    owner->closed = true;
     for (uint32_t i = 0; i < VD_MAX_DEVICES; i++) {
         vd_device *device = &core->devices[i];
         if (device->id != 0 && device->owner == owner) {

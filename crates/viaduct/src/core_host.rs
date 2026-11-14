@@ -230,7 +230,7 @@ impl Drop for HostConnection {
         // Nodes first: once they're gone nothing streams through the Rings.
         self.live.clear();
         let mut core = self.core.lock().unwrap_or_else(PoisonError::into_inner);
-        core.owner_closed(&self.owner);
+        core.owner_closed(&mut self.owner);
     }
 }
 
