@@ -103,6 +103,16 @@ pub fn spread(values: &mut [f64]) -> String {
     )
 }
 
+/// What a run's median added latency by delivery is held to (the brief's quality
+/// bar, restated 2026-11-14): the gate per direction, and the original goal.
+pub fn target_note(direction: &str) -> &'static str {
+    match direction {
+        "mic" => "gate: under 45 ms and below VB-CABLE; goal: under 10 ms",
+        "speaker" => "gate: under 32 ms and below VB-CABLE; goal: under 10 ms",
+        _ => "the baseline Viaduct's gate must beat; goal: under 10 ms",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -200,5 +210,19 @@ mod tests {
     fn frames_convert_to_hns_at_the_stream_rate() {
         assert_eq!(frames_to_hns(480, 48_000), 10 * MS);
         assert_eq!(frames_to_hns(441, 44_100), 10 * MS);
+    }
+
+    #[test]
+    fn each_direction_names_its_gate_and_the_10_ms_goal() {
+        let notes = ["mic", "speaker", "cable"].map(target_note);
+
+        assert_eq!(
+            notes,
+            [
+                "gate: under 45 ms and below VB-CABLE; goal: under 10 ms",
+                "gate: under 32 ms and below VB-CABLE; goal: under 10 ms",
+                "the baseline Viaduct's gate must beat; goal: under 10 ms",
+            ]
+        );
     }
 }

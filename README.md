@@ -22,8 +22,9 @@ a virtual mic (soundboards, routers, AI voice agents) tell their users to instal
 third-party cable. Viaduct is the missing piece: a kernel driver plus a small Rust SDK
 that talks to it over shared memory.
 
-> **Status: v0, Windows only, not released.** The driver, SDK and CLI work end to end
-> in a test VM, including a real Zoom call. What's left before the v0 gate is an
+> **Status: v0 on Windows, plus Linux; not released.** The driver, SDK and CLI work end
+> to end in a test VM, including a real Zoom call; the Linux backend and the Python
+> binding work too. What's left before the v0 gate is an
 > attestation-signed driver installed on a clean Windows 11 with Secure Boot on.
 > Nothing is published to crates.io yet (the name `viaduct` is taken there; it gets
 > renamed before release).
@@ -54,7 +55,7 @@ that talks to it over shared memory.
 | A Rust SDK: create a Device, write to its mic or read from its speaker | A meeting bot or recorder |
 | A shared-memory transport between your app and the driver | A GUI app |
 
-The same API is meant to work on Linux and macOS too. Windows is done to the v0 gate; Linux is being built (ADR 0018: PipeWire, inside the app's own process, no driver to install; Microphones and Speakers already work on a real PipeWire); macOS comes later.
+The same API is meant to work on Linux and macOS too. Windows is done to the v0 gate; Linux works (ADR 0018: PipeWire, inside the app's own process, no driver to install; Microphones and Speakers, every Device format, tested on a real PipeWire); macOS comes later.
 
 ## Where it stands
 
@@ -70,7 +71,7 @@ Measured in a VMware Windows 11 guest (test-signed driver, Driver Verifier on):
 | Every CPU core at 100% | ✅ no dropouts |
 | 8 Devices from 8 apps at once (the v0 maximum) | ✅ |
 | CPU cost per stream | under 0.2% of one core |
-| Added latency | ⚠️ ~28 ms (speaker), ~40 ms (mic); the 10 ms target is post-v0 work |
+| Added latency | ✅ ~28 ms (speaker), ~40 ms (mic): a third to a quarter of VB-CABLE's ~109 ms on the same VM. The original goal, under 10 ms, is still ahead (it needs smaller engine periods than Windows' default) |
 | Attestation-signed install, Secure Boot on | ⏳ the v0 gate, next |
 
 ## How it works
@@ -665,11 +666,15 @@ the project, `platforms/windows/driver/README.md` for the driver.
 
 ## Not in v0
 
-Deliberately left out, to reach the gate first: other sample rates and channel
-counts, loopback devices, renaming a live Device, volume and mute, more than 8
-Devices, latency under 10 ms, drift compensation and frame timestamps, installer
-self-heal and packaging, the macOS backend, bindings for C, Node, Python and
-Swift.
+Deliberately left out, to reach the gate first: loopback devices, renaming a live
+Device, volume and mute, more than 8 Devices, latency under 10 ms (the original
+goal, still ahead), 24-bit and rates beyond 44.1 / 48 / 96 kHz, more than 8
+channels, installer self-heal and packaging, the macOS backend, bindings for C,
+Node and Swift.
+
+Built since the v0 scope was set: 44.1, 48 and 96 kHz with 1 to 8 channels, drift
+compensation and frame timestamps, barge-in playout, the Linux backend, and the
+Python binding.
 
 ## License
 

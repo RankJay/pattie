@@ -5,7 +5,7 @@
 
 use viaduct::Stats;
 
-pub const USAGE: &str = "usage:\n  viaduct-cli mic <name> [--tone <hz>] [--rate <hz>] [--channels <n>]\n  viaduct-cli speaker <name> [--rate <hz>] [--channels <n>]\n  viaduct-cli measure mic|speaker <name> [--seconds <n>] [--rate <hz>] [--channels <n>]\n  viaduct-cli measure drift <name> [--seconds <n>] [--ppm <p>] [--uncorrected]\n  viaduct-cli install <package folder or viaduct.inf>\n  viaduct-cli uninstall";
+pub const USAGE: &str = "usage:\n  viaduct-cli mic <name> [--tone <hz>] [--rate <hz>] [--channels <n>]\n  viaduct-cli speaker <name> [--rate <hz>] [--channels <n>]\n  viaduct-cli measure mic|speaker <name> [--seconds <n>] [--rate <hz>] [--channels <n>]\n  viaduct-cli measure drift <name> [--seconds <n>] [--ppm <p>] [--uncorrected]\n  viaduct-cli measure cable <render endpoint> <capture endpoint> [--seconds <n>]\n  viaduct-cli install <package folder or viaduct.inf>\n  viaduct-cli uninstall";
 
 /// The rate and channels a Device runs at (ADR 0023): 48 kHz mono by default.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -39,6 +39,13 @@ pub enum Command<'a> {
         name: &'a str,
         seconds: u64,
         format: DeviceFormat,
+    },
+    /// Another virtual device as a baseline (VB-CABLE, say): clicks rendered into
+    /// one existing endpoint, found in another, each named by part of its name.
+    Cable {
+        render: &'a str,
+        capture: &'a str,
+        seconds: u64,
     },
     /// A live source `ppm` off the device, through a `LiveWriter`, logged.
     Drift {
@@ -81,6 +88,12 @@ pub fn parse<'a>(args: &[&'a str]) -> Result<Command<'a>, String> {
             format: options_of(options, &[])?.format,
         }),
         ["measure", "drift", name, ref options @ ..] => drift(name, options),
+        ["measure", "cable", render, capture, ref options @ ..] => Ok(Command::Cable {
+            render,
+            capture,
+            seconds: measure_seconds(options)?,
+        }),
+        ["measure", "cable", ..] => Err(USAGE.to_string()),
         ["measure", direction, name, ref options @ ..] => {
             if direction != "mic" && direction != "speaker" {
                 return Err("measure needs `mic` or `speaker`".to_string());
@@ -190,6 +203,37 @@ fn drift<'a>(name: &'a str, options: &[&str]) -> Result<Command<'a>, String> {
         ppm,
         correct,
     })
+}
+
+/// Which of the active endpoints' `names` the user meant by `wanted`: the one
+/// whose name contains it, ignoring case. None or several is an error that lists
+/// the names, so the user can pick.
+#[cfg_attr(
+    all(not(windows), not(test)),
+    expect(dead_code, reason = "measure is Windows-only (WASAPI)")
+)]
+pub fn pick_endpoint(names: &[String], wanted: &str) -> Result<usize, String> {
+    let needle = wanted.to_lowercase();
+    let matches: Vec<usize> = (0..names.len())
+        .filter(|&i| names[i].to_lowercase().contains(&needle))
+        .collect();
+    let quoted = |indexes: &mut dyn Iterator<Item = usize>| {
+        indexes
+            .map(|i| format!("\"{}\"", names[i]))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    match matches[..] {
+        [one] => Ok(one),
+        [] => Err(format!(
+            "no active endpoint's name contains \"{wanted}\"; there are: {}",
+            quoted(&mut (0..names.len()))
+        )),
+        _ => Err(format!(
+            "\"{wanted}\" is in more than one endpoint's name: {}; be more specific",
+            quoted(&mut matches.iter().copied())
+        )),
+    }
 }
 
 /// One line of Device health: missing audio so far, and what's waiting now, for
@@ -443,5 +487,65 @@ mod tests {
         assert!(parse(&["mic", "M", "--rate", "96000", "--tone", "30000"]).is_ok());
         let error = parse(&["mic", "M", "--tone", "22050", "--rate", "44100"]).unwrap_err();
         assert_eq!(error, "--tone needs a frequency between 0 and 22050 Hz");
+    }
+
+    #[test]
+    fn measure_cable_takes_a_render_and_a_capture_endpoint() {
+        assert_eq!(
+            parse(&["measure", "cable", "CABLE Input", "CABLE Output"]),
+            Ok(Command::Cable {
+                render: "CABLE Input",
+                capture: "CABLE Output",
+                seconds: 60,
+            })
+        );
+        assert_eq!(
+            parse(&["measure", "cable", "In", "Out", "--seconds", "5"]),
+            Ok(Command::Cable {
+                render: "In",
+                capture: "Out",
+                seconds: 5,
+            })
+        );
+    }
+
+    #[test]
+    fn measure_cable_needs_both_endpoints_and_takes_no_format() {
+        assert_eq!(parse(&["measure", "cable", "In"]), Err(USAGE.to_string()));
+        assert_eq!(
+            parse(&["measure", "cable", "In", "Out", "--rate", "44100"]),
+            Err(USAGE.to_string())
+        );
+    }
+
+    #[test]
+    fn an_endpoint_is_picked_by_part_of_its_name_ignoring_case() {
+        let names = [
+            "Speakers (Realtek Audio)",
+            "CABLE Input (VB-Audio Virtual Cable)",
+        ]
+        .map(String::from);
+
+        assert_eq!(pick_endpoint(&names, "cable input"), Ok(1));
+    }
+
+    #[test]
+    fn no_match_or_several_matches_name_what_there_is() {
+        let names = ["CABLE Input (VB-Audio Virtual Cable)", "CABLE-A Input"].map(String::from);
+
+        assert_eq!(
+            pick_endpoint(&names, "Voicemeeter"),
+            Err(
+                "no active endpoint's name contains \"Voicemeeter\"; there are: \
+                 \"CABLE Input (VB-Audio Virtual Cable)\", \"CABLE-A Input\""
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            pick_endpoint(&names, "input"),
+            Err("\"input\" is in more than one endpoint's name: \
+                 \"CABLE Input (VB-Audio Virtual Cable)\", \"CABLE-A Input\"; be more specific"
+                .to_string())
+        );
     }
 }

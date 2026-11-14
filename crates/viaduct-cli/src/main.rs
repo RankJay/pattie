@@ -54,6 +54,11 @@ fn main() -> ExitCode {
             ppm,
             correct,
         } => run_drift(name, seconds, ppm, correct),
+        Command::Cable {
+            render,
+            capture,
+            seconds,
+        } => run_cable(render, capture, seconds),
         Command::Install { package } => install::install(package),
         Command::Uninstall => install::uninstall(),
     });
@@ -78,6 +83,16 @@ fn run_measure(
 
 #[cfg(not(windows))]
 fn run_measure(_: &str, _: &str, _: u64, _: DeviceFormat) -> Result<(), String> {
+    Err("measure uses WASAPI and runs on Windows only".to_string())
+}
+
+#[cfg(windows)]
+fn run_cable(render: &str, capture: &str, seconds: u64) -> Result<(), String> {
+    measure::cable(render, capture, seconds)
+}
+
+#[cfg(not(windows))]
+fn run_cable(_: &str, _: &str, _: u64) -> Result<(), String> {
     Err("measure uses WASAPI and runs on Windows only".to_string())
 }
 
