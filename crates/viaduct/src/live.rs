@@ -380,6 +380,42 @@ mod tests {
     }
 
     #[test]
+    fn a_queue_of_exactly_one_second_keeps_it_all_and_one_frame_more_drops() {
+        let (_backend, _mic, live) = setup();
+
+        live.push(&[0.5; 48_000]);
+        let full = live.stats();
+        live.push(&[0.5]);
+        let past = live.stats();
+
+        assert_eq!((full.queued_frames, full.dropped_frames), (48_000, 0));
+        assert_eq!(past.queued_frames, TARGET_FRAMES as u64);
+        assert_eq!(past.dropped_frames, 48_001 - TARGET_FRAMES as u64);
+    }
+
+    #[test]
+    fn the_starved_count_is_the_silence_the_app_hears() {
+        let (backend, mic, live, lead) = setup_with_lead();
+        live.push(&[0.5; TARGET_FRAMES]);
+        live.shared.pump();
+        // The system pulls 10 ms at a time and nothing more arrives, until the
+        // queue runs short in the middle of a pull.
+        while live.stats().starved_frames == 0 {
+            backend.driver_read(mic.id(), 480).unwrap();
+            live.shared.pump();
+        }
+
+        let heard = backend.driver_read(mic.id(), lead).unwrap();
+        let silent_tail = heard.iter().rev().take_while(|&&s| s == 0.0).count();
+
+        assert!(
+            heard[0] != 0.0,
+            "the Ring starts with the last of the audio"
+        );
+        assert_eq!(live.stats().starved_frames, silent_tail as u64);
+    }
+
+    #[test]
     fn a_source_that_falls_behind_plays_counted_silence_then_fills_up_again() {
         let (backend, mic, live) = setup();
         live.push(&[0.5; TARGET_FRAMES]);

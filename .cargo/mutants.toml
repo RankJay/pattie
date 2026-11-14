@@ -12,9 +12,22 @@ exclude_globs = [
     # Linux (ci.yml), the PipeWire parts against a real PipeWire.
     "crates/viaduct/src/linux.rs",
     "crates/viaduct/src/linux/**",
+    "crates/viaduct/src/core_host/claim.rs",
     "testing/**",
     "core/tests/**",
+    # The Python binding: its tests are Python (pytest), which cargo-mutants
+    # can't run, so all ~480 of its mutants would read as missed. Mutation-test
+    # it with a Python tool if it's wanted.
+    "bindings/python/src/**",
 ]
+
+# Speed (2026-11-14: 1,378 mutants at 94 s of tests each was ~14 hours, far past
+# nightly.yml's 90 minutes). The `mutants` profile (Cargo.toml) is the test
+# profile at opt-level 1: same checks, the suite in ~32 s instead of ~84. A
+# mutant that hangs (a loop that never ends) is cut at 3x the baseline instead
+# of the default 5x. nightly.yml runs one shard of the rest per job.
+profile = "mutants"
+timeout_multiplier = 3.0
 
 # Run every crate's tests against each bug, not only the bugged crate's: the SDK's
 # ABI constants are checked against the C header by core/tests (abi_mirror).
@@ -33,4 +46,19 @@ exclude_re = [
     "replace > with >= in GapMeter::tick",
     # Equivalent: the IOCTL code's three bit fields don't overlap, so | and ^ agree.
     "replace \\| with \\^ in ioctl",
+    # Equivalent: with one channel in (or out) the downmix (or upmix) leaves the
+    # samples as they are, so taking that path at 1 changes nothing.
+    "replace > with >= in Converter::convert",
+    # The 10-minute queue cap's `* channels`: with mono, * 1 and / 1 (or + 1)
+    # agree, and seeing it with stereo takes 10 minutes of samples (~200 MB) in a
+    # test. Pinned to its line and column; if the line moves these come back as
+    # missed, so update it then.
+    "playout\\.rs:149:76: replace \\* with [+/] in Playout::push",
+    # Debug output: cosmetic, no behaviour.
+    "<impl fmt::Debug for LiveWriter>::fmt",
+    # Linux-only code inside shared files, not compiled on Windows where mutation
+    # runs (as linux.rs above): the clock's and doorbell's `linux` modules, the
+    # fallback clock, and the Linux core's setup.
+    " (linux|elsewhere)::",
+    " (process_core|HostTransport::for_process) ->",
 ]

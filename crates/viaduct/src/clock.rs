@@ -24,8 +24,17 @@ pub(crate) fn to_instant(ns: u64) -> Instant {
     }
 }
 
+// Named by OS, as in doorbell.rs, so .cargo/mutants.toml can tell the readings
+// apart: mutation runs on Windows, where only `win` is compiled.
+#[cfg(not(any(windows, target_os = "linux")))]
+use elsewhere as os;
+#[cfg(target_os = "linux")]
+use linux as os;
 #[cfg(windows)]
-mod os {
+use win as os;
+
+#[cfg(windows)]
+mod win {
     use windows_sys::Win32::System::Performance::{
         QueryPerformanceCounter, QueryPerformanceFrequency,
     };
@@ -44,7 +53,7 @@ mod os {
 }
 
 #[cfg(target_os = "linux")]
-mod os {
+mod linux {
     /// `CLOCK_MONOTONIC` in nanoseconds.
     pub(super) fn now_ns() -> u64 {
         let mut ts = libc::timespec {
@@ -59,7 +68,7 @@ mod os {
 
 /// Elsewhere (no backend yet): nanoseconds since the first reading.
 #[cfg(not(any(windows, target_os = "linux")))]
-mod os {
+mod elsewhere {
     use std::sync::OnceLock;
     use std::time::Instant;
 

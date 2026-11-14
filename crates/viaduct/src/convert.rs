@@ -405,3 +405,23 @@ fn mu_law_decode(byte: u8) -> i16 {
     let value = value as i16;
     value
 }
+
+#[cfg(test)]
+mod tests {
+    use super::bessel_i0;
+
+    /// The resampler's Kaiser window: I0 against its published values
+    /// (Abramowitz and Stegun, Table 9.8; checked against mpmath's `besseli` at 30 digits).
+    #[test]
+    fn bessel_i0_matches_its_published_values() {
+        for (x, i0) in [
+            (0.0, 1.0),
+            (1.0, 1.266_065_877_752_008_4),
+            (5.0, 27.239_871_823_604_442),
+            (10.0, 2_815.716_628_466_254),
+        ] {
+            let got = bessel_i0(x);
+            assert!((got - i0).abs() <= i0 * 1e-12, "I0({x}) = {got}, not {i0}");
+        }
+    }
+}

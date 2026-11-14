@@ -8,15 +8,18 @@ virtual cable to install and no window to share.
 ```python
 from pipecat_viaduct import ViaductTransport, ViaductTransportParams
 
-transport = ViaductTransport(
-    ViaductTransportParams(audio_in_enabled=True, audio_out_enabled=True)
+transport = ViaductTransport(ViaductTransportParams(audio_in_enabled=True, audio_out_enabled=True))
+pipeline = Pipeline(
+    [
+        transport.input(),  # what the meeting plays to "Agent Speaker"
+        stt,
+        user_aggregator,
+        llm,
+        tts,
+        transport.output(),  # what the bot says, out through "Agent Mic"
+        assistant_aggregator,
+    ]
 )
-pipeline = Pipeline([
-    transport.input(),    # what the meeting plays to "Agent Speaker"
-    stt, user_aggregator, llm, tts,
-    transport.output(),   # what the bot says, out through "Agent Mic"
-    assistant_aggregator,
-])
 ```
 
 The Devices appear as soon as the transport is created, so a meeting app can be

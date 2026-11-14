@@ -31,3 +31,10 @@ disallowed_methods = "deny"
 broken_intra_doc_links = "deny"
 invalid_html_tags = "deny"
 bare_urls = "deny"
+
+# Mutation testing (.cargo/mutants.toml, nightly.yml): the test profile, lightly
+# optimized. Debug assertions and overflow checks stay on, so a mutant fails the
+# same way; the resampler and drift tests run several times faster.
+[profile.mutants]
+inherits = "test"
+opt-level = 1

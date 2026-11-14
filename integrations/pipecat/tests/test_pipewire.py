@@ -70,9 +70,14 @@ async def test_a_recording_of_the_bots_microphone_hears_what_the_pipeline_says()
             await asyncio.wait_for(recorder.wait(), timeout=5)
         heard = wav_samples(wav)
 
-    loud = [s for s in heard if abs(s) > 0.05]
-    assert len(loud) > 48_000, f"heard {len(heard)} samples, {len(loud)} loud"
-    steady = loud[4_800:-4_800]
+    # The tone's stretch, from its first loud sample to its last: dropping the
+    # quiet samples one by one would drop those near every zero crossing too,
+    # and the measured frequency would come out about 6% high.
+    loud = [i for i, s in enumerate(heard) if abs(s) > 0.05]
+    assert loud, f"heard {len(heard)} samples, none loud"
+    tone_part = heard[loud[0] : loud[-1] + 1]
+    assert len(tone_part) > 48_000, f"heard {len(heard)} samples, {len(tone_part)} of tone"
+    steady = tone_part[4_800:-4_800]
     rms = math.sqrt(sum(s * s for s in steady) / len(steady))
     rising = sum(1 for a, b in itertools.pairwise(steady) if a < 0 <= b)
     frequency = rising / (len(steady) / 48_000)
