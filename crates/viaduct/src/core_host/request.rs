@@ -1,7 +1,7 @@
-//! Reading a Create Device request as the core received it: the Ring it names and
-//! the Device's kind and name. The core has already validated it.
+//! Reading a Create Device request for what the core doesn't keep: the Ring it
+//! names and the doorbell. The Device's kind and name come from the core
+//! (`vd_core_device_info`).
 
-use crate::Kind;
 use crate::abi::{self, CreateDeviceRequest};
 use std::mem::offset_of;
 
@@ -33,23 +33,4 @@ pub(super) fn ring_of(input: &[u8]) -> Option<(*mut std::ffi::c_void, usize)> {
 /// The doorbell a Create Device request names (`Doorbell::raw`).
 pub(super) fn wake_of(input: &[u8]) -> Option<u64> {
     read_u64(input, offset_of!(CreateDeviceRequest, wake_event))
-}
-
-/// The kind and name of an accepted Create Device request.
-pub(super) fn device_of(input: &[u8]) -> Option<(Kind, String)> {
-    let kind = match read_u32(input, offset_of!(CreateDeviceRequest, kind))? {
-        abi::KIND_MICROPHONE => Kind::Microphone,
-        abi::KIND_SPEAKER => Kind::Speaker,
-        _ => return None,
-    };
-    let len = usize::try_from(read_u32(input, offset_of!(CreateDeviceRequest, name_len))?).ok()?;
-    let start = offset_of!(CreateDeviceRequest, name);
-    let units: Vec<u16> = input
-        .get(start..start + len.min(abi::DEVICE_NAME_MAX) * 2)?
-        .as_chunks::<2>()
-        .0
-        .iter()
-        .map(|&pair| u16::from_ne_bytes(pair))
-        .collect();
-    Some((kind, String::from_utf16_lossy(&units)))
 }

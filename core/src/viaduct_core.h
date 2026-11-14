@@ -45,8 +45,17 @@ typedef struct vd_device {
     const vd_owner *owner;
     uint32_t name_len;
     uint16_t name[VD_DEVICE_NAME_MAX];
+    uint64_t stable_id;        /* vd_stable_id of kind and name, set at create */
     vd_ring ring;
 } vd_device;
+
+/* What the core accepted for a live Device (vd_core_device_info). */
+typedef struct vd_device_info {
+    uint32_t kind;
+    uint32_t name_len;
+    uint16_t name[VD_DEVICE_NAME_MAX];
+    uint64_t stable_id;
+} vd_device_info;
 
 /* Driver-wide state. One per driver instance. */
 typedef struct vd_core {
@@ -85,6 +94,23 @@ size_t vd_core_owner_closed(vd_core *core, const vd_owner *owner,
  * Device has that ID.
  */
 vd_ring *vd_core_device_ring(vd_core *core, uint32_t device_id);
+
+/*
+ * What the core accepted for a live Device: its kind, name and stable ID, so no
+ * shell or host parses the request again. False (and *info untouched) when no
+ * live Device has that ID.
+ */
+bool vd_core_device_info(const vd_core *core, uint32_t device_id, vd_device_info *info);
+
+/*
+ * A Device's stable identity (ADR 0015): the 64-bit FNV-1a hash of the kind byte
+ * (1 or 2) followed by the name's UTF-16LE bytes; a hash of 0 becomes 1, so 0
+ * can mean "free". Names are case-sensitive (ADR 0004). The one hash the system
+ * uses; the SDK's Rust copy (`viaduct::stable_id`) is checked against it
+ * (core/tests/tests/stable_id.rs). How it's written is each host's: the driver's
+ * instance ID, PipeWire's node.name.
+ */
+uint64_t vd_stable_id(uint32_t kind, const uint16_t *name, uint32_t name_len);
 
 /*
  * Seam B: the Ring, driver side. Attaches to a Ring the SDK laid out at `memory`,
@@ -136,10 +162,14 @@ void vd_ring_write_pcm16(vd_ring *ring, const int16_t *src, uint32_t count);
 
 /*
  * Microphone direction, when a recording starts (ADR 0014): drops stale audio so
- * at most `keep_frames` of the newest stay unread. Skipped frames are not counted
- * (not a Gap, and the driver may not store to the writer's Overflow; ADR 0007).
+ * at most `keep_frames` of the newest stay unread, and returns how many frames it
+ * dropped (for the shell's trace). Skipped frames are not counted as losses (not
+ * a Gap, and the driver may not store to the writer's Overflow; ADR 0007).
  */
-void vd_ring_skip_stale(vd_ring *ring, uint32_t keep_frames);
+uint64_t vd_ring_skip_stale(vd_ring *ring, uint32_t keep_frames);
+
+/* The driver side's loss totals so far: Gap (Microphone) and Overflow (Speaker). */
+void vd_ring_losses(const vd_ring *ring, uint64_t *gap_frames, uint64_t *overflow_frames);
 
 /*
  * Seam C: the clock. Frames a Device has played between two tick readings

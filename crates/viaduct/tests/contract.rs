@@ -828,9 +828,13 @@ fn write_paced_on_a_stereo_microphone_counts_frames(backend: &dyn Backend) {
         std::thread::scope(|scope| {
             let system = scope.spawn(|| {
                 let give_up = Instant::now() + Duration::from_secs(5);
-                let mut taken = Vec::new();
+                let mut taken: Vec<f32> = Vec::new();
                 while taken.len() < audio.len() && Instant::now() < give_up {
-                    taken.extend(backend.driver_read(mic.id(), 480).unwrap());
+                    let pulled = backend.driver_read(mic.id(), 480).unwrap();
+                    // Silence (Gap) before the writer starts or between its
+                    // writes: the test's frames are never zero.
+                    let frames = pulled.as_chunks::<2>().0;
+                    taken.extend(frames.iter().filter(|[left, _]| *left != 0.0).flatten());
                     system_pause();
                 }
                 taken
@@ -839,7 +843,7 @@ fn write_paced_on_a_stereo_microphone_counts_frames(backend: &dyn Backend) {
                 .write_paced(&audio, Instant::now() + Duration::from_secs(5))
                 .unwrap();
             let taken = system.join().unwrap();
-            assert_eq!(taken[..audio.len()], audio[..]);
+            assert_eq!(taken, audio, "whole frames, in order");
             written
         }),
         (),

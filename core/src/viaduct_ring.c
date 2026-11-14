@@ -234,16 +234,26 @@ void vd_ring_write_pcm16(vd_ring *ring, const int16_t *src, uint32_t count)
     vd_ring_write_done(ring, n, count);
 }
 
-void vd_ring_skip_stale(vd_ring *ring, uint32_t keep_frames)
+uint64_t vd_ring_skip_stale(vd_ring *ring, uint32_t keep_frames)
 {
     /* The writer counter is app-controlled: same rules as vd_ring_read. */
     uint64_t written = vd_load_acquire_u64(&ring->shared->write_frames);
     uint64_t keep = keep_frames < ring->capacity_frames ? keep_frames : ring->capacity_frames;
+    uint64_t skipped;
 
     if (written < ring->read_frames || written - ring->read_frames <= keep) {
-        return; /* moved backwards, or nothing stale */
+        return 0; /* moved backwards, or nothing stale */
     }
     /* Audio written while nobody was recording: skip all but the newest `keep`. */
+    skipped = written - keep - ring->read_frames;
     ring->read_frames = written - keep;
     vd_store_release_u64(&ring->shared->read_frames, ring->read_frames);
+    return skipped;
+}
+
+void vd_ring_losses(const vd_ring *ring, uint64_t *gap_frames, uint64_t *overflow_frames)
+{
+    /* The driver's own copies, never the app's header. */
+    *gap_frames = ring->gap_frames;
+    *overflow_frames = ring->overflow_frames;
 }

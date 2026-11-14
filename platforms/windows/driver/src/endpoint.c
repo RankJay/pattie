@@ -1,7 +1,11 @@
 /*
- * Circuit devices: one raw child of the root per live Device (ADR 0010). This
- * file owns the child's lifecycle; its circuit is built in circuit.c and its
- * audio interface values are written in interfaces.c.
+ * A Device's whole lifecycle in the shell (ADR 0010; architecture review
+ * 2026-11-09, candidate 5): the slot beside the core's table, the core's create
+ * and remove, the stable ID's claim, the circuit device (one raw child of the
+ * root per live Device), and the undo when a step fails. control.c is only the
+ * transport that calls in here; the circuit is built in circuit.c and its audio
+ * interface values are written in interfaces.c. Every entry point runs under
+ * the driver lock.
  *
  * Follows Microsoft's runtime circuit-device pattern (SdcaVad sample, the XU
  * driver's dynamic capture devices): allocate a child with WdfPdoInitAllocate,
@@ -26,24 +30,11 @@ DECLARE_CONST_UNICODE_STRING(VdCircuitDeviceId, L"Viaduct\\Endpoint");
 #define VD_CHILD_ID_POLL_MS 10u
 
 /*
- * A child's stable ID (ADR 0015): a 64-bit FNV-1a hash of the Device's kind and
- * name (case-sensitive, like names: ADR 0004). The same Device name comes back as
- * the same child instance, so Windows reuses its endpoint (no "2- Agent Mic", and
- * apps remember it). 0 is reserved for "free".
- */
-static ULONG64 VdChildId(UINT32 Kind, const WCHAR *Name, USHORT NameBytes)
-{
-    const UCHAR *bytes = (const UCHAR *)Name;
-    ULONG64 hash = 0xcbf29ce484222325ull;
-
-    hash = (hash ^ (UCHAR)Kind) * 0x100000001b3ull;
-    for (USHORT i = 0; i < NameBytes; i++) {
-        hash = (hash ^ bytes[i]) * 0x100000001b3ull;
-    }
-    return hash == 0 ? 1 : hash;
-}
-
-/*
+ * A child's stable ID is the core's (vd_stable_id, ADR 0015): the same Device
+ * name comes back as the same child instance, so Windows reuses its endpoint (no
+ * "2- Agent Mic", and apps remember it). The core never gives 0, which the table
+ * below keeps for "free".
+ *
  * Claims Id in the driver's table of children not yet deleted. Fails while a child
  * with that ID still exists, however far its removal has got: two siblings with
  * one instance ID would bugcheck PnP. Called under the driver lock.
@@ -95,10 +86,12 @@ static NTSTATUS VdChildIdClaim(VD_DRIVER_CONTEXT *Ctx, ULONG64 Id)
     return STATUS_SUCCESS;
 }
 
-_Use_decl_annotations_
-NTSTATUS VdCircuitDeviceAdd(VD_DRIVER_CONTEXT *Ctx, UINT32 DeviceId,
-                            const vd_create_device_request *Request, PKEVENT WakeEvent,
-                            WDFDEVICE *CircuitDevice)
+/*
+ * Gives a Device the core just accepted its circuit device. On success the child
+ * holds the stable ID until Windows deletes it; on failure nothing is left.
+ */
+static NTSTATUS VdCircuitDeviceAdd(VD_DRIVER_CONTEXT *Ctx, UINT32 DeviceId, const vd_device_info *Info,
+                                   PKEVENT WakeEvent, WDFDEVICE *CircuitDevice)
 {
     PWDFDEVICE_INIT init;
     ACX_DEVICEINIT_CONFIG acxInitConfig;
@@ -114,12 +107,12 @@ NTSTATUS VdCircuitDeviceAdd(VD_DRIVER_CONTEXT *Ctx, UINT32 DeviceId,
 
     *CircuitDevice = NULL;
 
-    name.Buffer = (PWCH)Request->name;
-    name.Length = (USHORT)(Request->name_len * sizeof(WCHAR));
+    name.Buffer = (PWCH)Info->name;
+    name.Length = (USHORT)(Info->name_len * sizeof(WCHAR));
     name.MaximumLength = name.Length;
 
     /* Claimed before the child exists; released by its cleanup, or below on failure. */
-    childId = VdChildId(Request->kind, name.Buffer, name.Length);
+    childId = Info->stable_id;
     status = VdChildIdClaim(Ctx, childId);
     if (!NT_SUCCESS(status)) {
         return status;
@@ -132,7 +125,7 @@ NTSTATUS VdCircuitDeviceAdd(VD_DRIVER_CONTEXT *Ctx, UINT32 DeviceId,
     }
 
     status = RtlUnicodeStringPrintf(&instanceId, L"%c%016I64x",
-                                    Request->kind == VD_KIND_MICROPHONE ? L'M' : L'S', childId);
+                                    Info->kind == VD_KIND_MICROPHONE ? L'M' : L'S', childId);
     if (NT_SUCCESS(status)) {
         status = WdfPdoInitAssignDeviceID(init, &VdCircuitDeviceId);
     }
@@ -182,14 +175,14 @@ NTSTATUS VdCircuitDeviceAdd(VD_DRIVER_CONTEXT *Ctx, UINT32 DeviceId,
     deviceCtx = VdCircuitDeviceContext(device);
     deviceCtx->ChildId = childId; /* from here on, the device's cleanup releases it */
     deviceCtx->DeviceId = DeviceId;
-    deviceCtx->Kind = Request->kind;
+    deviceCtx->Kind = Info->kind;
     deviceCtx->Ring = vd_core_device_ring(&Ctx->Core, DeviceId);
     /* Read once: the core's own copies, checked when it attached the Ring. */
     deviceCtx->SampleRate = vd_ring_sample_rate(deviceCtx->Ring);
     deviceCtx->Channels = vd_ring_channels(deviceCtx->Ring);
     deviceCtx->WakeEvent = WakeEvent; /* the slot holds the reference */
     ExInitializeRundownProtection(&deviceCtx->Rundown);
-    RtlCopyMemory(deviceCtx->NameBuffer, Request->name, name.Length);
+    RtlCopyMemory(deviceCtx->NameBuffer, Info->name, name.Length);
     deviceCtx->Name.Buffer = deviceCtx->NameBuffer;
     deviceCtx->Name.Length = name.Length;
     deviceCtx->Name.MaximumLength = sizeof deviceCtx->NameBuffer;
@@ -212,7 +205,7 @@ NTSTATUS VdCircuitDeviceAdd(VD_DRIVER_CONTEXT *Ctx, UINT32 DeviceId,
     TraceLoggingWrite(VdTraceProvider, "CircuitDeviceAdded",
                       TraceLoggingLevel(VD_TRACE_LEVEL_INFO),
                       TraceLoggingUInt32(DeviceId, "DeviceId"),
-                      TraceLoggingUInt32(Request->kind, "Kind"));
+                      TraceLoggingUInt32(Info->kind, "Kind"));
     *CircuitDevice = device;
     return STATUS_SUCCESS;
 }
@@ -221,8 +214,7 @@ NTSTATUS VdCircuitDeviceAdd(VD_DRIVER_CONTEXT *Ctx, UINT32 DeviceId,
  * The core already dropped the Device. Called under the driver lock, so the core
  * can't reuse its slot until the Ring is safely unpinned (ADR 0010).
  */
-_Use_decl_annotations_
-VOID VdDeviceTeardown(VD_DRIVER_CONTEXT *Ctx, UINT32 DeviceId)
+static VOID VdDeviceTeardown(VD_DRIVER_CONTEXT *Ctx, UINT32 DeviceId)
 {
     for (ULONG i = 0; i < VD_MAX_DEVICES; i++) {
         VD_SLOT *slot = &Ctx->Slots[i];
@@ -255,6 +247,102 @@ VOID VdDeviceTeardown(VD_DRIVER_CONTEXT *Ctx, UINT32 DeviceId)
                           TraceLoggingLevel(VD_TRACE_LEVEL_INFO),
                           TraceLoggingUInt32(DeviceId, "DeviceId"));
         return;
+    }
+}
+
+_Use_decl_annotations_
+vd_status VdDeviceCreate(VD_DRIVER_CONTEXT *Ctx, vd_owner *Owner, const UCHAR *Input, size_t InputLength,
+                         PMDL *Mdl, PKEVENT *Wake, UCHAR *Reply, size_t ReplyCap, size_t *ReplyLength)
+{
+    vd_create_device_reply created;
+    vd_device_info info;
+    void *ringMemory = NULL;
+    size_t ringLength = 0;
+    WDFDEVICE circuitDevice;
+    VD_SLOT *slot = NULL;
+    vd_status result;
+
+    *ReplyLength = 0;
+    if (Ctx->Root == NULL) {
+        return VD_ERR_SYSTEM; /* the root device is going away */
+    }
+    /* Opaque to the core (ADR 0021): the shell alone needs a doorbell it can set. */
+    if (*Wake == NULL) {
+        return VD_ERR_BAD_REQUEST;
+    }
+    /* Claim the shell's slot first, so an accepted Device always has one. Slots
+     * mirror the core's VD_MAX_DEVICES, so this only fails when the core would. */
+    for (ULONG i = 0; i < VD_MAX_DEVICES && slot == NULL; i++) {
+        if (Ctx->Slots[i].DeviceId == 0) {
+            slot = &Ctx->Slots[i];
+        }
+    }
+    if (slot == NULL) {
+        return VD_ERR_TOO_MANY_DEVICES;
+    }
+    if (*Mdl != NULL) {
+        ringMemory = MmGetSystemAddressForMdlSafe(*Mdl, NormalPagePriority | MdlMappingNoExecute);
+        ringLength = MmGetMdlByteCount(*Mdl);
+    }
+
+    result = vd_core_command(&Ctx->Core, Owner, VD_CMD_CREATE_DEVICE, Input, InputLength,
+                             ringMemory, ringLength, Reply, ReplyCap, ReplyLength);
+    if (result != VD_OK) {
+        return result;
+    }
+
+    /* What the core accepted, kind, name and stable ID: the request isn't read again. */
+    RtlCopyMemory(&created, Reply, sizeof created);
+    if (!vd_core_device_info(&Ctx->Core, created.device_id, &info) ||
+        !NT_SUCCESS(VdCircuitDeviceAdd(Ctx, created.device_id, &info, *Wake, &circuitDevice))) {
+        /* Undo through the core's own Remove Device, then report the failure. */
+        vd_remove_device_request undo = { created.device_id };
+        size_t ignored;
+        (void)vd_core_command(&Ctx->Core, Owner, VD_CMD_REMOVE_DEVICE, &undo, sizeof undo,
+                              NULL, 0, NULL, 0, &ignored);
+        *ReplyLength = 0;
+        return VD_ERR_SYSTEM;
+    }
+
+    /* The slot's reference keeps the circuit device's context (and its rundown)
+     * valid until teardown, however Windows deletes the device meanwhile. */
+    WdfObjectReference(circuitDevice);
+    slot->DeviceId = created.device_id;
+    slot->Mdl = *Mdl;
+    slot->WakeEvent = *Wake;
+    slot->CircuitDevice = circuitDevice;
+    *Mdl = NULL;  /* the slot owns the pinned Ring now */
+    *Wake = NULL; /* and the doorbell's reference */
+    return VD_OK;
+}
+
+_Use_decl_annotations_
+vd_status VdDeviceRemove(VD_DRIVER_CONTEXT *Ctx, vd_owner *Owner, const UCHAR *Input, size_t InputLength,
+                         UCHAR *Reply, size_t ReplyCap, size_t *ReplyLength)
+{
+    vd_status result;
+
+    *ReplyLength = 0;
+    result = vd_core_command(&Ctx->Core, Owner, VD_CMD_REMOVE_DEVICE, Input, InputLength,
+                             NULL, 0, Reply, ReplyCap, ReplyLength);
+
+    if (result == VD_OK) {
+        vd_remove_device_request removed;
+
+        RtlCopyMemory(&removed, Input, sizeof removed); /* the core validated it */
+        VdDeviceTeardown(Ctx, removed.device_id);
+    }
+    return result;
+}
+
+_Use_decl_annotations_
+VOID VdOwnerDevicesRemove(VD_DRIVER_CONTEXT *Ctx, const vd_owner *Owner)
+{
+    uint32_t removed[VD_MAX_DEVICES];
+    size_t count = vd_core_owner_closed(&Ctx->Core, Owner, removed);
+
+    for (size_t i = 0; i < count; i++) {
+        VdDeviceTeardown(Ctx, removed[i]);
     }
 }
 

@@ -24,7 +24,7 @@ use crate::{Error, Kind};
 #[cfg(target_os = "linux")]
 use claim::{Claim, claim};
 use core_ffi::{Core, Owner};
-use request::{device_of, read_u32, ring_of, wake_of};
+use request::{read_u32, ring_of, wake_of};
 use std::mem::size_of;
 #[cfg(target_os = "linux")]
 use std::sync::OnceLock;
@@ -192,7 +192,10 @@ impl Connection for HostConnection {
             let ring = core
                 .device_ring(id)
                 .ok_or(Error::Protocol(abi::ERR_BAD_REQUEST))?;
-            let (kind, name) = device_of(input).ok_or(Error::Protocol(abi::ERR_BAD_REQUEST))?;
+            // As the core accepted it: the request isn't parsed a second time.
+            let (kind, name, stable_id) = core
+                .device_info(id)
+                .ok_or(Error::Protocol(abi::ERR_BAD_REQUEST))?;
             let wake = wake_of(input).ok_or(Error::Protocol(abi::ERR_BAD_REQUEST))?;
             // SAFETY: the doorbell is the SDK's own (`device::Inner`), which, like
             // the Ring, outlives this connection and so this Device's node.
@@ -200,7 +203,7 @@ impl Connection for HostConnection {
             let spec = NodeSpec {
                 id,
                 kind,
-                node_name: node_name(kind, &name),
+                node_name: node_name(kind, stable_id),
                 name,
                 ring,
                 wake,
@@ -231,10 +234,15 @@ impl Drop for HostConnection {
     }
 }
 
-/// `node.name`: `viaduct.` plus the Device's stable identity (ADR 0015), the
-/// same ID the Windows driver gives it.
-pub(crate) fn node_name(kind: Kind, name: &str) -> String {
-    format!("viaduct.{}", crate::stable_id(kind, name))
+/// `node.name`: `viaduct.` plus the Device's stable identity (ADR 0015) as the
+/// core computed it: the kind letter and 16 uppercase hex digits, as
+/// `viaduct::stable_id` writes it.
+pub(crate) fn node_name(kind: Kind, stable_id: u64) -> String {
+    let letter = match kind {
+        Kind::Microphone => 'M',
+        Kind::Speaker => 'S',
+    };
+    format!("viaduct.{letter}{stable_id:016X}")
 }
 
 #[cfg(test)]
@@ -473,11 +481,17 @@ mod tests {
     #[test]
     fn a_node_is_named_viaduct_dot_its_stable_id() {
         assert_eq!(
-            node_name(Kind::Microphone, "Agent Mic"),
-            format!(
-                "viaduct.{}",
-                crate::stable_id(Kind::Microphone, "Agent Mic")
-            )
+            [
+                node_name(Kind::Microphone, 0xBD5F_5BFD_A42F_6F12),
+                node_name(Kind::Speaker, 0x0000_0000_0000_00AB),
+            ],
+            [
+                format!(
+                    "viaduct.{}",
+                    crate::stable_id(Kind::Microphone, "Agent Mic")
+                ),
+                "viaduct.S00000000000000AB".to_string(),
+            ]
         );
     }
 }

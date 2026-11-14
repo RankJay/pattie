@@ -498,3 +498,29 @@ fn app_rewriting_channels_after_attach_changes_nothing() {
     assert_eq!(ring.driver_channels(), 2);
     assert_eq!(ring.driver_counters().write, 2);
 }
+
+#[test]
+fn a_recording_start_says_how_many_stale_frames_it_dropped() {
+    let mut ring = Ring::new(4096);
+    ring.app_write(&vec![0.5f32; 3000]);
+
+    let skipped = ring.driver_skip_stale_counted(480);
+    let again = ring.driver_skip_stale_counted(480);
+
+    assert_eq!((skipped, again), (2_520, 0));
+}
+
+#[test]
+fn the_losses_are_the_drivers_gap_and_overflow_totals() {
+    let mut microphone = Ring::new(256);
+    microphone.app_write(&[0.5; 100]);
+    let mut out = [0.0f32; 160];
+    microphone.driver_read(&mut out); // 60 frames short: Gap
+    let mut speaker = Ring::new(256);
+    speaker.driver_write(&[0.5; 300]); // 44 frames past the capacity: Overflow
+
+    assert_eq!(
+        (microphone.driver_losses(), speaker.driver_losses()),
+        ((60, 0), (0, 44))
+    );
+}

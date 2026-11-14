@@ -1,7 +1,8 @@
 // The C core's functions (core/src/viaduct_core.h), as the Linux backend calls
-// them. The includer brings `c_void` and the types `VdCore`, `VdOwner` and
-// `VdRing` into scope: the SDK's opaque ones (core_ffi.rs), or bindgen's own in
-// core/tests/tests/ffi_mirror.rs, which checks each signature against the header.
+// them. The includer brings `c_void` and the types `VdCore`, `VdOwner`, `VdRing`
+// and `VdDeviceInfo` into scope: the SDK's own (core_ffi.rs, core_types.rs), or
+// bindgen's in core/tests/tests/ffi_mirror.rs, which checks each signature
+// against the header.
 unsafe extern "C" {
     fn vd_core_command(
         core: *mut VdCore,
@@ -17,6 +18,7 @@ unsafe extern "C" {
     ) -> u32;
     fn vd_core_owner_closed(core: *mut VdCore, owner: *const VdOwner, removed: *mut u32) -> usize;
     fn vd_core_device_ring(core: *mut VdCore, device_id: u32) -> *mut VdRing;
+    fn vd_core_device_info(core: *const VdCore, device_id: u32, info: *mut VdDeviceInfo) -> bool;
     fn vd_ring_channels(ring: *const VdRing) -> u32;
     #[cfg_attr(
         not(target_os = "linux"),
@@ -34,5 +36,5 @@ unsafe extern "C" {
             reason = "the PipeWire node drops stale audio; test nodes don't"
         )
     )]
-    fn vd_ring_skip_stale(ring: *mut VdRing, keep_frames: u32);
+    fn vd_ring_skip_stale(ring: *mut VdRing, keep_frames: u32) -> u64;
 }

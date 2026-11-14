@@ -100,6 +100,7 @@ static vd_status create_device(vd_core *core, const vd_owner *owner,
     free_slot->owner = owner;
     free_slot->name_len = request->name_len;
     copy_bytes(free_slot->name, request->name, sizeof free_slot->name);
+    free_slot->stable_id = vd_stable_id(request->kind, free_slot->name, free_slot->name_len);
     free_slot->ring = ring;
 
     reply.device_id = free_slot->id;
@@ -189,6 +190,35 @@ size_t vd_core_owner_closed(vd_core *core, const vd_owner *owner,
         }
     }
     return count;
+}
+
+bool vd_core_device_info(const vd_core *core, uint32_t device_id, vd_device_info *info)
+{
+    for (uint32_t i = 0; i < VD_MAX_DEVICES; i++) {
+        const vd_device *device = &core->devices[i];
+        if (device_id != 0 && device->id == device_id) {
+            info->kind = device->kind;
+            info->name_len = device->name_len;
+            copy_bytes(info->name, device->name, sizeof info->name);
+            info->stable_id = device->stable_id;
+            return true;
+        }
+    }
+    return false;
+}
+
+uint64_t vd_stable_id(uint32_t kind, const uint16_t *name, uint32_t name_len)
+{
+    const uint64_t prime = 0x100000001b3ull;
+    uint64_t hash = 0xcbf29ce484222325ull;
+
+    hash = (hash ^ (uint8_t)kind) * prime;
+    for (uint32_t i = 0; i < name_len; i++) {
+        /* UTF-16LE: low byte first, whatever the host's byte order. */
+        hash = (hash ^ (uint8_t)(name[i] & 0xFFu)) * prime;
+        hash = (hash ^ (uint8_t)(name[i] >> 8)) * prime;
+    }
+    return hash == 0 ? 1u : hash;
 }
 
 vd_ring *vd_core_device_ring(vd_core *core, uint32_t device_id)

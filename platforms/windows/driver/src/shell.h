@@ -12,8 +12,9 @@
  * Files, one concern each:
  *
  *   driver.c      DriverEntry and the root ACX device
- *   control.c     the control device: Owners, commands, Ring pinning
- *   endpoint.c    a circuit device's lifecycle: create, prepare, name, tear down
+ *   control.c     the control device, transport only: Owners, commands, Ring pinning
+ *   endpoint.c    a Device's whole lifecycle: slot, core, stable ID, circuit
+ *                 device (create, prepare, name, tear down) and the undo
  *   circuit.c     the circuit inside it: pins and the formats Windows may use
  *   interfaces.c  the audio interface values an INF would normally write
  *   stream.c      streaming: one copy per packet between Windows and the Ring
@@ -124,11 +125,25 @@ DRIVER_INITIALIZE DriverEntry;
 NTSTATUS VdControlDeviceCreate(_In_ WDFDRIVER Driver);
 VOID VdUnpinRing(_In_ PMDL Mdl);
 
-/* endpoint.c */
-NTSTATUS VdCircuitDeviceAdd(_In_ VD_DRIVER_CONTEXT *Ctx, _In_ UINT32 DeviceId,
-                            _In_ const vd_create_device_request *Request,
-                            _In_ PKEVENT WakeEvent, _Out_ WDFDEVICE *CircuitDevice);
-VOID VdDeviceTeardown(_In_ VD_DRIVER_CONTEXT *Ctx, _In_ UINT32 DeviceId);
+/*
+ * endpoint.c, each called under the driver lock.
+ *
+ * Create Device: the core's create, then the Device's circuit device; undone in
+ * the core if that fails. On success the slot takes over *Mdl and *Wake (both set
+ * to NULL); otherwise they stay the caller's to release.
+ */
+vd_status VdDeviceCreate(_In_ VD_DRIVER_CONTEXT *Ctx, _In_ vd_owner *Owner,
+                         _In_reads_bytes_(InputLength) const UCHAR *Input, _In_ size_t InputLength,
+                         _Inout_ PMDL *Mdl, _Inout_ PKEVENT *Wake,
+                         _Out_writes_bytes_to_(ReplyCap, *ReplyLength) UCHAR *Reply, _In_ size_t ReplyCap,
+                         _Out_ size_t *ReplyLength);
+/* Remove Device: the core's remove, then the Device's teardown. */
+vd_status VdDeviceRemove(_In_ VD_DRIVER_CONTEXT *Ctx, _In_ vd_owner *Owner,
+                         _In_reads_bytes_(InputLength) const UCHAR *Input, _In_ size_t InputLength,
+                         _Out_writes_bytes_to_(ReplyCap, *ReplyLength) UCHAR *Reply, _In_ size_t ReplyCap,
+                         _Out_ size_t *ReplyLength);
+/* An Owner's handle closed, crash included: removes and tears down all its Devices. */
+VOID VdOwnerDevicesRemove(_In_ VD_DRIVER_CONTEXT *Ctx, _In_ const vd_owner *Owner);
 
 /* circuit.c */
 PCUNICODE_STRING VdCircuitName(_In_ UINT32 Kind);

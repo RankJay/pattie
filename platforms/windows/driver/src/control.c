@@ -1,10 +1,12 @@
 /*
- * The control device: where Owners send commands (ADR 0010, ADR 0011).
+ * The control device: where Owners send commands (ADR 0010, ADR 0011). Transport
+ * only: a Device's lifecycle is endpoint.c's.
  *
  * One open handle is one Owner. Create Device's Ring is pinned while still in
  * the caller's own context, because its address only means something there
- * (ADR 0006, ADR 0009). Every command then runs through the core under the
- * driver lock, and the reply goes back in the envelope from the ABI header.
+ * (ADR 0006, ADR 0009). Every command then runs under the driver lock, through
+ * endpoint.c for Create and Remove Device and straight to the core otherwise, and
+ * the reply goes back in the envelope from the ABI header.
  */
 #include "shell.h"
 
@@ -99,14 +101,9 @@ static VOID VdEvtFileCreate(WDFDEVICE Device, WDFREQUEST Request, WDFFILEOBJECT 
 static VOID VdEvtFileCleanup(WDFFILEOBJECT FileObject)
 {
     VD_DRIVER_CONTEXT *ctx = VdDriverContext(WdfGetDriver());
-    uint32_t removed[VD_MAX_DEVICES];
-    size_t count;
 
     WdfWaitLockAcquire(ctx->Lock, NULL);
-    count = vd_core_owner_closed(&ctx->Core, &VdFileContext(FileObject)->Owner, removed);
-    for (size_t i = 0; i < count; i++) {
-        VdDeviceTeardown(ctx, removed[i]);
-    }
+    VdOwnerDevicesRemove(ctx, &VdFileContext(FileObject)->Owner);
     WdfWaitLockRelease(ctx->Lock);
 }
 
@@ -212,71 +209,6 @@ static BOOLEAN VdCommandFromIoctl(ULONG IoControlCode, uint32_t *Command)
     return FALSE;
 }
 
-/* Runs Create Device and, if the core accepted it, gives it a circuit device. */
-static vd_status VdCreateDevice(VD_DRIVER_CONTEXT *ctx, vd_owner *owner, const UCHAR *input,
-                                size_t inputLength, PMDL *mdl, PKEVENT *wake, UCHAR *reply,
-                                size_t replyCap, size_t *replyLength)
-{
-    vd_create_device_request request;
-    vd_create_device_reply created;
-    void *ringMemory = NULL;
-    size_t ringLength = 0;
-    WDFDEVICE circuitDevice;
-    VD_SLOT *slot = NULL;
-    vd_status result;
-
-    if (ctx->Root == NULL) {
-        return VD_ERR_SYSTEM; /* the root device is going away */
-    }
-    /* Opaque to the core (ADR 0021): the shell alone needs a doorbell it can set. */
-    if (*wake == NULL) {
-        return VD_ERR_BAD_REQUEST;
-    }
-    /* Claim the shell's slot first, so an accepted Device always has one. Slots
-     * mirror the core's VD_MAX_DEVICES, so this only fails when the core would. */
-    for (ULONG i = 0; i < VD_MAX_DEVICES && slot == NULL; i++) {
-        if (ctx->Slots[i].DeviceId == 0) {
-            slot = &ctx->Slots[i];
-        }
-    }
-    if (slot == NULL) {
-        return VD_ERR_TOO_MANY_DEVICES;
-    }
-    if (*mdl != NULL) {
-        ringMemory = MmGetSystemAddressForMdlSafe(*mdl, NormalPagePriority | MdlMappingNoExecute);
-        ringLength = MmGetMdlByteCount(*mdl);
-    }
-
-    result = vd_core_command(&ctx->Core, owner, VD_CMD_CREATE_DEVICE, input, inputLength,
-                             ringMemory, ringLength, reply, replyCap, replyLength);
-    if (result != VD_OK) {
-        return result;
-    }
-
-    RtlCopyMemory(&request, input, sizeof request); /* the core validated it */
-    RtlCopyMemory(&created, reply, sizeof created);
-    if (!NT_SUCCESS(VdCircuitDeviceAdd(ctx, created.device_id, &request, *wake, &circuitDevice))) {
-        /* Undo through the core's own Remove Device, then report the failure. */
-        vd_remove_device_request undo = { created.device_id };
-        size_t ignored;
-        (void)vd_core_command(&ctx->Core, owner, VD_CMD_REMOVE_DEVICE, &undo, sizeof undo,
-                              NULL, 0, NULL, 0, &ignored);
-        *replyLength = 0;
-        return VD_ERR_SYSTEM;
-    }
-
-    /* The slot's reference keeps the circuit device's context (and its rundown)
-     * valid until teardown, however Windows deletes the device meanwhile. */
-    WdfObjectReference(circuitDevice);
-    slot->DeviceId = created.device_id;
-    slot->Mdl = *mdl;
-    slot->WakeEvent = *wake;
-    slot->CircuitDevice = circuitDevice;
-    *mdl = NULL; /* the slot owns the pinned Ring now */
-    *wake = NULL; /* and the doorbell's reference */
-    return VD_OK;
-}
-
 static VOID VdEvtIoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request, size_t OutputBufferLength,
                                  size_t InputBufferLength, ULONG IoControlCode)
 {
@@ -314,18 +246,16 @@ static VOID VdEvtIoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request, size_t Outp
 
     WdfWaitLockAcquire(ctx->Lock, NULL);
     if (command == VD_CMD_CREATE_DEVICE) {
-        envelope.status = VdCreateDevice(ctx, owner, input, InputBufferLength, &requestCtx->Mdl,
+        envelope.status = VdDeviceCreate(ctx, owner, input, InputBufferLength, &requestCtx->Mdl,
                                          &requestCtx->WakeEvent, output + sizeof envelope,
+                                         length - sizeof envelope, &replyLength);
+    } else if (command == VD_CMD_REMOVE_DEVICE) {
+        envelope.status = VdDeviceRemove(ctx, owner, input, InputBufferLength, output + sizeof envelope,
                                          length - sizeof envelope, &replyLength);
     } else {
         envelope.status = vd_core_command(&ctx->Core, owner, command, input, InputBufferLength,
                                           NULL, 0, output + sizeof envelope,
                                           length - sizeof envelope, &replyLength);
-        if (command == VD_CMD_REMOVE_DEVICE && envelope.status == VD_OK) {
-            vd_remove_device_request removed;
-            RtlCopyMemory(&removed, input, sizeof removed);
-            VdDeviceTeardown(ctx, removed.device_id);
-        }
     }
     WdfWaitLockRelease(ctx->Lock);
 

@@ -36,9 +36,11 @@ unsafe extern "C" {
     fn vd_host_owner_free(owner: *mut VdOwner);
 }
 
-// The C core's own functions (`viaduct_core.h`), in a file of their own:
+// The core's structs this side reads, and its own functions (`viaduct_core.h`),
+// each in a file of its own:
 // core/tests includes the same file and checks every signature against bindgen's
 // reading of the header (`tests/ffi_mirror.rs`).
+include!("core_ffi/core_types.rs");
 include!("core_ffi/core_externs.rs");
 
 /// The core's Device table and rules. One per process (`super::process_core`), or
@@ -112,6 +114,33 @@ impl Core {
         // SAFETY: the core is live and borrowed exclusively; it returns null or a
         // Ring in its own table.
         NonNull::new(unsafe { vd_core_device_ring(self.0.as_ptr(), device_id) }).map(RingRef)
+    }
+
+    /// What the core accepted for a live Device: its kind, name and stable ID
+    /// (the one hash, ADR 0015). `None` when no live Device has that ID.
+    pub(crate) fn device_info(&self, device_id: u32) -> Option<(Kind, String, u64)> {
+        let mut info = VdDeviceInfo {
+            kind: 0,
+            name_len: 0,
+            name: [0; 63],
+            stable_id: 0,
+        };
+        // SAFETY: the core is live; `info` is a live out-parameter of the
+        // header's layout (checked by core/tests' ffi_mirror).
+        if !unsafe { vd_core_device_info(self.0.as_ptr(), device_id, &raw mut info) } {
+            return None;
+        }
+        let kind = match info.kind {
+            crate::abi::KIND_MICROPHONE => Kind::Microphone,
+            crate::abi::KIND_SPEAKER => Kind::Speaker,
+            _ => return None,
+        };
+        let len = usize::try_from(info.name_len).ok()?.min(info.name.len());
+        Some((
+            kind,
+            String::from_utf16_lossy(&info.name[..len]),
+            info.stable_id,
+        ))
     }
 }
 

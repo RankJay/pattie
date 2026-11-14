@@ -1,0 +1,70 @@
+//! The stable-ID hash exists once in the system, in the core (ADR 0015 amendment):
+//! the driver and the Linux host take it from `vd_core_device_info`. The SDK keeps
+//! a copy in Rust (`viaduct::stable_id`), because Windows apps compile no C (ADR
+//! 0012). This checks the copy against the core, so the two can't drift apart.
+
+use viaduct::Kind;
+use viaduct_core_tests::ffi::{VD_KIND_MICROPHONE, VD_KIND_SPEAKER};
+use viaduct_core_tests::stable_id as core_stable_id;
+
+/// The SDK's ID, back as the hash the core computes.
+fn sdk_hash(kind: Kind, name: &str) -> u64 {
+    let id = viaduct::stable_id(kind, name);
+    u64::from_str_radix(&id[1..], 16).expect("16 hex digits after the kind letter")
+}
+
+/// A tiny seeded generator (xorshift64), so a failure names a repeatable case.
+struct Names(u64);
+
+impl Names {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+
+    /// A name of 1 to 63 UTF-16 units from a mix of ASCII, accented letters,
+    /// CJK and emoji (surrogate pairs), as a Device name may hold.
+    fn name(&mut self) -> String {
+        const PICKS: [&str; 8] = ["a", "Z", " ", "é", "ß", "麦", "🎤", "-"];
+        let mut name = String::new();
+        let units = self.next() % 63 + 1;
+        while name.encode_utf16().count() < units as usize {
+            let pick = PICKS[(self.next() % PICKS.len() as u64) as usize];
+            if name.encode_utf16().count() + pick.encode_utf16().count() > 63 {
+                break;
+            }
+            name.push_str(pick);
+        }
+        if name.is_empty() {
+            "a".to_string()
+        } else {
+            name
+        }
+    }
+}
+
+#[test]
+fn the_sdks_stable_id_is_the_cores_for_every_name_tried() {
+    let mut names = Names(0x9E37_79B9_7F4A_7C15);
+    for _ in 0..5_000 {
+        let name = names.name();
+        for (kind, core_kind) in [
+            (Kind::Microphone, VD_KIND_MICROPHONE),
+            (Kind::Speaker, VD_KIND_SPEAKER),
+        ] {
+            assert_eq!(
+                sdk_hash(kind, &name),
+                core_stable_id(core_kind, &name),
+                "{kind:?} {name:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_kind_letter_is_the_one_each_host_writes() {
+    assert!(viaduct::stable_id(Kind::Microphone, "x").starts_with('M'));
+    assert!(viaduct::stable_id(Kind::Speaker, "x").starts_with('S'));
+}

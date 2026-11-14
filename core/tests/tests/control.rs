@@ -2,7 +2,7 @@
 
 use viaduct_core_tests::ffi::*;
 use viaduct_core_tests::{
-    DEFAULT_RING_FRAMES, Driver, RingMemory, as_bytes, create_device_request,
+    DEFAULT_RING_FRAMES, DeviceInfo, Driver, RingMemory, as_bytes, create_device_request, stable_id,
 };
 
 #[test]
@@ -493,4 +493,62 @@ fn a_remove_request_of_the_wrong_size_is_rejected() {
         (short, long, still_there),
         (VD_ERR_BAD_REQUEST, VD_ERR_BAD_REQUEST, true)
     );
+}
+
+#[test]
+fn the_core_reports_the_device_it_accepted_with_its_stable_id() {
+    let (mut driver, owner) = greeted_driver();
+    let mic = driver
+        .create_device(owner, VD_KIND_MICROPHONE, "Agent Mic")
+        .unwrap();
+    let speaker = driver
+        .create_device(owner, VD_KIND_SPEAKER, "Agent Speaker")
+        .unwrap();
+
+    let reported = [driver.device_info(mic), driver.device_info(speaker)];
+
+    // The stable IDs ADR 0015 fixed (the SDK's and the driver's vectors).
+    assert_eq!(
+        reported,
+        [
+            Some(DeviceInfo {
+                kind: VD_KIND_MICROPHONE,
+                name: "Agent Mic".to_string(),
+                stable_id: 0xBD5F_5BFD_A42F_6F12,
+            }),
+            Some(DeviceInfo {
+                kind: VD_KIND_SPEAKER,
+                name: "Agent Speaker".to_string(),
+                stable_id: 0xE4C7_C9E6_384B_9C77,
+            }),
+        ]
+    );
+}
+
+#[test]
+fn an_unknown_or_removed_device_has_no_info() {
+    let (mut driver, owner) = greeted_driver();
+    let mic = driver
+        .create_device(owner, VD_KIND_MICROPHONE, "Agent Mic")
+        .unwrap();
+    driver.remove_device(owner, mic);
+
+    assert_eq!(
+        (
+            driver.device_info(mic),
+            driver.device_info(0),
+            driver.device_info(99)
+        ),
+        (None, None, None)
+    );
+}
+
+#[test]
+fn stable_ids_are_case_sensitive_and_hash_the_kind_first() {
+    let ids = [
+        stable_id(VD_KIND_MICROPHONE, "agent mic"),
+        stable_id(VD_KIND_SPEAKER, "Agent Mic"),
+    ];
+
+    assert_eq!(ids, [0xA221_6886_8E50_FF12, 0x44E8_BD5D_8B4A_93E3]);
 }

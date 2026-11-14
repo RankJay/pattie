@@ -239,6 +239,38 @@ impl Driver {
     }
 }
 
+impl Driver {
+    /// What the core reports of a live Device it accepted
+    /// (`vd_core_device_info`); `None` for an unknown or removed one.
+    pub fn device_info(&self, device_id: u32) -> Option<DeviceInfo> {
+        // SAFETY: a plain C struct of integers: all zeros is a valid value.
+        let mut info = unsafe { MaybeUninit::<vd_device_info>::zeroed().assume_init() };
+        // SAFETY: `core` is live; `info` is a live out-parameter.
+        let found = unsafe { vd_core_device_info(&*self.core, device_id, &mut info) };
+        found.then(|| DeviceInfo {
+            kind: info.kind,
+            name: String::from_utf16(&info.name[..info.name_len as usize])
+                .expect("the core accepts only valid names"),
+            stable_id: info.stable_id,
+        })
+    }
+}
+
+/// A Device as `vd_core_device_info` reports it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeviceInfo {
+    pub kind: u32,
+    pub name: String,
+    pub stable_id: u64,
+}
+
+/// The core's stable ID of a Device with this kind and name (ADR 0015).
+pub fn stable_id(kind: u32, name: &str) -> u64 {
+    let units: Vec<u16> = name.encode_utf16().collect();
+    // SAFETY: `units` holds `units.len()` code units, read only during the call.
+    unsafe { vd_stable_id(kind, units.as_ptr(), units.len() as u32) }
+}
+
 /// One live Device as the core records it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LiveDevice {
@@ -615,6 +647,20 @@ impl Ring {
 
     /// A recording starts: the driver drops stale Microphone audio, keeping at
     /// most `keep_frames` of the newest (ADR 0014).
+    /// The driver's Gap and Overflow totals, through the core's accessor.
+    pub fn driver_losses(&self) -> (u64, u64) {
+        let (mut gap, mut overflow) = (0u64, 0u64);
+        // SAFETY: the view is attached and lives as long as `self`.
+        unsafe { vd_ring_losses(&*self.view, &mut gap, &mut overflow) };
+        (gap, overflow)
+    }
+
+    /// As `driver_skip_stale`, returning how many frames were skipped.
+    pub fn driver_skip_stale_counted(&mut self, keep_frames: u32) -> u64 {
+        // SAFETY: the view is attached and lives as long as `self`.
+        unsafe { vd_ring_skip_stale(&mut *self.view, keep_frames) }
+    }
+
     pub fn driver_skip_stale(&mut self, keep_frames: u32) {
         // SAFETY: `view` was attached to `self.memory`, which lives as long as it.
         unsafe { vd_ring_skip_stale(&mut *self.view, keep_frames) };

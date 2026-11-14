@@ -81,13 +81,12 @@ static ULONGLONG VdTicksToUs(const VD_STREAM_CONTEXT *StreamCtx, ULONGLONG Ticks
 static VOID VdTraceStreamStopped(const VD_STREAM_CONTEXT *StreamCtx, const char *Reason)
 {
     VD_CIRCUIT_DEVICE_CONTEXT *device = StreamCtx->Device;
-    ULONGLONG gapFrames = 0;
-    ULONGLONG overflowFrames = 0;
+    uint64_t gapFrames = 0;
+    uint64_t overflowFrames = 0;
     ULONGLONG averageLatenessTicks = StreamCtx->Passes == 0 ? 0 : StreamCtx->TotalLatenessTicks / StreamCtx->Passes;
 
     if (ExAcquireRundownProtection(&device->Rundown)) {
-        gapFrames = device->Ring->gap_frames;
-        overflowFrames = device->Ring->overflow_frames;
+        vd_ring_losses(device->Ring, &gapFrames, &overflowFrames);
         ExReleaseRundownProtection(&device->Rundown);
     }
     TraceLoggingWrite(VdTraceProvider, "StreamStopped",
@@ -353,12 +352,7 @@ static ULONGLONG VdSkipStaleCapture(VD_STREAM_CONTEXT *StreamCtx)
     if (device->Kind != VD_KIND_MICROPHONE || !ExAcquireRundownProtection(&device->Rundown)) {
         return 0;
     }
-    {
-        uint64_t before = device->Ring->read_frames;
-
-        vd_ring_skip_stale(device->Ring, StreamCtx->PacketSize / StreamCtx->BytesPerFrame);
-        skipped = device->Ring->read_frames - before;
-    }
+    skipped = vd_ring_skip_stale(device->Ring, StreamCtx->PacketSize / StreamCtx->BytesPerFrame);
     ExReleaseRundownProtection(&device->Rundown);
     return skipped;
 }
