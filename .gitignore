@@ -10,6 +10,8 @@
 
 # Python binding: uv's virtual environment and build output
 bindings/python/.venv/
+integrations/pipecat/.venv/
+.pytest_cache/
 __pycache__/
 *.pyd
 *.so

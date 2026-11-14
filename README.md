@@ -673,8 +673,8 @@ channels, installer self-heal and packaging, the macOS backend, bindings for C,
 Node and Swift.
 
 Built since the v0 scope was set: 44.1, 48 and 96 kHz with 1 to 8 channels, drift
-compensation and frame timestamps, barge-in playout, the Linux backend, and the
-Python binding.
+compensation and frame timestamps, barge-in playout, the Linux backend, the
+Python binding, and a Pipecat transport (`integrations/pipecat`).
 
 ## License
 
