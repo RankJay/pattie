@@ -8,8 +8,8 @@ use crate::abi;
 use crate::transport::{Connection, Transport};
 use std::ptr::{null, null_mut};
 use windows_sys::Win32::Foundation::{
-    CloseHandle, ERROR_ACCESS_DENIED, ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, GENERIC_READ,
-    GENERIC_WRITE, GetLastError, HANDLE, INVALID_HANDLE_VALUE,
+    CloseHandle, ERROR_ACCESS_DENIED, ERROR_BUSY, ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND,
+    GENERIC_READ, GENERIC_WRITE, GetLastError, HANDLE, INVALID_HANDLE_VALUE,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
@@ -76,9 +76,20 @@ impl Connection for WindowsConnection {
         };
         if ok == 0 {
             // SAFETY: always safe to call.
-            return Err(Error::Os(unsafe { GetLastError() } as i32));
+            return Err(ioctl_error(unsafe { GetLastError() }));
         }
         Ok(returned as usize)
+    }
+}
+
+/// What a failed command's Windows error means to the app. The driver refuses a
+/// Create at once with `ERROR_BUSY` while too many requests hold memory locked
+/// (security review 2026-11-14, finding 2): worth its own error, since a retry
+/// succeeds.
+fn ioctl_error(code: u32) -> Error {
+    match code {
+        ERROR_BUSY => Error::Busy,
+        other => Error::Os(other as i32),
     }
 }
 
@@ -87,5 +98,18 @@ impl Drop for WindowsConnection {
         // Closing the handle makes the driver remove this Owner's Devices.
         // SAFETY: the handle came from CreateFileW and is closed exactly once.
         unsafe { CloseHandle(self.0) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_drivers_busy_refusal_is_its_own_error_and_others_keep_their_code() {
+        // The driver refuses a Create at once while 16 already hold a pinned Ring
+        // (security review 2026-11-14, finding 2).
+        assert_eq!(ioctl_error(170), Error::Busy);
+        assert_eq!(ioctl_error(5), Error::Os(5));
     }
 }

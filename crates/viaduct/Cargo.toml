@@ -3,7 +3,7 @@ name = "viaduct"
 version = "0.1.0"
 edition.workspace = true
 description = "Create named virtual microphones and speakers that other apps see as real audio devices"
-publish = false # the crates.io name is taken; rename before publishing (.ai/POST-V0.md)
+publish = false # the crates.io name is taken; rename before publishing (.ai/status/post-v0.md)
 
 [dependencies]
 

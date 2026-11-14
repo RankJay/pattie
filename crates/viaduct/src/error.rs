@@ -44,6 +44,10 @@ pub enum Error {
     AlreadyTaken,
     /// Windows refused to create the Device's endpoint.
     System,
+    /// Windows: the driver is handling too many Create requests at once (16 may
+    /// hold memory locked at a time) and refused this one. Retrying shortly
+    /// succeeds; an app creating one Device at a time never meets it.
+    Busy,
     /// The driver rejected a request this SDK built: an SDK or driver bug.
     Protocol(u32),
     /// An operating-system error code.
@@ -97,6 +101,10 @@ impl fmt::Display for Error {
             Error::WrongKind => write!(f, "microphones have writers and speakers have readers"),
             Error::AlreadyTaken => write!(f, "this device's writer or reader is already in use"),
             Error::System => write!(f, "Windows refused to create the audio endpoint"),
+            Error::Busy => write!(
+                f,
+                "the driver is busy with too many Device requests at once; try again"
+            ),
             Error::Protocol(status) => write!(f, "driver rejected the request (status {status})"),
             Error::Os(code) => write!(f, "operating-system error {code}"),
         }
@@ -110,7 +118,7 @@ mod tests {
     use super::Error;
 
     /// Every variant, so a new one without its own message fails here.
-    const ALL: [Error; 18] = [
+    const ALL: [Error; 19] = [
         Error::DriverNotInstalled,
         Error::AudioServerUnavailable,
         Error::PulseAudioInUse,
@@ -127,6 +135,7 @@ mod tests {
         Error::WrongKind,
         Error::AlreadyTaken,
         Error::System,
+        Error::Busy,
         Error::Protocol(7),
         Error::Os(5),
     ];
@@ -178,5 +187,14 @@ mod tests {
     fn protocol_and_os_errors_show_their_code() {
         assert!(Error::Protocol(7).to_string().contains("status 7"));
         assert!(Error::Os(5).to_string().contains("error 5"));
+    }
+
+    #[test]
+    fn the_busy_error_says_to_try_again() {
+        assert!(
+            Error::Busy.to_string().contains("try again"),
+            "{}",
+            Error::Busy
+        );
     }
 }

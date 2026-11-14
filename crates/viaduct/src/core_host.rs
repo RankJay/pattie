@@ -309,11 +309,14 @@ mod tests {
     fn stub(fail: bool) -> Stub {
         stub_in(
             fail,
-            &format!("viaduct-test-{}-{}", std::process::id(), next_namespace()),
+            &format!("viaduct-stub-{}-{}", std::process::id(), next_namespace()),
         )
     }
 
-    /// A unique number per call, for test claim namespaces.
+    /// A unique number per call, for test claim namespaces. The prefix,
+    /// `viaduct-stub-`, is these tests' own: `TestBackend` numbers its
+    /// namespaces `viaduct-test-` from 0 too, and in one test binary the two
+    /// would otherwise share one (a `DuplicateName` flake, found 2026-11-14).
     fn next_namespace() -> u64 {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
@@ -428,7 +431,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn two_apps_cannot_hold_the_same_name_at_once() {
-        let namespace = format!("viaduct-test-{}-apps", std::process::id());
+        let namespace = format!("viaduct-stub-{}-apps", std::process::id());
         let (first_app, _, _) = stub_in(false, &namespace);
         let (second_app, second_log, _) = stub_in(false, &namespace);
         let _mic = Device::builder()
@@ -460,7 +463,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn a_name_is_free_for_other_apps_once_its_device_is_gone() {
-        let namespace = format!("viaduct-test-{}-free", std::process::id());
+        let namespace = format!("viaduct-stub-{}-free", std::process::id());
         let (first_app, _, _) = stub_in(false, &namespace);
         let (second_app, _, _) = stub_in(false, &namespace);
         let mic = Device::builder()

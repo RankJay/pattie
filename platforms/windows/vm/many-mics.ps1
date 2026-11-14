@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
     Runs several `viaduct-cli mic` instances at once from one window. For the
-    test VM's run (c), 8 Devices at once (.ai/MEASUREMENTS.md).
+    test VM's run (c), 8 Devices at once (.ai/status/measurements.md).
 
 .DESCRIPTION
     Starts -Count separate viaduct-cli processes (separate Owners, as separate

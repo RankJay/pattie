@@ -13,7 +13,7 @@
 
     No live kernel debugger: on a host where Windows' own hypervisor runs (VBS,
     WSL), VMware guests bugcheck with NMI_HARDWARE_FAILURE (0x80) whenever one is
-    attached, a known, unfixed VMware issue (.ai/VM-FINDINGS.md). Crashes are analysed
+    attached, a known, unfixed VMware issue (.ai/ops/vm-findings.md). Crashes are analysed
     from their minidumps instead.
 #>
 [CmdletBinding()]

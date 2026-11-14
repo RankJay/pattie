@@ -41,7 +41,7 @@ if (-not $admin) { throw 'Run this as Administrator.' }
 $testSigning = ((& bcdedit /enum '{current}') -join "`n") -match '(?mi)^testsigning\s+Yes'
 
 if ($Signed) {
-    if ($testSigning) { throw 'Test signing is on: the gate run needs the "clean" snapshot (see .ai/VM-STEPS.md, section H).' }
+    if ($testSigning) { throw 'Test signing is on: the gate run needs the "clean" snapshot (see .ai/ops/vm-steps.md, section H).' }
     if (-not (Confirm-SecureBootUEFI)) { throw 'Secure Boot is off: the gate run needs it on (the "clean" snapshot).' }
     $package = (Resolve-Path $Signed).Path
     $catalog = Get-AuthenticodeSignature (Join-Path $package 'viaduct.cat')
@@ -51,7 +51,7 @@ if ($Signed) {
     Write-Host "== Microsoft-signed package: $($catalog.SignerCertificate.Subject)"
 } else {
     if (-not $testSigning) {
-        throw 'Test signing is off. Run prepare-vm.ps1 first and reboot (see .ai/VM-STEPS.md).'
+        throw 'Test signing is off. Run prepare-vm.ps1 first and reboot (see .ai/ops/vm-steps.md).'
     }
     $package = $here
     Write-Host '== Trusting the test certificate (this VM only)'

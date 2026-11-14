@@ -140,6 +140,8 @@ fn to_py(error: sdk::Error) -> PyErr {
             "{text}: a Microphone has one writer, either write() or a playout(); a Speaker has one reader"
         )),
         sdk::Error::System => SystemRefused::new_err(text),
+        // Windows refused for now, not for good; its message says to retry.
+        sdk::Error::Busy => SystemRefused::new_err(text),
         sdk::Error::Protocol(_) => ProtocolError::new_err(text),
         sdk::Error::Os(_) => OsError::new_err(text),
         _ => Error::new_err(text),

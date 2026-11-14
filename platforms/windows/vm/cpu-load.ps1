@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
     Keeps every core busy until Enter is pressed. For measurement runs in the
-    test VM only (.ai/MEASUREMENTS.md, run b).
+    test VM only (.ai/status/measurements.md, run b).
 
 .DESCRIPTION
     Starts one busy loop per logical processor at normal priority, so streaming

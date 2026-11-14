@@ -12,7 +12,7 @@
     4. Collects everything the VM needs into target\vm-package\.
 
     It does not install, load or trust anything on this machine. Copy the package
-    folder into the VM and run install-in-vm.ps1 there (.ai/VM-STEPS.md).
+    folder into the VM and run install-in-vm.ps1 there (.ai/ops/vm-steps.md).
 #>
 [CmdletBinding()]
 param(

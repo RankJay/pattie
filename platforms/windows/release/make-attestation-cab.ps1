@@ -15,7 +15,7 @@
     script prints the signtool command, since that certificate lives on its own
     token or service and never on this machine's build path.
 
-    Steps around it (upload, download, gate run): .ai/VM-STEPS.md, section H.
+    Steps around it (upload, download, gate run): .ai/ops/vm-steps.md, section H.
 #>
 [CmdletBinding()]
 param(
@@ -99,4 +99,4 @@ Write-Host "Cab ready: $cab"
 & expand.exe -D $cab | Out-Host
 Write-Host 'Next, with the EV certificate (its token or signing service), sign the cab:'
 Write-Host "  signtool sign /fd sha256 /tr http://timestamp.digicert.com /td sha256 /n `"<EV certificate subject>`" `"$cab`""
-Write-Host 'then submit it in Partner Center (.ai/VM-STEPS.md, section H).'
+Write-Host 'then submit it in Partner Center (.ai/ops/vm-steps.md, section H).'

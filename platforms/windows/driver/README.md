@@ -35,7 +35,7 @@ certificate is created), and catalog generation and deployment are disabled.
 `-p:ViaductDriverVersion=a.b.c.d` sets it. A release goes through
 `platforms/windows/release/make-attestation-cab.ps1 -Version a.b.c.d`, which builds
 with that version and packs the `.cab` for Microsoft's attestation signing
-(`.ai/VM-STEPS.md`, section H).
+(`.ai/ops/vm-steps.md`, section H).
 
 On a machine, the driver goes on with `viaduct-cli install <package folder>` and
 comes off with `viaduct-cli uninstall`, both as administrator (ADR 0016): install
@@ -55,12 +55,12 @@ driver of the same or a newer version.
   until a session listens. Events come only from lifecycle callbacks; the timer pass
   just updates counters. The provider must be unregistered on every `DriverEntry`
   failure and on unload, or the system crashes later (`src/driver.c`). Recording
-  and reading it: `.ai/VM-STEPS.md`, section G.
+  and reading it: `.ai/ops/vm-steps.md`, section G.
 
 ## Checked in the test VM (2026-11-07)
 
 First load and the six checks, in a VMware guest with test signing and Driver
-Verifier (`.ai/VM-STEPS.md`; what it took: `.ai/VM-FINDINGS.md`, ADR 0013):
+Verifier (`.ai/ops/vm-steps.md`; what it took: `.ai/ops/vm-findings.md`, ADR 0013):
 
 1. A runtime child shows up as an audio endpoint: passes.
 2. The endpoint is named after the Device and carries the app's audio (the CLI's
