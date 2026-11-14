@@ -100,7 +100,9 @@ static vd_status create_device(vd_core *core, const vd_owner *owner,
     free_slot->owner = owner;
     free_slot->name_len = request->name_len;
     copy_bytes(free_slot->name, request->name, sizeof free_slot->name);
-    free_slot->stable_id = vd_stable_id(request->kind, free_slot->name, free_slot->name_len);
+    /* The format as attach read it: a zeroed header is 48 kHz mono here too. */
+    free_slot->stable_id = vd_stable_id(request->kind, free_slot->name, free_slot->name_len,
+                                        ring.sample_rate, ring.channels);
     free_slot->ring = ring;
 
     reply.device_id = free_slot->id;
@@ -207,7 +209,8 @@ bool vd_core_device_info(const vd_core *core, uint32_t device_id, vd_device_info
     return false;
 }
 
-uint64_t vd_stable_id(uint32_t kind, const uint16_t *name, uint32_t name_len)
+uint64_t vd_stable_id(uint32_t kind, const uint16_t *name, uint32_t name_len,
+                      uint32_t sample_rate, uint32_t channels)
 {
     const uint64_t prime = 0x100000001b3ull;
     uint64_t hash = 0xcbf29ce484222325ull;
@@ -218,6 +221,12 @@ uint64_t vd_stable_id(uint32_t kind, const uint16_t *name, uint32_t name_len)
         hash = (hash ^ (uint8_t)(name[i] & 0xFFu)) * prime;
         hash = (hash ^ (uint8_t)(name[i] >> 8)) * prime;
     }
+    /* Little-endian too: the rate's 4 bytes, then the channel count's 2. */
+    for (uint32_t shift = 0; shift < 32; shift += 8) {
+        hash = (hash ^ (uint8_t)(sample_rate >> shift)) * prime;
+    }
+    hash = (hash ^ (uint8_t)(channels & 0xFFu)) * prime;
+    hash = (hash ^ (uint8_t)((channels >> 8) & 0xFFu)) * prime;
     return hash == 0 ? 1u : hash;
 }
 

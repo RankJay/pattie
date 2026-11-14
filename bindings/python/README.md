@@ -96,7 +96,7 @@ in step with video.
 | The model's format isn't the device's | Pass `format=`; it converts (8 to 96 kHz, f32, pcm16, μ-law; 1 to 8 channels, to or from mono) and keeps state between writes, so chunk edges don't click |
 | The device should be stereo, 44.1 or 96 kHz | `Microphone(name, rate=44_100, channels=2)`: the device itself runs in that format (1 to 8 channels; 44.1, 48 or 96 kHz), and other apps' audio is converted by the system |
 | A blocking `write` freezes async code | `viaduct.aio`; the sync calls also release the GIL while they wait |
-| Picking a device by list index breaks when devices change | You create the device and give it its name, and `stable_id()` gives the same ID every time |
+| Picking a device by list index breaks when devices change | You create the device and give it its name, and `stable_id()` gives the same ID every time for the same name and format |
 | Interrupting means killing the player | `Playout.interrupt()` stops within about 20 ms and says how much was heard |
 | A relayed stream drifts: seconds of delay after a few hours | `live_writer()` holds its latency with drift compensation |
 | Audio goes missing without a word | Lost audio is logged on the `viaduct` logger; `strict=True` raises `AudioLost`; `stats` has the counts |

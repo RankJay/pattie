@@ -264,11 +264,19 @@ pub struct DeviceInfo {
     pub stable_id: u64,
 }
 
-/// The core's stable ID of a Device with this kind and name (ADR 0015).
-pub fn stable_id(kind: u32, name: &str) -> u64 {
+/// The core's stable ID of a Device with this kind, name and format (ADR 0015).
+pub fn stable_id(kind: u32, name: &str, sample_rate: u32, channels: u16) -> u64 {
     let units: Vec<u16> = name.encode_utf16().collect();
     // SAFETY: `units` holds `units.len()` code units, read only during the call.
-    unsafe { vd_stable_id(kind, units.as_ptr(), units.len() as u32) }
+    unsafe {
+        vd_stable_id(
+            kind,
+            units.as_ptr(),
+            units.len() as u32,
+            sample_rate,
+            u32::from(channels),
+        )
+    }
 }
 
 /// One live Device as the core records it.

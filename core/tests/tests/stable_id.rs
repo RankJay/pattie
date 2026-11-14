@@ -8,8 +8,8 @@ use viaduct_core_tests::ffi::{VD_KIND_MICROPHONE, VD_KIND_SPEAKER};
 use viaduct_core_tests::stable_id as core_stable_id;
 
 /// The SDK's ID, back as the hash the core computes.
-fn sdk_hash(kind: Kind, name: &str) -> u64 {
-    let id = viaduct::stable_id(kind, name);
+fn sdk_hash(kind: Kind, name: &str, rate: u32, channels: u16) -> u64 {
+    let id = viaduct::stable_id(kind, name, rate, channels);
     u64::from_str_radix(&id[1..], 16).expect("16 hex digits after the kind letter")
 }
 
@@ -46,18 +46,21 @@ impl Names {
 }
 
 #[test]
-fn the_sdks_stable_id_is_the_cores_for_every_name_tried() {
+fn the_sdks_stable_id_is_the_cores_for_every_name_and_format_tried() {
     let mut names = Names(0x9E37_79B9_7F4A_7C15);
     for _ in 0..5_000 {
         let name = names.name();
+        // Every Device format, by the name's own randomness.
+        let rate = [44_100, 48_000, 96_000][(names.next() % 3) as usize];
+        let channels = (names.next() % 8 + 1) as u16;
         for (kind, core_kind) in [
             (Kind::Microphone, VD_KIND_MICROPHONE),
             (Kind::Speaker, VD_KIND_SPEAKER),
         ] {
             assert_eq!(
-                sdk_hash(kind, &name),
-                core_stable_id(core_kind, &name),
-                "{kind:?} {name:?}"
+                sdk_hash(kind, &name, rate, channels),
+                core_stable_id(core_kind, &name, rate, channels),
+                "{kind:?} {name:?} {rate} {channels}"
             );
         }
     }
@@ -65,6 +68,6 @@ fn the_sdks_stable_id_is_the_cores_for_every_name_tried() {
 
 #[test]
 fn the_kind_letter_is_the_one_each_host_writes() {
-    assert!(viaduct::stable_id(Kind::Microphone, "x").starts_with('M'));
-    assert!(viaduct::stable_id(Kind::Speaker, "x").starts_with('S'));
+    assert!(viaduct::stable_id(Kind::Microphone, "x", 48_000, 1).starts_with('M'));
+    assert!(viaduct::stable_id(Kind::Speaker, "x", 48_000, 1).starts_with('S'));
 }

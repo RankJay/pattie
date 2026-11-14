@@ -234,9 +234,9 @@ impl Drop for HostConnection {
     }
 }
 
-/// `node.name`: `viaduct.` plus the Device's stable identity (ADR 0015) as the
-/// core computed it: the kind letter and 16 uppercase hex digits, as
-/// `viaduct::stable_id` writes it.
+/// `node.name`: `viaduct.` plus the Device's stable identity (ADR 0015: kind,
+/// name and format) as the core computed it: the kind letter and 16 uppercase
+/// hex digits, as `viaduct::stable_id` writes it.
 pub(crate) fn node_name(kind: Kind, stable_id: u64) -> String {
     let letter = match kind {
         Kind::Microphone => 'M',
@@ -349,7 +349,7 @@ mod tests {
         assert_eq!(mic.id(), 1);
         assert_eq!(
             log.lines(),
-            ["created Microphone Agent Mic viaduct.MBD5F5BFDA42F6F12"]
+            ["created Microphone Agent Mic viaduct.M41B28DFC5B21A0BE"]
         );
     }
 
@@ -482,13 +482,13 @@ mod tests {
     fn a_node_is_named_viaduct_dot_its_stable_id() {
         assert_eq!(
             [
-                node_name(Kind::Microphone, 0xBD5F_5BFD_A42F_6F12),
+                node_name(Kind::Microphone, 0x41B2_8DFC_5B21_A0BE),
                 node_name(Kind::Speaker, 0x0000_0000_0000_00AB),
             ],
             [
                 format!(
                     "viaduct.{}",
-                    crate::stable_id(Kind::Microphone, "Agent Mic")
+                    crate::stable_id(Kind::Microphone, "Agent Mic", 48_000, 1)
                 ),
                 "viaduct.S00000000000000AB".to_string(),
             ]

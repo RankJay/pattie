@@ -47,10 +47,13 @@ def test_converting_in_pieces_gives_the_same_as_at_once() -> None:
     assert joined == whole
 
 
-def test_a_stable_id_depends_only_on_kind_and_name() -> None:
+def test_a_stable_id_depends_only_on_kind_name_and_format() -> None:
     first = viaduct.stable_id("microphone", "Agent Mic")
 
-    assert first == viaduct.stable_id("microphone", "Agent Mic")
+    assert first == viaduct.stable_id("microphone", "Agent Mic", rate=48_000, channels=1)
+    assert first == "M41B28DFC5B21A0BE"
     assert first != viaduct.stable_id("speaker", "Agent Mic")
+    assert first != viaduct.stable_id("microphone", "Agent Mic", rate=96_000)
+    assert first != viaduct.stable_id("microphone", "Agent Mic", channels=2)
     with pytest.raises(ValueError, match="microphone"):
         viaduct.stable_id("camera", "Agent Mic")  # ty: ignore[invalid-argument-type]

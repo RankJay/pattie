@@ -166,10 +166,11 @@ channels (48 kHz mono by default), float; at most 8 Devices, names up to 63
 characters, case-sensitive. Windows may open the endpoint as float or 16-bit PCM;
 the driver converts, the app always sees float. Writers and readers count in
 frames, and a write must end on a whole frame (ADR 0023).
-- **Same name, same endpoint.** A Device gets an ID derived from its kind and name
-(`viaduct::stable_id`), so the system reuses the endpoint and keeps the user's
-settings for it: the circuit device's instance ID on Windows, the PipeWire
-`node.name` on Linux.
+- **Same name and format, same endpoint.** A Device gets an ID derived from its
+kind, name and format (`viaduct::stable_id`), so the system reuses the endpoint and
+keeps the user's settings for it: the circuit device's instance ID on Windows, the
+PipeWire `node.name` on Linux. Another format is another endpoint, because Windows
+keeps a saved format per endpoint (ADR 0015).
 - **Any interactive user's app may create a Device, without elevation.** Sandboxed
 Store apps may not. Abuse protections are post-v0.
 - **Installing is a separate admin step,** done once: `viaduct-cli install`. The SDK

@@ -1316,10 +1316,12 @@ impl Converter {
     }
 }
 
-/// The stable ID behind a Device's endpoint: the same name and kind always give
-/// the same one, which is how apps remember a chosen device (ADR 0015).
+/// The stable ID behind a Device's endpoint: the same kind, name and format
+/// (rate and channels, as given to Microphone or Speaker) always give the same
+/// one, which is how apps remember a chosen device (ADR 0015).
 #[pyfunction]
-fn stable_id(kind: &str, name: &str) -> PyResult<String> {
+#[pyo3(signature = (kind, name, rate = 48_000, channels = 1))]
+fn stable_id(kind: &str, name: &str, rate: u32, channels: u16) -> PyResult<String> {
     let kind = match kind {
         "microphone" => sdk::Kind::Microphone,
         "speaker" => sdk::Kind::Speaker,
@@ -1329,7 +1331,7 @@ fn stable_id(kind: &str, name: &str) -> PyResult<String> {
             )));
         }
     };
-    Ok(sdk::stable_id(kind, name))
+    Ok(sdk::stable_id(kind, name, rate, channels))
 }
 
 #[cfg(feature = "test-backend")]

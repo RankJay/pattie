@@ -14,7 +14,12 @@ const RATE: f32 = 48_000.0;
 
 /// `node.name` for a Device (ADR 0018), so the tools can target it.
 fn node_name(kind: Kind, name: &str) -> String {
-    format!("viaduct.{}", viaduct::stable_id(kind, name))
+    node_name_at(kind, name, 48_000, 1)
+}
+
+/// As `node_name`, for a Device at `rate` with `channels`.
+fn node_name_at(kind: Kind, name: &str, rate: u32, channels: u16) -> String {
+    format!("viaduct.{}", viaduct::stable_id(kind, name, rate, channels))
 }
 
 /// A 440 Hz tone at amplitude 0.5, continuing from `phase`.
@@ -354,7 +359,7 @@ fn a_stereo_44_1_khz_microphone_reaches_a_recording_channel_by_channel() {
                 "3",
                 "pw-record",
                 "--target",
-                &node_name(Kind::Microphone, &name),
+                &node_name_at(Kind::Microphone, &name, 44_100, 2),
             ])
             .args(["--rate", "44100", "--channels", "2", "--format", "f32"])
             .arg(&file)
@@ -410,7 +415,7 @@ fn a_stereo_96_khz_speaker_hands_the_app_each_channel() {
 
     let mut heard = Vec::new();
     let mut player = Command::new("pw-play")
-        .args(["--target", &node_name(Kind::Speaker, &name)])
+        .args(["--target", &node_name_at(Kind::Speaker, &name, 96_000, 2)])
         .arg(&file)
         .spawn()
         .unwrap();

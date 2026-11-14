@@ -45,7 +45,7 @@ typedef struct vd_device {
     const vd_owner *owner;
     uint32_t name_len;
     uint16_t name[VD_DEVICE_NAME_MAX];
-    uint64_t stable_id;        /* vd_stable_id of kind and name, set at create */
+    uint64_t stable_id;        /* vd_stable_id of kind, name and format, set at create */
     vd_ring ring;
 } vd_device;
 
@@ -103,14 +103,19 @@ vd_ring *vd_core_device_ring(vd_core *core, uint32_t device_id);
 bool vd_core_device_info(const vd_core *core, uint32_t device_id, vd_device_info *info);
 
 /*
- * A Device's stable identity (ADR 0015): the 64-bit FNV-1a hash of the kind byte
- * (1 or 2) followed by the name's UTF-16LE bytes; a hash of 0 becomes 1, so 0
- * can mean "free". Names are case-sensitive (ADR 0004). The one hash the system
- * uses; the SDK's Rust copy (`viaduct::stable_id`) is checked against it
- * (core/tests/tests/stable_id.rs). How it's written is each host's: the driver's
- * instance ID, PipeWire's node.name.
+ * A Device's stable identity (ADR 0015, amended 2026-11-14): the 64-bit FNV-1a
+ * hash of the kind byte (1 or 2), the name's UTF-16LE bytes, then the sample
+ * rate (4 bytes) and channel count (2 bytes), little-endian; a hash of 0 becomes
+ * 1, so 0 can mean "free". Names are case-sensitive (ADR 0004). The format is in
+ * it because Windows saves a format per endpoint: the same name in another format
+ * must be another endpoint, or Windows opens it in a format the pin no longer
+ * offers. The one hash the system uses; the SDK's Rust copy
+ * (`viaduct::stable_id`) is checked against it (core/tests/tests/stable_id.rs).
+ * How it's written is each host's: the driver's instance ID, PipeWire's
+ * node.name.
  */
-uint64_t vd_stable_id(uint32_t kind, const uint16_t *name, uint32_t name_len);
+uint64_t vd_stable_id(uint32_t kind, const uint16_t *name, uint32_t name_len,
+                      uint32_t sample_rate, uint32_t channels);
 
 /*
  * Seam B: the Ring, driver side. Attaches to a Ring the SDK laid out at `memory`,
