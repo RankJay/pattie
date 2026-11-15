@@ -106,6 +106,7 @@ static VOID VdEvtFileCreate(WDFDEVICE Device, WDFREQUEST Request, WDFFILEOBJECT 
         return;
     }
     vd_owner_init(&VdFileContext(FileObject)->Owner);
+    InterlockedIncrement(&VdDriverContext(WdfGetDriver())->OpenOwners); /* until cleanup */
     WdfRequestComplete(Request, STATUS_SUCCESS);
 }
 
@@ -117,6 +118,7 @@ static VOID VdEvtFileCleanup(WDFFILEOBJECT FileObject)
     WdfWaitLockAcquire(ctx->Lock, NULL);
     VdOwnerDevicesRemove(ctx, &VdFileContext(FileObject)->Owner);
     WdfWaitLockRelease(ctx->Lock);
+    InterlockedDecrement(&ctx->OpenOwners); /* counted in VdEvtFileCreate */
 }
 
 /* Pins the Ring of a Create Device request; anything that can't be pinned reaches
@@ -269,6 +271,17 @@ static VOID VdEvtIoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request, size_t Outp
     }
 
     WdfWaitLockAcquire(ctx->Lock, NULL);
+    if (ctx->Root == NULL) {
+        /*
+         * The root was removed with this Owner's handle still open (a forced
+         * removal the veto couldn't stop; ADR 0024). Its Devices are gone and
+         * none can be made: fail the command itself, which the SDK reports as
+         * "driver removed" (ERROR_DEVICE_REMOVED).
+         */
+        WdfWaitLockRelease(ctx->Lock);
+        WdfRequestComplete(Request, STATUS_DEVICE_REMOVED);
+        return;
+    }
     if (command == VD_CMD_CREATE_DEVICE) {
         envelope.status = VdDeviceCreate(ctx, owner, input, InputBufferLength, &requestCtx->Mdl,
                                          &requestCtx->WakeEvent, output + sizeof envelope,

@@ -66,7 +66,10 @@ if ($Signed) {
 
 Write-Host '== Installing the driver (viaduct-cli install, ADR 0016)'
 & (Join-Path $here 'viaduct-cli.exe') install $package
-if ($LASTEXITCODE -ne 0) { throw "viaduct-cli install failed ($LASTEXITCODE)" }
+$installExit = $LASTEXITCODE
+# 3010: installed, finished at the next restart (an app holds a Device; ADR 0024).
+if ($installExit -notin 0, 3010) { throw "viaduct-cli install failed ($installExit)" }
+if ($installExit -eq 3010) { Write-Host '== Exit 3010: Windows finishes the update at the next restart' }
 
 if ($Verifier) {
     Write-Host '== Turning on Driver Verifier for viaduct.sys'

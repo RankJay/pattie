@@ -6,12 +6,14 @@
 
 use super::{
     DriverUpdate, ENDPOINT_HARDWARE_ID, Outcome, ROOT_HARDWARE_ID, decode_inf, has_hardware_id,
-    inf_lists_hardware_id, install_outcome, parse_multi_sz, to_multi_sz, uninstall_outcome,
+    inf_lists_hardware_id, install_outcome, parse_multi_sz, restart_pending, to_multi_sz,
+    uninstall_outcome,
 };
 use std::path::{Path, PathBuf};
 use windows::Win32::Devices::DeviceAndDriverInstallation::{
-    DICD_GENERATE_ID, DIF_REGISTERDEVICE, DIF_REMOVE, DIGCF_ALLCLASSES, DiUninstallDevice,
-    HDEVINFO, SP_DEVINFO_DATA, SPDRP_HARDWAREID, SUOI_FORCEDELETE, SetupDiCallClassInstaller,
+    CM_DEVNODE_STATUS_FLAGS, CM_Get_DevNode_Status, CM_PROB, CR_SUCCESS, DICD_GENERATE_ID,
+    DIF_REGISTERDEVICE, DIF_REMOVE, DIGCF_ALLCLASSES, DN_HAS_PROBLEM, DiUninstallDevice, HDEVINFO,
+    SP_DEVINFO_DATA, SPDRP_HARDWAREID, SUOI_FORCEDELETE, SetupDiCallClassInstaller,
     SetupDiCreateDeviceInfoList, SetupDiCreateDeviceInfoW, SetupDiDestroyDeviceInfoList,
     SetupDiEnumDeviceInfo, SetupDiGetClassDevsW, SetupDiGetDeviceInstanceIdW,
     SetupDiGetDeviceRegistryPropertyW, SetupDiGetINFClassW, SetupDiSetDeviceRegistryPropertyW,
@@ -284,7 +286,9 @@ pub fn install(package: &str, log: &mut dyn FnMut(&str)) -> Result<Outcome, Stri
         }
         Err(e) => DriverUpdate::Failed(format!("{} ({e})", inf.display())),
     };
-    match install_outcome(update, reboot.as_bool(), created.is_some()) {
+    // The flag alone misses an update that left the root waiting (ADR 0024).
+    let reboot = restart_pending(reboot.as_bool(), &root_problems()?);
+    match install_outcome(update, reboot, created.is_some()) {
         Ok(outcome) => {
             log(&format!("{outcome} ({})", inf.display()));
             Ok(outcome)
@@ -296,6 +300,24 @@ pub fn install(package: &str, log: &mut dyn FnMut(&str)) -> Result<Outcome, Stri
             Err(message)
         }
     }
+}
+
+/// The problem codes of the root devices that have one (Device Manager's
+/// "Error" state), read after the update.
+fn root_problems() -> Result<Vec<u32>, String> {
+    let set = DeviceSet::all()?;
+    let mut problems = Vec::new();
+    for data in set.with_hardware_id(ROOT_HARDWARE_ID) {
+        let mut status = CM_DEVNODE_STATUS_FLAGS(0);
+        let mut problem = CM_PROB(0);
+        // SAFETY: both out-pointers are locals alive for the call; DevInst came
+        // from this device information set.
+        let result = unsafe { CM_Get_DevNode_Status(&mut status, &mut problem, data.DevInst, 0) };
+        if result == CR_SUCCESS && (status.0 & DN_HAS_PROBLEM.0) != 0 {
+            problems.push(problem.0);
+        }
+    }
+    Ok(problems)
 }
 
 /// Removes every root device, the leftover endpoint children and the driver

@@ -77,7 +77,7 @@ pub fn inf_lists_hardware_id(text: &str, hardware_id: &str) -> bool {
 pub enum Outcome {
     /// The package is installed and running on the root device.
     Installed,
-    /// The installed driver is the same version or newer; nothing changed.
+    /// Windows kept the installed driver (it ranks better); nothing changed.
     AlreadyCurrent,
     /// The devices and the driver package are gone.
     Removed,
@@ -112,8 +112,11 @@ impl Outcome {
 pub enum DriverUpdate {
     /// It installed the package on the root device(s).
     Installed,
-    /// `ERROR_NO_MORE_ITEMS`: not forced, and the installed driver is the same
-    /// version or newer (ADR 0016).
+    /// `ERROR_NO_MORE_ITEMS`: not forced, and the installed driver ranks better
+    /// than the one offered (ADR 0016): newer, or the offered one's signature
+    /// isn't trusted (VM-STEPS R2, an untrusted test certificate). The same
+    /// package is reinstalled instead (R1), which is how a re-run finishes a
+    /// deferred update.
     NothingNewer,
     /// Any other failure, with Windows' reason.
     Failed(String),
@@ -136,6 +139,19 @@ pub fn install_outcome(
         }
         DriverUpdate::Failed(reason) => Err(format!("installing the driver failed: {reason}")),
     }
+}
+
+/// `CM_PROB_NEED_RESTART`: the device waits for a restart to load its driver.
+pub const PROBLEM_NEED_RESTART: u32 = 0x0E;
+
+/// Whether Windows will finish the update only at the next restart, from the
+/// update's own reboot flag and the problem codes of the root devices that
+/// have one, read after it. The two disagree (VM-STEPS R1): a veto from an
+/// endpoint in use sets the flag and leaves the device fine; an update that
+/// can't unload the old image may leave the flag clear and the root at
+/// CM_PROB_NEED_RESTART. Either one means a restart.
+pub fn restart_pending(reboot_flag: bool, root_problems: &[u32]) -> bool {
+    reboot_flag || root_problems.contains(&PROBLEM_NEED_RESTART)
 }
 
 /// How an uninstall ended, from each device removal's "needs a restart" flag.
@@ -165,7 +181,8 @@ impl std::fmt::Display for Outcome {
         f.write_str(match self {
             Outcome::Installed => "installed the driver",
             Outcome::AlreadyCurrent => {
-                "the installed driver is the same version or newer; left as it is"
+                "Windows kept the installed driver: it ranks better than this one (a newer \
+                 version, or this package's signature isn't trusted)"
             }
             Outcome::Removed => "removed the driver",
             Outcome::RebootRequired => {
@@ -217,6 +234,16 @@ mod tests {
         let failed = install_outcome(DriverUpdate::Failed("0x800b0109".into()), false, false);
         assert!(failed.is_err_and(|message| message.contains("0x800b0109")));
         assert!(install_outcome(DriverUpdate::Failed("x".into()), true, true).is_err());
+    }
+
+    #[test]
+    fn a_restart_is_pending_on_the_flag_or_on_the_roots_problem_code() {
+        assert!(!restart_pending(false, &[]));
+        assert!(!restart_pending(false, &[10])); // CM_PROB_FAILED_START: not a restart
+        assert!(restart_pending(true, &[])); // R1 case A
+        assert!(restart_pending(false, &[PROBLEM_NEED_RESTART])); // R1 case B
+        assert!(restart_pending(false, &[10, PROBLEM_NEED_RESTART])); // any root
+        assert_eq!(PROBLEM_NEED_RESTART, 14);
     }
 
     #[test]

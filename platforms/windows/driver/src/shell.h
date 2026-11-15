@@ -110,6 +110,13 @@ typedef struct _VD_DRIVER_CONTEXT {
      */
     volatile LONG64 ChildIds[2 * VD_MAX_DEVICES];
     volatile LONG PinnedRequests;   /* Create requests counted against VD_MAX_PINNED_REQUESTS */
+    /*
+     * Open handles on the control device (Owners): counted from a successful
+     * create to its cleanup. While any is open the root vetoes query-remove,
+     * so a driver update or uninstall waits for a reboot instead of deleting
+     * the control device under them (ADR 0024).
+     */
+    volatile LONG OpenOwners;
 } VD_DRIVER_CONTEXT;
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(VD_DRIVER_CONTEXT, VdDriverContext)
 

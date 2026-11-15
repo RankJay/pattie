@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/viaduct", "crates/viaduct-cli", "crates/viaduct-install", "core/tests", "bindings/python"]
+members = ["crates/viaduct", "crates/viaduct-cli", "crates/viaduct-install", "crates/viaduct-msi", "core/tests", "bindings/python"]
 resolver = "3"
 
 [workspace.package]

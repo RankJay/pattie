@@ -1,0 +1,24 @@
+[package]
+name = "viaduct-msi"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+description = "The MSI's custom actions (ADR 0024): a DLL that puts the driver on or takes it off through viaduct-install, inside the installer's transaction"
+
+[lib]
+# The DLL the MSI calls (cdylib); rlib too, so `cargo test` can reach the
+# result mapping.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+viaduct-install = { path = "../viaduct-install" }
+
+[target."cfg(windows)".dependencies]
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_System_ApplicationInstallationAndServicing", "Win32_System_DataExchange"] }
+
+[dev-dependencies]
+# The installer authoring test reads viaduct.wxs (tests/authoring.rs).
+roxmltree = "0.20"
+
+[lints]
+workspace = true

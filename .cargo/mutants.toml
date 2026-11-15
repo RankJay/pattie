@@ -7,6 +7,7 @@ exclude_globs = [
     "crates/viaduct-cli/src/main.rs",
     "crates/viaduct-cli/src/measure.rs",
     "crates/viaduct-install/src/setup.rs",
+    "crates/viaduct-msi/src/msi.rs",
     # The Linux backend: not compiled on Windows, where mutation runs (locally and
     # nightly.yml), so every mutant there would read as missed. Its tests run on
     # Linux (ci.yml), the PipeWire parts against a real PipeWire.

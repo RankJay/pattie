@@ -418,7 +418,7 @@ cargo install cargo-llvm-cov --locked
 Then:
 
 ```bash
-CC="/c/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/Llvm/x64/bin/clang-cl.exe" cargo llvm-cov --workspace --include-ffi --summary-only --ignore-filename-regex 'viaduct[\\/]src[\\/]windows\.rs|viaduct-cli[\\/]src[\\/](main|measure)\.rs|viaduct-install[\\/]src[\\/]setup\.rs|core_host[\\/]test_backend'
+CC="/c/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/Llvm/x64/bin/clang-cl.exe" cargo llvm-cov --workspace --include-ffi --summary-only --ignore-filename-regex 'viaduct[\\/]src[\\/]windows\.rs|viaduct-cli[\\/]src[\\/](main|measure)\.rs|viaduct-install[\\/]src[\\/]setup\.rs|viaduct-msi[\\/]src[\\/]msi\.rs|core_host[\\/]test_backend'
 ```
 
 Add `--show-missing-lines` to list the lines each file misses. Left out of the
@@ -432,6 +432,7 @@ test VM):
 | `crates/viaduct-cli/src/main.rs` | The mic/speaker loops on a live Device | Parsing: `cli.rs` |
 | `crates/viaduct-cli/src/measure.rs` | WASAPI streams on a live endpoint | Pairing and statistics: `latency.rs` |
 | `crates/viaduct-install/src/setup.rs` | SetupAPI calls that change the machine | INF parsing and the outcome (exit codes, reboot): `lib.rs`; VM for the rest |
+| `crates/viaduct-msi/src/msi.rs` | The MSI's custom-action entry points (Windows Installer calls) | What each action returns: `lib.rs`; the authoring: `tests/authoring.rs`; VM (R3) for the rest |
 | `crates/viaduct/src/core_host/test_backend.rs` | Test scaffolding (the contract suite's nodes), never shipped | The contract tests it serves |
 
 ### Property tests
