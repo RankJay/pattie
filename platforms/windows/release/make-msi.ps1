@@ -9,7 +9,9 @@
        first three numbers (DriverVer is X.Y.Z.B; Windows Installer compares only
        three, so each MSI needs its own X.Y.Z).
     2. -Release refuses, listing every reason:
-       - a catalog that isn't signed by Microsoft (Partner Center's output is);
+       - a catalog that isn't signed by Microsoft (Partner Center's output is),
+         or that doesn't cover the payload's own viaduct.inf and viaduct.sys;
+       - a viaduct.sys that isn't signed by Microsoft;
        - no release UpgradeCode in identity.wxi: it is created only when the
          product is named, and must never change after;
        - a viaduct-cli.exe (-Cli) without a valid Authenticode signature.
@@ -75,6 +77,34 @@ if ($Release) {
     $signer = if ($catalog.SignerCertificate) { $catalog.SignerCertificate.Subject } else { '(unsigned)' }
     if ($catalog.Status -ne 'Valid' -or $signer -notmatch 'CN=Microsoft Windows Hardware Compatibility Publisher') {
         $refusals += "the catalog isn't signed by Microsoft (status $($catalog.Status), signer $signer): use Partner Center's output, byte for byte"
+    } else {
+        # Signed by Microsoft isn't enough: it must be *this* package's catalog,
+        # covering its own INF and driver (any WHCP catalog passed the signer
+        # check alone, 2026-11-15). signtool looks each file's hash up in it.
+        $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" -ErrorAction SilentlyContinue |
+            Sort-Object FullName | Select-Object -Last 1
+        if (-not $signtool) {
+            $refusals += "signtool.exe not found (Windows SDK): can't check the catalog covers the payload"
+        } else {
+            foreach ($file in 'viaduct.inf', 'viaduct.sys') {
+                # signtool writes to stderr on a mismatch: not an error for this
+                # script, only its exit code counts.
+                $saved = $ErrorActionPreference
+                $ErrorActionPreference = 'Continue'
+                & $signtool.FullName verify /q /pa /c (Join-Path $Payload 'viaduct.cat') (Join-Path $Payload $file) 2>&1 | Out-Null
+                $covered = $LASTEXITCODE -eq 0
+                $ErrorActionPreference = $saved
+                if (-not $covered) {
+                    $refusals += "the catalog doesn't cover $file (signtool verify /pa /c): it isn't this package's catalog"
+                }
+            }
+        }
+    }
+    # Partner Center signs the driver binary itself too.
+    $driver = Get-AuthenticodeSignature (Join-Path $Payload 'viaduct.sys')
+    $driverSigner = if ($driver.SignerCertificate) { $driver.SignerCertificate.Subject } else { '(unsigned)' }
+    if ($driver.Status -ne 'Valid' -or $driverSigner -notmatch 'CN=Microsoft Windows Hardware Compatibility Publisher') {
+        $refusals += "viaduct.sys isn't signed by Microsoft (status $($driver.Status), signer $driverSigner)"
     }
     if ($releaseCode -notmatch $guid) {
         $refusals += "identity.wxi has no release UpgradeCode: it is created only once the product is named (ADR 0024)"

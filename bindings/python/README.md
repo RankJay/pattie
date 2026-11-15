@@ -105,7 +105,8 @@ in step with video.
 
 Every error is a `viaduct.Error`, with one subclass per cause: `DuplicateName`,
 `DriverNotInstalled`, `UnsupportedFormat`, and so on. Where there's a fix, the
-message says what it is.
+message says what it is. `DriverRemoved` means the driver was removed or is
+being updated while the Device was live (Windows): create the Device again.
 
 ## Developing
 

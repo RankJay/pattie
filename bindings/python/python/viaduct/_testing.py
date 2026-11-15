@@ -2,6 +2,6 @@
 driver. It exists only in the project's test builds (uv's dev build), never in
 the published wheels."""
 
-from viaduct._viaduct import TestBackend
+from viaduct._viaduct import TestBackend, sdk_error
 
-__all__ = ["TestBackend"]
+__all__ = ["TestBackend", "sdk_error"]

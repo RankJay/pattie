@@ -101,6 +101,12 @@ create_exception!(
 create_exception!(viaduct, OsError, Error, "An operating-system error.");
 create_exception!(
     viaduct,
+    DriverRemoved,
+    Error,
+    "The driver was removed or is being updated while the Device was live: create it again."
+);
+create_exception!(
+    viaduct,
     AudioLost,
     Error,
     "Audio was dropped or ran out (strict=True)."
@@ -144,6 +150,8 @@ fn to_py(error: sdk::Error) -> PyErr {
         sdk::Error::Busy => SystemRefused::new_err(text),
         sdk::Error::Protocol(_) => ProtocolError::new_err(text),
         sdk::Error::Os(_) => OsError::new_err(text),
+        // Its own message says what to do: create the Device again (ADR 0024).
+        sdk::Error::DriverRemoved => DriverRemoved::new_err(text),
         _ => Error::new_err(text),
     }
 }
@@ -1382,6 +1390,22 @@ mod testing {
                 .driver_write(device_id, &super::f32_samples(data))
         }
     }
+
+    /// The Python exception an SDK error becomes, by the error's name: for
+    /// errors only a live driver produces (tests/test_errors.py).
+    #[pyfunction]
+    pub(crate) fn sdk_error(py: Python<'_>, name: &str) -> PyResult<Py<PyAny>> {
+        let error = match name {
+            "DriverNotInstalled" => viaduct::Error::DriverNotInstalled,
+            "DriverRemoved" => viaduct::Error::DriverRemoved,
+            _ => {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "no SDK error named {name}"
+                )));
+            }
+        };
+        Ok(super::to_py(error).into_value(py).into_any())
+    }
 }
 
 #[pymodule]
@@ -1408,6 +1432,7 @@ fn _viaduct(module: &Bound<'_, PyModule>) -> PyResult<()> {
         ("ProtocolError", py.get_type::<ProtocolError>()),
         ("OsError", py.get_type::<OsError>()),
         ("AudioLost", py.get_type::<AudioLost>()),
+        ("DriverRemoved", py.get_type::<DriverRemoved>()),
     ] {
         module.add(name, error)?;
     }
@@ -1424,5 +1449,7 @@ fn _viaduct(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(stable_id, module)?)?;
     #[cfg(feature = "test-backend")]
     module.add_class::<testing::TestBackend>()?;
+    #[cfg(feature = "test-backend")]
+    module.add_function(wrap_pyfunction!(testing::sdk_error, module)?)?;
     Ok(())
 }
