@@ -9,14 +9,22 @@
        exists only in memory: no certificate store, key container or key file on
        this machine is touched. Only its public part (viaduct-test.cer) is saved,
        for the VM to trust.
-    4. Collects everything the VM needs into target\vm-package\.
+    4. Collects everything the VM needs into target\<PackageName>\ (vm-package).
+
+    -DriverVersion stamps DriverVer with a chosen version (four numbers); without
+    it StampInf derives one from the build time. Two packages with rising
+    versions are what an in-place upgrade test needs (vm-steps.md, section R).
 
     It does not install, load or trust anything on this machine. Copy the package
     folder into the VM and run install-in-vm.ps1 there (.ai/ops/vm-steps.md).
 #>
 [CmdletBinding()]
 param(
-    [string]$Configuration = 'Release'
+    [string]$Configuration = 'Release',
+    [ValidatePattern('^\d{1,5}\.\d{1,5}\.\d{1,5}\.\d{1,5}$')]
+    [string]$DriverVersion,
+    [ValidatePattern('^[A-Za-z0-9._-]+$')]
+    [string]$PackageName = 'vm-package'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -25,7 +33,7 @@ $kit = 'C:\Program Files (x86)\Windows Kits\10'
 $kitVersion = '10.0.28000.0'
 $msbuild = 'C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\amd64\MSBuild.exe'
 $inf2cat = Join-Path $kit "bin\$kitVersion\x86\Inf2Cat.exe"
-$package = Join-Path $repo 'target\vm-package'
+$package = Join-Path $repo "target\$PackageName"
 $driverOut = Join-Path $repo "target\driver\x64\$Configuration"
 
 # Native tools are judged by exit code only. (Windows PowerShell 5.1 would otherwise
@@ -46,9 +54,20 @@ foreach ($tool in $msbuild, $inf2cat) {
 }
 
 Write-Host '== Building the driver'
-Invoke-Tool 'Driver build' $msbuild @(
+$driverArgs = @(
     (Join-Path $repo 'platforms\windows\driver\viaduct.vcxproj'), '-t:Rebuild',
     "-p:Configuration=$Configuration", '-p:Platform=x64', '-nologo', '-v:minimal')
+if ($DriverVersion) {
+    $driverArgs += "-p:ViaductDriverVersion=$DriverVersion"
+}
+Invoke-Tool 'Driver build' $msbuild $driverArgs
+if ($DriverVersion) {
+    $stamped = Select-String -Path (Join-Path $driverOut 'viaduct.inf') -Pattern '^\s*DriverVer\s*=\s*(.+)$'
+    if ($null -eq $stamped -or $stamped.Matches[0].Groups[1].Value -notmatch ",\s*$([regex]::Escape($DriverVersion))\s*$") {
+        throw "The built INF doesn't carry version $DriverVersion ($($stamped.Line))"
+    }
+    Write-Host "Stamped: $($stamped.Line.Trim())"
+}
 
 # Static C runtime: a clean Windows VM may lack VCRUNTIME140.dll (the Visual C++
 # Redistributable). Its own target folder keeps normal builds from recompiling.

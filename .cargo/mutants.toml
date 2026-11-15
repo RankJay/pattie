@@ -6,7 +6,7 @@ exclude_globs = [
     "crates/viaduct/src/windows.rs",
     "crates/viaduct-cli/src/main.rs",
     "crates/viaduct-cli/src/measure.rs",
-    "crates/viaduct-cli/src/install/setup.rs",
+    "crates/viaduct-install/src/setup.rs",
     # The Linux backend: not compiled on Windows, where mutation runs (locally and
     # nightly.yml), so every mutant there would read as missed. Its tests run on
     # Linux (ci.yml), the PipeWire parts against a real PipeWire.
@@ -44,8 +44,9 @@ exclude_re = [
     "win::<impl Drop for Bell>::drop",
     # Test code inside src/ (the `mod tests` helpers).
     " tests::",
-    # Thin wrappers around install/setup.rs, which changes the machine (VM-STEPS D.5).
-    "replace (install|uninstall) -> Result<\\(\\), String> with Ok\\(\\(\\)\\)",
+    # The non-Windows stand-ins for viaduct-install/src/setup.rs, which changes
+    # the machine (VM-STEPS D.5 and R).
+    "replace (install|uninstall) -> Result<Outcome, String> with Ok",
     # MMCSS "Pro Audio": its effect is only scheduling priority under load (the
     # VM's cpu-load runs), and reverting it releases an OS registration.
     "<impl Drop for ProAudio>::drop",

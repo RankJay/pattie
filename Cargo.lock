@@ -650,6 +650,7 @@ name = "viaduct-cli"
 version = "0.1.0"
 dependencies = [
  "viaduct",
+ "viaduct-install",
  "windows",
 ]
 
@@ -661,6 +662,13 @@ dependencies = [
  "cc",
  "proptest",
  "viaduct",
+]
+
+[[package]]
+name = "viaduct-install"
+version = "0.1.0"
+dependencies = [
+ "windows",
 ]
 
 [[package]]

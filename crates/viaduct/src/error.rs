@@ -8,6 +8,10 @@ use std::fmt;
 pub enum Error {
     /// The Viaduct driver isn't installed (or isn't running).
     DriverNotInstalled,
+    /// Windows: the driver was removed, or is being updated, while this Device
+    /// was live (ADR 0024). The Device is gone; create it again once the driver
+    /// is back (`DriverNotInstalled` until then).
+    DriverRemoved,
     /// Linux: PipeWire isn't installed or isn't running (ADR 0018).
     AudioServerUnavailable,
     /// Linux: PulseAudio is this user's sound server (Ubuntu 22.04 and Mint 21 by
@@ -58,6 +62,10 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::DriverNotInstalled => write!(f, "the Viaduct driver is not installed"),
+            Error::DriverRemoved => write!(
+                f,
+                "the Viaduct driver was removed or is being updated; create the Device again"
+            ),
             Error::AudioServerUnavailable => write!(
                 f,
                 "PipeWire is not running (Viaduct needs PipeWire on Linux)"
@@ -118,8 +126,9 @@ mod tests {
     use super::Error;
 
     /// Every variant, so a new one without its own message fails here.
-    const ALL: [Error; 19] = [
+    const ALL: [Error; 20] = [
         Error::DriverNotInstalled,
+        Error::DriverRemoved,
         Error::AudioServerUnavailable,
         Error::PulseAudioInUse,
         Error::FlatpakNeedsPipeWire,

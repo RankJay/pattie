@@ -11,6 +11,9 @@
 //! viaduct-cli uninstall                      take it off (both as administrator)
 //! ```
 //!
+//! install and uninstall exit with 0 when done, 3010 when Windows finishes at the
+//! next restart (an app holds a Device: ADR 0024), and 1 on failure.
+//!
 //! Press Enter to stop: the Device is dropped and its endpoint should disappear.
 
 use std::f32::consts::TAU;
@@ -22,7 +25,6 @@ use std::time::{Duration, Instant};
 use viaduct::{Device, Kind};
 
 mod cli;
-mod install;
 #[cfg_attr(not(windows), allow(dead_code))] // used by `measure`, which is Windows-only
 mod latency;
 #[cfg(windows)]
@@ -59,8 +61,14 @@ fn main() -> ExitCode {
             capture,
             seconds,
         } => run_cable(render, capture, seconds),
-        Command::Install { package } => install::install(package),
-        Command::Uninstall => install::uninstall(),
+        Command::Install { package } => {
+            finish_setup(viaduct_install::install(package, &mut |line| {
+                println!("{line}")
+            }))
+        }
+        Command::Uninstall => {
+            finish_setup(viaduct_install::uninstall(&mut |line| println!("{line}")))
+        }
     });
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -69,6 +77,21 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// Ends an install or uninstall with msiexec's exit codes (ADR 0024): 3010
+/// when Windows finishes it at the next restart. `ExitCode` holds only a `u8`,
+/// hence `exit`.
+fn finish_setup(result: Result<viaduct_install::Outcome, String>) -> Result<(), String> {
+    let outcome = result?;
+    if outcome.reboot_required() {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "no Device exists on the install path, and ExitCode can't hold 3010"
+        )]
+        std::process::exit(outcome.exit_code());
+    }
+    Ok(())
 }
 
 #[cfg(windows)]

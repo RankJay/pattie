@@ -8,8 +8,8 @@ use crate::abi;
 use crate::transport::{Connection, Transport};
 use std::ptr::{null, null_mut};
 use windows_sys::Win32::Foundation::{
-    CloseHandle, ERROR_ACCESS_DENIED, ERROR_BUSY, ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND,
-    GENERIC_READ, GENERIC_WRITE, GetLastError, HANDLE, INVALID_HANDLE_VALUE,
+    CloseHandle, ERROR_ACCESS_DENIED, ERROR_BUSY, ERROR_DEVICE_REMOVED, ERROR_FILE_NOT_FOUND,
+    ERROR_PATH_NOT_FOUND, GENERIC_READ, GENERIC_WRITE, GetLastError, HANDLE, INVALID_HANDLE_VALUE,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
@@ -85,10 +85,12 @@ impl Connection for WindowsConnection {
 /// What a failed command's Windows error means to the app. The driver refuses a
 /// Create at once with `ERROR_BUSY` while too many requests hold memory locked
 /// (security review 2026-11-14, finding 2): worth its own error, since a retry
-/// succeeds.
+/// succeeds. Once its root device is removed under a live Owner, it completes
+/// every command with `STATUS_DEVICE_REMOVED` (ADR 0024).
 fn ioctl_error(code: u32) -> Error {
     match code {
         ERROR_BUSY => Error::Busy,
+        ERROR_DEVICE_REMOVED => Error::DriverRemoved,
         other => Error::Os(other as i32),
     }
 }
@@ -111,5 +113,18 @@ mod tests {
         // (security review 2026-11-14, finding 2).
         assert_eq!(ioctl_error(170), Error::Busy);
         assert_eq!(ioctl_error(5), Error::Os(5));
+    }
+
+    #[test]
+    fn a_removed_driver_is_its_own_error() {
+        // The driver completes commands with STATUS_DEVICE_REMOVED once its root
+        // device was removed under a live Owner (ADR 0024); Windows reports that
+        // as ERROR_DEVICE_REMOVED.
+        assert_eq!(ioctl_error(1617), Error::DriverRemoved);
+        assert!(
+            Error::DriverRemoved
+                .to_string()
+                .contains("create the Device again")
+        );
     }
 }

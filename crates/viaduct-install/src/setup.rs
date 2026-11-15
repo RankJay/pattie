@@ -1,10 +1,12 @@
-//! The SetupAPI half of `viaduct-cli install` / `uninstall` (ADR 0016): the calls
-//! that change the machine. Checked in the test VM (VM-STEPS D.5), never run on
-//! the host, and left out of coverage for that reason (README, Coverage).
+//! The SetupAPI half of the install engine (ADR 0016, ADR 0024): the calls that
+//! change the machine. Checked in the test VM (VM-STEPS D.5 and R), never run on
+//! the host, and left out of coverage for that reason (README, Coverage). What
+//! each step ends as is decided by the tested `install_outcome` and
+//! `uninstall_outcome`.
 
 use super::{
-    ENDPOINT_HARDWARE_ID, ROOT_HARDWARE_ID, decode_inf, has_hardware_id, inf_lists_hardware_id,
-    parse_multi_sz, to_multi_sz,
+    DriverUpdate, ENDPOINT_HARDWARE_ID, Outcome, ROOT_HARDWARE_ID, decode_inf, has_hardware_id,
+    inf_lists_hardware_id, install_outcome, parse_multi_sz, to_multi_sz, uninstall_outcome,
 };
 use std::path::{Path, PathBuf};
 use windows::Win32::Devices::DeviceAndDriverInstallation::{
@@ -175,7 +177,7 @@ struct NewRootDevice {
 impl NewRootDevice {
     /// Registers a root-enumerated device with hardware ID `Root\Viaduct`, in
     /// the INF's class, as Microsoft's devcon sample does (`devcon install`).
-    fn create(inf: &Path) -> Result<Self, String> {
+    fn create(inf: &Path, log: &mut dyn FnMut(&str)) -> Result<Self, String> {
         let fail = |what: &str, e: windows::core::Error| {
             format!("creating the root device failed ({what}): {e}")
         };
@@ -212,19 +214,24 @@ impl NewRootDevice {
         // SAFETY: as above. Until this succeeds, dropping the set discards the device.
         unsafe { SetupDiCallClassInstaller(DIF_REGISTERDEVICE, set.0, Some(&data)) }
             .map_err(|e| fail("registering", e))?;
-        println!("created the root device {}", set.instance_id(&data));
+        log(&format!(
+            "created the root device {}",
+            set.instance_id(&data)
+        ));
         Ok(NewRootDevice { set, data })
     }
 
-    fn remove(self) {
+    fn remove(self, log: &mut dyn FnMut(&str)) {
         // SAFETY: the device was registered in this set by `create`.
         if unsafe { SetupDiCallClassInstaller(DIF_REMOVE, self.set.0, Some(&self.data)) }.is_ok() {
-            println!("removed the root device again");
+            log("removed the root device again");
         }
     }
 }
 
-pub fn install(package: &str) -> Result<(), String> {
+/// Installs the package (its folder or `viaduct.inf`) on the root device,
+/// creating that device if there is none. `log` gets each step's line.
+pub fn install(package: &str, log: &mut dyn FnMut(&str)) -> Result<Outcome, String> {
     require_admin()?;
     let inf = package_inf(package)?;
 
@@ -232,17 +239,20 @@ pub fn install(package: &str) -> Result<(), String> {
         let set = DeviceSet::all()?;
         let found = set.with_hardware_id(ROOT_HARDWARE_ID);
         for data in &found {
-            println!("root device already present: {}", set.instance_id(data));
+            log(&format!(
+                "root device already present: {}",
+                set.instance_id(data)
+            ));
         }
         found.len()
     };
     if existing > 1 {
-        println!(
+        log(&format!(
             "warning: {existing} root devices; run `viaduct-cli uninstall`, then install again, to keep one"
-        );
+        ));
     }
     let created = if existing == 0 {
-        Some(NewRootDevice::create(&inf)?)
+        Some(NewRootDevice::create(&inf, log)?)
     } else {
         None
     };
@@ -266,31 +276,33 @@ pub fn install(package: &str) -> Result<(), String> {
     unsafe {
         let _ = SetupSetNonInteractiveMode(was_non_interactive.as_bool());
     }
-    match result {
-        Ok(()) => println!("installed the driver from {}", inf.display()),
+    let update = match result {
+        Ok(()) => DriverUpdate::Installed,
         // Not forced: an installed driver of the same or a newer version stays.
-        Err(e) if created.is_none() && e.code() == HRESULT::from_win32(ERROR_NO_MORE_ITEMS.0) => {
-            println!("the installed driver is the same version or newer; left as it is")
+        Err(e) if e.code() == HRESULT::from_win32(ERROR_NO_MORE_ITEMS.0) => {
+            DriverUpdate::NothingNewer
         }
-        Err(e) => {
+        Err(e) => DriverUpdate::Failed(format!("{} ({e})", inf.display())),
+    };
+    match install_outcome(update, reboot.as_bool(), created.is_some()) {
+        Ok(outcome) => {
+            log(&format!("{outcome} ({})", inf.display()));
+            Ok(outcome)
+        }
+        Err(message) => {
             if let Some(device) = created {
-                device.remove();
+                device.remove(log);
             }
-            return Err(format!(
-                "installing the driver from {} failed: {e}",
-                inf.display()
-            ));
+            Err(message)
         }
     }
-    if reboot.as_bool() {
-        println!("Windows needs a reboot to finish.");
-    }
-    Ok(())
 }
 
-pub fn uninstall() -> Result<(), String> {
+/// Removes every root device, the leftover endpoint children and the driver
+/// packages. `log` gets each step's line.
+pub fn uninstall(log: &mut dyn FnMut(&str)) -> Result<Outcome, String> {
     require_admin()?;
-    let mut reboot = false;
+    let mut reboots = Vec::new();
     // Roots first: removing one removes its live children. A fresh list for
     // the endpoints then finds only the leftovers (not present).
     for hardware_id in [ROOT_HARDWARE_ID, ENDPOINT_HARDWARE_ID] {
@@ -301,13 +313,13 @@ pub fn uninstall() -> Result<(), String> {
             // SAFETY: `data` belongs to `set`; no window.
             unsafe { DiUninstallDevice(HWND::default(), set.0, &data, 0, Some(&mut needs_reboot)) }
                 .map_err(|e| format!("removing the device {id} failed: {e}"))?;
-            reboot |= needs_reboot.as_bool();
-            println!("removed the device {id}");
+            reboots.push(needs_reboot.as_bool());
+            log(&format!("removed the device {id}"));
         }
     }
     let packages = viaduct_packages()?;
     if packages.is_empty() {
-        println!("no Viaduct driver package in the driver store");
+        log("no Viaduct driver package in the driver store");
     }
     for name in packages {
         // SAFETY: the published name (oemN.inf) of a package in the store.
@@ -319,12 +331,11 @@ pub fn uninstall() -> Result<(), String> {
                 windows::core::Error::from_thread()
             ));
         }
-        println!("removed the driver package {name}");
+        log(&format!("removed the driver package {name}"));
     }
-    if reboot {
-        println!("Windows needs a reboot to finish (an app may still hold a Device).");
-    }
-    Ok(())
+    let outcome = uninstall_outcome(reboots);
+    log(&outcome.to_string());
+    Ok(outcome)
 }
 
 /// The published names (`oemN.inf`) of the driver store packages that install
