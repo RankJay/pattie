@@ -74,16 +74,33 @@
     -->
     <CustomAction Id="CheckRebootRequired" BinaryRef="ViaductActions"
                   DllEntry="CheckRebootRequired" Execute="immediate" Return="ignore" />
+    <!--
+      A marker a failed earlier run left (CheckRebootRequired never ran) is dropped
+      first. Neither marker action runs in the old product's removal inside an
+      upgrade (UPGRADINGPRODUCTCODE): that comes after the new product's
+      InstallDriver and would drop its fresh marker (VM-STEPS R4).
+    -->
+    <CustomAction Id="ClearRebootMarker" BinaryRef="ViaductActions"
+                  DllEntry="ClearRebootMarker" Execute="immediate" Return="ignore" />
+    <!-- Sets the private ViaductRootPresent when a root device is already there (a viaduct-cli install). -->
+    <CustomAction Id="DetectExistingDriver" BinaryRef="ViaductActions"
+                  DllEntry="DetectExistingDriver" Execute="immediate" Return="ignore" />
 
     <InstallExecuteSequence>
+      <Custom Action="ClearRebootMarker" Before="InstallInitialize" Condition="NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="DetectExistingDriver" Before="InstallInitialize" Condition="NOT Installed" />
       <Custom Action="SetInstallDriverData" Before="InstallDriver" Condition="NOT REMOVE" />
-      <!-- On a failed fresh install only: an upgrade keeps the new driver rather than none. -->
+      <!--
+        Rollback only on a first install onto a machine without Viaduct: an upgrade
+        keeps the new driver rather than none, a repair keeps the working one, and
+        an adopted viaduct-cli install keeps its own.
+      -->
       <Custom Action="RollbackInstallDriver" Before="InstallDriver"
-              Condition="NOT REMOVE AND NOT WIX_UPGRADE_DETECTED" />
+              Condition="NOT Installed AND NOT WIX_UPGRADE_DETECTED AND NOT ViaductRootPresent" />
       <Custom Action="InstallDriver" After="InstallFiles" Condition="NOT REMOVE" />
       <Custom Action="UninstallDriver" Before="RemoveFiles"
               Condition='REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE' />
-      <Custom Action="CheckRebootRequired" After="InstallFinalize" />
+      <Custom Action="CheckRebootRequired" After="InstallFinalize" Condition="NOT UPGRADINGPRODUCTCODE" />
     </InstallExecuteSequence>
   </Package>
 </Wix>

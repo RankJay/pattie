@@ -5,9 +5,9 @@
 //! `uninstall_outcome`.
 
 use super::{
-    DriverUpdate, ENDPOINT_HARDWARE_ID, Outcome, ROOT_HARDWARE_ID, decode_inf, has_hardware_id,
-    inf_lists_hardware_id, install_outcome, parse_multi_sz, restart_pending, to_multi_sz,
-    uninstall_outcome,
+    DriverUpdate, DriverVersion, ENDPOINT_HARDWARE_ID, Outcome, ROOT_HARDWARE_ID, classify_kept,
+    decode_inf, has_hardware_id, inf_driver_version, inf_lists_hardware_id, install_outcome,
+    parse_driver_version, parse_multi_sz, restart_pending, to_multi_sz, uninstall_outcome,
 };
 use std::path::{Path, PathBuf};
 use windows::Win32::Devices::DeviceAndDriverInstallation::{
@@ -16,10 +16,11 @@ use windows::Win32::Devices::DeviceAndDriverInstallation::{
     SP_DEVINFO_DATA, SPDRP_HARDWAREID, SUOI_FORCEDELETE, SetupDiCallClassInstaller,
     SetupDiCreateDeviceInfoList, SetupDiCreateDeviceInfoW, SetupDiDestroyDeviceInfoList,
     SetupDiEnumDeviceInfo, SetupDiGetClassDevsW, SetupDiGetDeviceInstanceIdW,
-    SetupDiGetDeviceRegistryPropertyW, SetupDiGetINFClassW, SetupDiSetDeviceRegistryPropertyW,
-    SetupSetNonInteractiveMode, SetupUninstallOEMInfW, UPDATEDRIVERFORPLUGANDPLAYDEVICES_FLAGS,
-    UpdateDriverForPlugAndPlayDevicesW,
+    SetupDiGetDevicePropertyW, SetupDiGetDeviceRegistryPropertyW, SetupDiGetINFClassW,
+    SetupDiSetDeviceRegistryPropertyW, SetupSetNonInteractiveMode, SetupUninstallOEMInfW,
+    UPDATEDRIVERFORPLUGANDPLAYDEVICES_FLAGS, UpdateDriverForPlugAndPlayDevicesW,
 };
+use windows::Win32::Devices::Properties::{DEVPKEY_Device_DriverVersion, DEVPROPTYPE};
 use windows::Win32::Foundation::{
     CloseHandle, ERROR_INSUFFICIENT_BUFFER, ERROR_NO_MORE_ITEMS, HANDLE, HWND,
 };
@@ -97,6 +98,33 @@ impl DeviceSet {
                 Err(_) => return Vec::new(),
             }
         }
+    }
+
+    /// The device's installed driver version (DEVPKEY_Device_DriverVersion).
+    fn driver_version(&self, data: &SP_DEVINFO_DATA) -> Option<DriverVersion> {
+        let mut buffer = [0u8; 128];
+        let mut kind = DEVPROPTYPE(0);
+        let mut needed = 0u32;
+        // SAFETY: the buffer and its length are passed together; the key is a
+        // static from the windows crate.
+        unsafe {
+            SetupDiGetDevicePropertyW(
+                self.0,
+                data,
+                &DEVPKEY_Device_DriverVersion,
+                &mut kind,
+                Some(&mut buffer),
+                Some(&mut needed),
+                0,
+            )
+        }
+        .ok()?;
+        let units: Vec<u16> = buffer[..(needed as usize).min(buffer.len())]
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .take_while(|&unit| unit != 0)
+            .collect();
+        parse_driver_version(&String::from_utf16_lossy(&units))
     }
 
     fn instance_id(&self, data: &SP_DEVINFO_DATA) -> String {
@@ -280,9 +308,13 @@ pub fn install(package: &str, log: &mut dyn FnMut(&str)) -> Result<Outcome, Stri
     }
     let update = match result {
         Ok(()) => DriverUpdate::Installed,
-        // Not forced: an installed driver of the same or a newer version stays.
+        // Not forced: Windows kept the installed driver. Kept but older than this
+        // package means Windows refused the package (classify_kept).
         Err(e) if e.code() == HRESULT::from_win32(ERROR_NO_MORE_ITEMS.0) => {
-            DriverUpdate::NothingNewer
+            let offered = std::fs::read(&inf)
+                .ok()
+                .and_then(|bytes| inf_driver_version(&decode_inf(&bytes)));
+            classify_kept(root_driver_version()?, offered)
         }
         Err(e) => DriverUpdate::Failed(format!("{} ({e})", inf.display())),
     };
@@ -300,6 +332,26 @@ pub fn install(package: &str, log: &mut dyn FnMut(&str)) -> Result<Outcome, Stri
             Err(message)
         }
     }
+}
+
+/// Whether a Viaduct root device exists: the MSI asks before installing, so a
+/// failed install doesn't roll back a driver `viaduct-cli install` put there.
+pub fn root_device_present() -> Result<bool, String> {
+    Ok(!DeviceSet::all()?
+        .with_hardware_id(ROOT_HARDWARE_ID)
+        .is_empty())
+}
+
+/// The lowest driver version among the root devices that have one; None when
+/// none does (a root with no driver installed reads as no version). A leftover
+/// root without a driver beside the real one doesn't hide the real one's.
+fn root_driver_version() -> Result<Option<DriverVersion>, String> {
+    let set = DeviceSet::all()?;
+    Ok(set
+        .with_hardware_id(ROOT_HARDWARE_ID)
+        .iter()
+        .filter_map(|data| set.driver_version(data))
+        .min())
 }
 
 /// The problem codes of the root devices that have one (Device Manager's

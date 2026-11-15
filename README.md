@@ -675,12 +675,13 @@ the project, `platforms/windows/driver/README.md` for the driver.
 Deliberately left out, to reach the gate first: loopback devices, renaming a live
 Device, volume and mute, more than 8 Devices, latency under 10 ms (the original
 goal, still ahead), 24-bit and rates beyond 44.1 / 48 / 96 kHz, more than 8
-channels, installer self-heal and packaging, the macOS backend, bindings for C,
-Node and Swift.
+channels, installer self-heal (the SDK reconnecting by itself after a driver
+update), the macOS backend, bindings for C, Node and Swift.
 
 Built since the v0 scope was set: 44.1, 48 and 96 kHz with 1 to 8 channels, drift
 compensation and frame timestamps, barge-in playout, the Linux backend, the
-Python binding, and a Pipecat transport (`integrations/pipecat`).
+Python binding, a Pipecat transport (`integrations/pipecat`), and a Windows MSI
+installer with in-place driver upgrades (`platforms/windows/release`, ADR 0024).
 
 ## License
 

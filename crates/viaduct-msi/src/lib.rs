@@ -13,9 +13,11 @@
 //! Exports, deferred and run as SYSTEM (`Impersonate="no"`):
 //! - `InstallDriver`: CustomActionData is the folder holding `viaduct.inf`;
 //! - `UninstallDriver`: removes the root device, endpoints and packages;
-//! - `RollbackInstallDriver`: undoes `InstallDriver` on a fresh install;
+//! - `RollbackInstallDriver`: undoes `InstallDriver` on a first install onto a
+//!   machine without Viaduct;
 //!
-//! and immediate, after InstallFinalize: `CheckRebootRequired`.
+//! and immediate: `ClearRebootMarker` and `DetectExistingDriver` before
+//! InstallInitialize, `CheckRebootRequired` after InstallFinalize.
 
 use viaduct_install::Outcome;
 

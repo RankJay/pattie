@@ -2,22 +2,27 @@
 //! Checked in the test VM (VM-STEPS R3), never on the host; what each action
 //! returns is decided by the tested `action_result` and `rollback_result`.
 
-use super::{ERROR_INSTALL_FAILURE, action_result, rollback_result};
+use super::{ActionResult, ERROR_INSTALL_FAILURE, ERROR_SUCCESS, action_result, rollback_result};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use viaduct_install::Outcome;
 use windows::Win32::System::ApplicationInstallationAndServicing::{
     INSTALLMESSAGE_INFO, MSIHANDLE, MSIRUNMODE_REBOOTATEND, MsiCloseHandle, MsiCreateRecord,
-    MsiGetPropertyW, MsiProcessMessage, MsiRecordSetStringW, MsiSetMode,
+    MsiGetPropertyW, MsiProcessMessage, MsiRecordSetStringW, MsiSetMode, MsiSetPropertyW,
 };
 use windows::Win32::System::DataExchange::{GlobalAddAtomW, GlobalDeleteAtom, GlobalFindAtomW};
 use windows::core::{HSTRING, PWSTR, w};
 
 /// The marker a deferred action leaves when a restart finishes its work. A
 /// deferred action can't call MsiSetMode (VM-STEPS R3: the MSI ended with 0);
-/// `CheckRebootRequired`, immediate, turns the marker into the request. The
-/// same name and scheme as WiX's own helpers (WcaDeferredActionRequiresReboot,
-/// Wix4CheckRebootRequired).
-const REBOOT_MARKER: windows::core::PCWSTR = w!("WcaDeferredActionRequiresReboot");
+/// `CheckRebootRequired`, immediate, turns the marker into the request. WiX's
+/// own helpers use the same scheme, under their own name; ours is separate so
+/// another package in a chain neither sets nor consumes it.
+const REBOOT_MARKER: windows::core::PCWSTR = w!("ViaductMsiRebootRequired");
+
+/// Set (to "1") when a Viaduct root device exists before the install: the
+/// rollback's condition, so a failed install doesn't take off a driver
+/// `viaduct-cli install` put there.
+const ROOT_PRESENT_PROPERTY: windows::core::PCWSTR = w!("ViaductRootPresent");
 
 /// ERROR_MORE_DATA: the property didn't fit the buffer.
 const ERROR_MORE_DATA: u32 = 234;
@@ -71,7 +76,7 @@ fn custom_action_data(install: MSIHANDLE) -> String {
 fn run(
     install: MSIHANDLE,
     name: &str,
-    rollback: bool,
+    to_result: fn(&Result<Outcome, String>) -> ActionResult,
     action: impl FnOnce(&mut dyn FnMut(&str)) -> Result<Outcome, String>,
 ) -> u32 {
     log(install, &format!("viaduct-msi: {name}"));
@@ -81,11 +86,7 @@ fn run(
     if let Err(message) = &result {
         log(install, &format!("viaduct-msi: {name} failed: {message}"));
     }
-    let outcome = if rollback {
-        rollback_result(&result)
-    } else {
-        action_result(&result)
-    };
+    let outcome = to_result(&result);
     if outcome.reboot_at_end {
         // SAFETY: a static NUL-terminated name. The atom stays until
         // CheckRebootRequired deletes it.
@@ -103,9 +104,7 @@ fn run(
 /// with 3010 (or restarts, without /norestart). Never fails the install.
 #[unsafe(no_mangle)]
 pub extern "system" fn CheckRebootRequired(install: MSIHANDLE) -> u32 {
-    // SAFETY: a static NUL-terminated name.
-    let atom = unsafe { GlobalFindAtomW(REBOOT_MARKER) };
-    if atom != 0 {
+    if take_reboot_marker() {
         // SAFETY: the installer's own handle, valid for the action's duration;
         // an immediate action may call MsiSetMode.
         let result = unsafe { MsiSetMode(install, MSIRUNMODE_REBOOTATEND, true) };
@@ -113,12 +112,72 @@ pub extern "system" fn CheckRebootRequired(install: MSIHANDLE) -> u32 {
             install,
             &format!("viaduct-msi: CheckRebootRequired: restart requested (MsiSetMode {result})"),
         );
-        // SAFETY: the atom found above, deleted once.
+    }
+    ERROR_SUCCESS
+}
+
+/// Removes the restart marker, however many times it was added (an atom counts
+/// its adds); true if it was there.
+fn take_reboot_marker() -> bool {
+    let mut found = false;
+    loop {
+        // SAFETY: a static NUL-terminated name.
+        let atom = unsafe { GlobalFindAtomW(REBOOT_MARKER) };
+        if atom == 0 {
+            return found;
+        }
+        found = true;
+        // SAFETY: the atom just found; each delete drops one add.
         unsafe {
             let _ = GlobalDeleteAtom(atom);
         }
     }
-    super::ERROR_SUCCESS
+}
+
+/// Immediate, before InstallInitialize: drops a restart marker an earlier,
+/// failed run left behind (CheckRebootRequired runs only after a successful
+/// InstallFinalize), so it can't turn this run into a false 3010.
+#[unsafe(no_mangle)]
+pub extern "system" fn ClearRebootMarker(install: MSIHANDLE) -> u32 {
+    if take_reboot_marker() {
+        log(
+            install,
+            "viaduct-msi: ClearRebootMarker: dropped a stale restart marker",
+        );
+    }
+    ERROR_SUCCESS
+}
+
+/// Immediate, before InstallInitialize on a first install: sets
+/// ViaductRootPresent when a Viaduct root device already exists (a
+/// `viaduct-cli install`), so the rollback leaves that driver alone. When the
+/// devices can't be listed it sets the property too: a failed install then
+/// keeps whatever is there, rather than a rollback removing a driver it never
+/// saw.
+#[unsafe(no_mangle)]
+pub extern "system" fn DetectExistingDriver(install: MSIHANDLE) -> u32 {
+    let present = match viaduct_install::root_device_present() {
+        Ok(present) => present,
+        Err(message) => {
+            log(
+                install,
+                &format!(
+                    "viaduct-msi: DetectExistingDriver: {message}; treating a root device as present"
+                ),
+            );
+            true
+        }
+    };
+    if present {
+        // SAFETY: the installer's own handle; both strings are static and
+        // NUL-terminated. An immediate action may set properties.
+        let _ = unsafe { MsiSetPropertyW(install, ROOT_PRESENT_PROPERTY, w!("1")) };
+        log(
+            install,
+            "viaduct-msi: DetectExistingDriver: a Viaduct root device is already there",
+        );
+    }
+    ERROR_SUCCESS
 }
 
 /// Deferred: installs the driver from the folder in CustomActionData.
@@ -132,7 +191,7 @@ pub extern "system" fn InstallDriver(install: MSIHANDLE) -> u32 {
         );
         return ERROR_INSTALL_FAILURE;
     }
-    run(install, "InstallDriver", false, |log| {
+    run(install, "InstallDriver", action_result, |log| {
         viaduct_install::install(&folder, log)
     })
 }
@@ -143,7 +202,7 @@ pub extern "system" fn UninstallDriver(install: MSIHANDLE) -> u32 {
     run(
         install,
         "UninstallDriver",
-        false,
+        action_result,
         viaduct_install::uninstall,
     )
 }
@@ -154,7 +213,7 @@ pub extern "system" fn RollbackInstallDriver(install: MSIHANDLE) -> u32 {
     run(
         install,
         "RollbackInstallDriver",
-        true,
+        rollback_result,
         viaduct_install::uninstall,
     )
 }

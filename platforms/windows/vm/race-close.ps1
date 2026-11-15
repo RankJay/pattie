@@ -18,6 +18,14 @@
     once, on one handle. Only 16 may hold a pinned Ring at a time; requests past
     that are refused at once with ERROR_BUSY (170). Then it closes the handle.
 
+    -Mode Gone (ADR 0024, VM-STEPS R5): a forced removal under a live Owner.
+    Opens \\.\Viaduct, says Hello, creates a Device, then disables the root
+    device with CM_DISABLE_ABSOLUTE ("don't ask the driver"), which skips the
+    query-remove veto as no installer or pnputil does. On the still-open handle
+    it then sends Hello and Create Device, which must fail with
+    STATUS_DEVICE_REMOVED (Win32 1617, the SDK's DriverRemoved), closes it,
+    re-enables the root and checks a new Owner can create a Device again.
+
     -Mode Names (finding 5): opening the device with a trailing name
     (\\.\Viaduct\x) must fail with ERROR_FILE_NOT_FOUND (2); opening
     \\.\Viaduct itself must still work.
@@ -33,7 +41,7 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('Race', 'Burst', 'Names')][string]$Mode = 'Race',
+    [ValidateSet('Race', 'Burst', 'Names', 'Gone')][string]$Mode = 'Race',
     [ValidateRange(1, 10000)][int]$Rounds = 200
 )
 
@@ -207,6 +215,72 @@ public static class ViaductRaw
         return 0;
     }
 
+    [DllImport("cfgmgr32", CharSet = CharSet.Unicode)]
+    static extern int CM_Locate_DevNodeW(out uint devInst, string instanceId, uint flags);
+    [DllImport("cfgmgr32")]
+    static extern int CM_Disable_DevNode(uint devInst, uint flags);
+    [DllImport("cfgmgr32")]
+    static extern int CM_Enable_DevNode(uint devInst, uint flags);
+    [DllImport("ntdll")]
+    static extern int RtlNtStatusToDosError(int status);
+
+    // The NTSTATUS a request completed with (0 when it ran; then the reply's own
+    // status is in the envelope), or the Win32 error it failed with at once.
+    static string Outcome(IntPtr device, uint command, byte[] input)
+    {
+        Pending p = Send(device, command, input);
+        string text;
+        if (p.Error != 0) {
+            text = "failed at once, Win32 error " + p.Error;
+        } else {
+            WaitForSingleObject(p.Event, 10000);
+            int status = Marshal.ReadInt32(p.Overlapped, 0);
+            text = status == 0
+                ? "ran (reply status " + Marshal.ReadInt32(p.Output, 0) + ")"
+                : string.Format("NTSTATUS 0x{0:X8} (Win32 {1})", status, RtlNtStatusToDosError(status));
+        }
+        CloseHandle(p.Event);
+        Marshal.FreeHGlobal(p.Input); Marshal.FreeHGlobal(p.Output); Marshal.FreeHGlobal(p.Overlapped);
+        return text;
+    }
+
+    const uint CM_DISABLE_ABSOLUTE = 1, CM_DISABLE_UI_NOT_OK = 4;
+
+    // Each step's result, in order, for the script to print.
+    public static string[] Gone(string rootInstance)
+    {
+        var log = new System.Collections.Generic.List<string>();
+        uint root;
+        int cr = CM_Locate_DevNodeW(out root, rootInstance, 0);
+        if (cr != 0) { log.Add("CM_Locate_DevNode(" + rootInstance + "): CONFIGRET " + cr); return log.ToArray(); }
+
+        IntPtr device = Open();
+        log.Add("Hello before:  " + Outcome(device, 1, Hello()));
+        log.Add("Create before: " + Outcome(device, 2, Create("Gone A")));
+
+        cr = CM_Disable_DevNode(root, CM_DISABLE_ABSOLUTE | CM_DISABLE_UI_NOT_OK);
+        log.Add("CM_Disable_DevNode(ABSOLUTE): CONFIGRET " + cr + "   <- 0: done, without asking the driver");
+        System.Threading.Thread.Sleep(3000);
+
+        log.Add("Hello after:   " + Outcome(device, 1, Hello()) + "   <- want NTSTATUS 0xC00002B6 (Win32 1617)");
+        log.Add("Create after:  " + Outcome(device, 2, Create("Gone B")) + "   <- the same");
+        CloseHandle(device);
+        System.Threading.Thread.Sleep(2000);
+
+        cr = CM_Enable_DevNode(root, 0);
+        log.Add("CM_Enable_DevNode: CONFIGRET " + cr);
+        System.Threading.Thread.Sleep(5000);
+        int opened = TryOpen(@"\\.\Viaduct");
+        log.Add(@"A new Owner opens \\.\Viaduct: error " + opened + "   <- want 0");
+        if (opened == 0) {
+            IntPtr fresh = Open();
+            log.Add("  Hello:  " + Outcome(fresh, 1, Hello()));
+            log.Add("  Create: " + Outcome(fresh, 2, Create("Gone C")) + "   <- want ran (reply status 0)");
+            CloseHandle(fresh);
+        }
+        return log.ToArray();
+    }
+
     static void Tally(int[] counts, int outcome)
     {
         if (outcome == 0) counts[0]++;
@@ -229,6 +303,16 @@ if ($Mode -eq 'Race') {
     $left = @(Get-PnpDevice -Class AudioEndpoint -ErrorAction SilentlyContinue |
         Where-Object { $_.FriendlyName -like '*(Race *' -and $_.Status -eq 'OK' })
     "  'Race' endpoints still present: $($left.Count)   <- expect 0"
+} elseif ($Mode -eq 'Gone') {
+    $root = (Get-PnpDevice -FriendlyName 'Viaduct Virtual Audio' -ErrorAction Stop).InstanceId
+    "Gone: a forced removal of $root under a live Owner"
+    [ViaductRaw]::Gone($root) | ForEach-Object { "  $_" }
+    Start-Sleep -Seconds 2
+    $after = Get-PnpDevice -InstanceId $root
+    "  the root now: Status $($after.Status), Problem $($after.Problem)   <- want OK"
+    $left = @(Get-PnpDevice -Class AudioEndpoint -ErrorAction SilentlyContinue |
+        Where-Object { $_.FriendlyName -like '*(Gone *' -and $_.Status -eq 'OK' })
+    "  'Gone' endpoints still present: $($left.Count)   <- expect 0"
 } elseif ($Mode -eq 'Names') {
     $named = [ViaductRaw]::TryOpen('\\.\Viaduct\x')
     $plain = [ViaductRaw]::TryOpen('\\.\Viaduct')

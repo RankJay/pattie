@@ -86,10 +86,6 @@ pub enum Outcome {
     RebootRequired,
 }
 
-/// The exit code of a failed install or uninstall (MSI's own failure is 1603;
-/// the custom action reports failure its own way).
-pub const FAILURE_EXIT_CODE: i32 = 1;
-
 impl Outcome {
     /// `viaduct-cli`'s exit code, msiexec's convention: 0 done, 3010
     /// (ERROR_SUCCESS_REBOOT_REQUIRED) done once Windows restarts. An `i32`, as
@@ -112,11 +108,11 @@ impl Outcome {
 pub enum DriverUpdate {
     /// It installed the package on the root device(s).
     Installed,
-    /// `ERROR_NO_MORE_ITEMS`: not forced, and the installed driver ranks better
-    /// than the one offered (ADR 0016): newer, or the offered one's signature
-    /// isn't trusted (VM-STEPS R2, an untrusted test certificate). The same
-    /// package is reinstalled instead (R1), which is how a re-run finishes a
-    /// deferred update.
+    /// `ERROR_NO_MORE_ITEMS`, not forced, and the installed driver is the same
+    /// version or newer (ADR 0016). Kept but *older* is a failure instead
+    /// (`classify_kept`: an untrusted signature, VM-STEPS R2 and R4). The same
+    /// package is reinstalled rather than kept (R1), which is how a re-run
+    /// finishes a deferred update.
     NothingNewer,
     /// Any other failure, with Windows' reason.
     Failed(String),
@@ -133,11 +129,70 @@ pub fn install_outcome(
     match update {
         DriverUpdate::Installed if reboot => Ok(Outcome::RebootRequired),
         DriverUpdate::Installed => Ok(Outcome::Installed),
+        // Kept as it is; a restart may still be pending from an earlier update.
+        DriverUpdate::NothingNewer if !created_root && reboot => Ok(Outcome::RebootRequired),
         DriverUpdate::NothingNewer if !created_root => Ok(Outcome::AlreadyCurrent),
         DriverUpdate::NothingNewer => {
             Err("no driver was installed on the new root device".to_string())
         }
         DriverUpdate::Failed(reason) => Err(format!("installing the driver failed: {reason}")),
+    }
+}
+
+/// A driver version: DriverVer's four numbers, compared number by number.
+pub type DriverVersion = [u16; 4];
+
+/// `a.b.c.d`, each part a 16-bit number, as Windows reports a device's driver
+/// version (DEVPKEY_Device_DriverVersion).
+pub fn parse_driver_version(text: &str) -> Option<DriverVersion> {
+    let mut parts = text.trim().split('.');
+    let mut version = [0u16; 4];
+    for part in &mut version {
+        *part = parts.next()?.trim().parse().ok()?;
+    }
+    parts.next().is_none().then_some(version)
+}
+
+/// The version in an INF's `DriverVer = date,a.b.c.d` line.
+pub fn inf_driver_version(text: &str) -> Option<DriverVersion> {
+    text.lines().find_map(|line| {
+        let line = line.split(';').next().unwrap_or("");
+        let (key, value) = line.split_once('=')?;
+        if !key.trim().eq_ignore_ascii_case("DriverVer") {
+            return None;
+        }
+        parse_driver_version(value.split_once(',')?.1)
+    })
+}
+
+/// What `ERROR_NO_MORE_ITEMS` ("Windows kept the installed driver") means,
+/// from the root's driver version and the package's. Kept but older than the
+/// package: Windows refused the package (its signature isn't trusted, or it
+/// ranks lower), and the install failed; VM-STEPS R4 saw an MSI report success
+/// that way. The same or newer: really nothing newer. No root with a readable
+/// driver version: nothing was kept, so a failure too. The package's own
+/// version unreadable: as Windows said. Versions only: packages always raise
+/// DriverVer (ADR 0024).
+pub fn classify_kept(
+    installed: Option<DriverVersion>,
+    offered: Option<DriverVersion>,
+) -> DriverUpdate {
+    match (installed, offered) {
+        (Some(installed), Some(offered)) if installed < offered => {
+            let show = |v: DriverVersion| format!("{}.{}.{}.{}", v[0], v[1], v[2], v[3]);
+            DriverUpdate::Failed(format!(
+                "Windows kept the installed {} instead of this package's {}: this package's signature isn't trusted, or Windows ranks it lower",
+                show(installed),
+                show(offered)
+            ))
+        }
+        // No root has a driver to read: Windows kept nothing, so this package
+        // wasn't taken.
+        (None, _) => DriverUpdate::Failed(
+            "Windows installed no driver on the root device: this package's signature isn't trusted, or Windows ranks it lower"
+                .to_string(),
+        ),
+        _ => DriverUpdate::NothingNewer,
     }
 }
 
@@ -164,11 +219,16 @@ pub fn uninstall_outcome(reboots: impl IntoIterator<Item = bool>) -> Outcome {
 }
 
 #[cfg(windows)]
-pub use setup::{install, uninstall};
+pub use setup::{install, root_device_present, uninstall};
 
 #[cfg(not(windows))]
 pub fn install(_package: &str, _log: &mut dyn FnMut(&str)) -> Result<Outcome, String> {
     Err("install is only available on Windows".to_string())
+}
+
+#[cfg(not(windows))]
+pub fn root_device_present() -> Result<bool, String> {
+    Ok(false)
 }
 
 #[cfg(not(windows))]
@@ -181,8 +241,7 @@ impl std::fmt::Display for Outcome {
         f.write_str(match self {
             Outcome::Installed => "installed the driver",
             Outcome::AlreadyCurrent => {
-                "Windows kept the installed driver: it ranks better than this one (a newer \
-                 version, or this package's signature isn't trusted)"
+                "Windows kept the installed driver: it is the same version as this one or newer"
             }
             Outcome::Removed => "removed the driver",
             Outcome::RebootRequired => {
@@ -199,6 +258,81 @@ mod setup;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn driver_versions_read_from_the_inf_and_the_device() {
+        let inf = "[Version]
+
+Signature=\"$WINDOWS NT$\"
+
+DriverVer = 11/15/2026,0.1.2.31
+
+";
+        assert_eq!(inf_driver_version(inf), Some([0, 1, 2, 31]));
+        assert_eq!(
+            inf_driver_version("DriverVer=01/02/2026, 1.2.3.4 ; note"),
+            Some([1, 2, 3, 4])
+        );
+        assert_eq!(
+            inf_driver_version(
+                "[Version]
+Class=MEDIA
+"
+            ),
+            None
+        );
+        assert_eq!(parse_driver_version("0.1.1.30"), Some([0, 1, 1, 30]));
+        assert_eq!(parse_driver_version("0.1.1"), None);
+        assert_eq!(parse_driver_version("0.1.1.30.5"), None);
+        // Only the DriverVer key, not another with the same shape before it.
+        assert_eq!(
+            inf_driver_version(
+                "OtherVer = 01/01/2020,9.9.9.9
+DriverVer = 11/15/2026,0.1.2.31
+"
+            ),
+            Some([0, 1, 2, 31])
+        );
+        assert_eq!(parse_driver_version("0.1.1.70000"), None);
+    }
+
+    #[test]
+    fn a_kept_driver_older_than_the_package_means_windows_refused_the_package() {
+        // VM-STEPS R4: the package's signature wasn't trusted, Windows kept the
+        // CLI's 0.1.1.30 on the device, and the MSI reported success with 0.1.2.
+        let kept = classify_kept(Some([0, 1, 1, 30]), Some([0, 1, 2, 31]));
+        assert!(
+            matches!(&kept, DriverUpdate::Failed(reason) if reason.contains("0.1.1.30") && reason.contains("0.1.2.31")),
+            "{kept:?}"
+        );
+        // The installed one is the same or newer: really nothing newer.
+        assert_eq!(
+            classify_kept(Some([0, 1, 2, 31]), Some([0, 1, 2, 31])),
+            DriverUpdate::NothingNewer
+        );
+        assert_eq!(
+            classify_kept(Some([0, 1, 3, 0]), Some([0, 1, 2, 31])),
+            DriverUpdate::NothingNewer
+        );
+        // Compared number by number, not as text.
+        assert!(matches!(
+            classify_kept(Some([0, 1, 2, 9]), Some([0, 1, 2, 10])),
+            DriverUpdate::Failed(_)
+        ));
+        // No root has a driver version to read (a root with no driver): Windows
+        // kept nothing, so the package wasn't taken. A failure, not success
+        // (second review: this used to fall back to "nothing newer").
+        assert!(matches!(
+            classify_kept(None, Some([0, 1, 2, 31])),
+            DriverUpdate::Failed(_)
+        ));
+        assert!(matches!(classify_kept(None, None), DriverUpdate::Failed(_)));
+        // The package's own version unreadable: as Windows said.
+        assert_eq!(
+            classify_kept(Some([0, 1, 2, 31]), None),
+            DriverUpdate::NothingNewer
+        );
+    }
 
     #[test]
     fn a_newer_driver_installs_and_a_veto_defers_it_to_a_reboot() {
@@ -227,6 +361,11 @@ mod tests {
         // A root device this run created, with no driver installed on it, is a
         // failed install (the caller then removes that root again).
         assert!(install_outcome(DriverUpdate::NothingNewer, false, true).is_err());
+        // Kept, but an earlier update still waits for a restart: say so.
+        assert_eq!(
+            install_outcome(DriverUpdate::NothingNewer, true, false),
+            Ok(Outcome::RebootRequired)
+        );
     }
 
     #[test]
@@ -269,7 +408,6 @@ mod tests {
         }
         assert_eq!(Outcome::RebootRequired.exit_code(), 3010);
         assert!(Outcome::RebootRequired.reboot_required());
-        assert_eq!(FAILURE_EXIT_CODE, 1);
     }
 
     #[test]
