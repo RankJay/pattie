@@ -42,7 +42,10 @@
 [CmdletBinding()]
 param(
     [ValidateSet('Race', 'Burst', 'Names', 'Gone')][string]$Mode = 'Race',
-    [ValidateRange(1, 10000)][int]$Rounds = 200
+    [ValidateRange(1, 10000)][int]$Rounds = 200,
+    # Gone only: CM_DISABLE_HARDWARE instead of CM_DISABLE_ABSOLUTE (R5 found
+    # ABSOLUTE still vetoed). Not restartable until a reboot if it takes.
+    [switch]$Hard
 )
 
 $ErrorActionPreference = 'Stop'
@@ -244,10 +247,15 @@ public static class ViaductRaw
         return text;
     }
 
-    const uint CM_DISABLE_ABSOLUTE = 1, CM_DISABLE_UI_NOT_OK = 4;
+    const uint CM_DISABLE_ABSOLUTE = 1, CM_DISABLE_HARDWARE = 2, CM_DISABLE_UI_NOT_OK = 4;
+
+    static string Cr(int cr)
+    {
+        return cr == 0 ? "0 (CR_SUCCESS)" : cr == 0x17 ? "23 (CR_REMOVE_VETOED: the driver refused)" : cr.ToString();
+    }
 
     // Each step's result, in order, for the script to print.
-    public static string[] Gone(string rootInstance)
+    public static string[] Gone(string rootInstance, bool hard)
     {
         var log = new System.Collections.Generic.List<string>();
         uint root;
@@ -258,8 +266,9 @@ public static class ViaductRaw
         log.Add("Hello before:  " + Outcome(device, 1, Hello()));
         log.Add("Create before: " + Outcome(device, 2, Create("Gone A")));
 
-        cr = CM_Disable_DevNode(root, CM_DISABLE_ABSOLUTE | CM_DISABLE_UI_NOT_OK);
-        log.Add("CM_Disable_DevNode(ABSOLUTE): CONFIGRET " + cr + "   <- 0: done, without asking the driver");
+        cr = CM_Disable_DevNode(root, (hard ? CM_DISABLE_HARDWARE : CM_DISABLE_ABSOLUTE) | CM_DISABLE_UI_NOT_OK);
+        log.Add("CM_Disable_DevNode(" + (hard ? "HARDWARE" : "ABSOLUTE") + "): CONFIGRET " + Cr(cr));
+        if (cr != 0) log.Add("  the root wasn't disabled: the commands below run as usual");
         System.Threading.Thread.Sleep(3000);
 
         log.Add("Hello after:   " + Outcome(device, 1, Hello()) + "   <- want NTSTATUS 0xC00002B6 (Win32 1617)");
@@ -306,7 +315,7 @@ if ($Mode -eq 'Race') {
 } elseif ($Mode -eq 'Gone') {
     $root = (Get-PnpDevice -FriendlyName 'Viaduct Virtual Audio' -ErrorAction Stop).InstanceId
     "Gone: a forced removal of $root under a live Owner"
-    [ViaductRaw]::Gone($root) | ForEach-Object { "  $_" }
+    [ViaductRaw]::Gone($root, [bool]$Hard) | ForEach-Object { "  $_" }
     Start-Sleep -Seconds 2
     $after = Get-PnpDevice -InstanceId $root
     "  the root now: Status $($after.Status), Problem $($after.Problem)   <- want OK"
