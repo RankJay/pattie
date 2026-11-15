@@ -24,6 +24,14 @@ pub(crate) fn to_instant(ns: u64) -> Instant {
     }
 }
 
+/// Performance-counter `ticks` at `hz` in nanoseconds, rounded down exactly as
+/// the driver's `vd_clock_ns` does, so both sides give the same number. Split
+/// so no product overflows for centuries of uptime.
+#[cfg(any(windows, test))]
+fn ticks_to_ns(ticks: u64, hz: u64) -> u64 {
+    (ticks / hz) * 1_000_000_000 + (ticks % hz) * 1_000_000_000 / hz
+}
+
 // Named by OS, as in doorbell.rs, so .cargo/mutants.toml can tell the readings
 // apart: mutation runs on Windows, where only `win` is compiled.
 #[cfg(not(any(windows, target_os = "linux")))]
@@ -47,8 +55,7 @@ mod win {
         unsafe { QueryPerformanceCounter(&mut ticks) };
         // SAFETY: as above.
         unsafe { QueryPerformanceFrequency(&mut hz) };
-        let (ticks, hz) = (ticks.unsigned_abs(), hz.unsigned_abs().max(1));
-        (ticks / hz) * 1_000_000_000 + (ticks % hz) * 1_000_000_000 / hz
+        super::ticks_to_ns(ticks.unsigned_abs(), hz.unsigned_abs().max(1))
     }
 }
 
@@ -83,6 +90,18 @@ mod elsewhere {
 mod tests {
     use super::*;
     use std::time::{Duration, Instant};
+
+    /// The C core's worked values for `vd_clock_ns` (core/tests clock.rs).
+    #[test]
+    fn ticks_become_nanoseconds_exactly_as_the_driver_converts_them() {
+        const QPC_HZ: u64 = 10_000_000;
+        assert_eq!(ticks_to_ns(12_345_678, QPC_HZ), 1_234_567_800);
+        assert_eq!(ticks_to_ns(3, 3_579_545), 838); // 838.09..., rounded down
+        assert_eq!(
+            ticks_to_ns(1000 * 86_400 * QPC_HZ + 7, QPC_HZ),
+            1000 * 86_400 * 1_000_000_000 + 700
+        );
+    }
 
     #[test]
     fn now_in_nanoseconds_is_now_as_an_instant() {

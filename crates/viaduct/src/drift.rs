@@ -127,6 +127,34 @@ mod tests {
 
     const ONE_MS: f64 = 48.0;
 
+    /// ADR 0022 (amendment 2026-11-15): with bursts of up to ±10 ms on every
+    /// pass, once settled, the correction changes by at most 2 ppm a pass. The
+    /// smoothing follows drift, not bursts.
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "hundreds of thousands of steps, and no unsafe code to check"
+    )]
+    fn bursts_of_10_ms_move_the_correction_by_at_most_2_ppm_a_pass() {
+        let (pass, jitter) = (480.0, 480.0);
+        let mut controller = Controller::new(TARGET, 48_000);
+        let mut noise = Noise(0x9E37_79B9_7F4A_7C15);
+        let (mut fill, mut ppm, mut last_jitter, mut largest_step) = (TARGET, 0.0, 0.0, 0.0f64);
+        for n in 0..3_600 * 100 {
+            let this_jitter = jitter * noise.next();
+            fill += pass * (1.0 + 50.0 / 1e6) + this_jitter - last_jitter;
+            fill -= pass * (1.0 + ppm / 1e6);
+            last_jitter = this_jitter;
+            let next = controller.update(fill, PASS_S);
+            if n >= 600 * 100 {
+                largest_step = largest_step.max((next - ppm).abs()); // settled
+            }
+            ppm = next;
+        }
+
+        assert!(largest_step <= 2.0, "{largest_step:.2} ppm in one pass");
+    }
+
     #[test]
     #[cfg_attr(
         miri,

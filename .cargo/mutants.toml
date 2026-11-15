@@ -13,6 +13,9 @@ exclude_globs = [
     "crates/viaduct/src/linux.rs",
     "crates/viaduct/src/linux/**",
     "crates/viaduct/src/core_host/claim.rs",
+    # Test scaffolding (the contract suite's nodes), never shipped; coverage
+    # leaves it out too.
+    "crates/viaduct/src/core_host/test_backend.rs",
     "testing/**",
     "core/tests/**",
     # The Python binding: its tests are Python (pytest), which cargo-mutants
@@ -35,8 +38,12 @@ test_workspace = true
 
 # Bugs no host test can observe, each with its reason.
 exclude_re = [
-    # Freeing memory: a leak isn't visible without an allocator that counts.
-    "<impl Drop for RingMemory>::drop",
+    # Freeing memory or closing a handle: a leak isn't visible without an
+    # allocator (or handle table) that counts.
+    "<impl Drop for (RingMemory|Core|Owner)>::drop",
+    "win::<impl Drop for Bell>::drop",
+    # Test code inside src/ (the `mod tests` helpers).
+    " tests::",
     # Thin wrappers around install/setup.rs, which changes the machine (VM-STEPS D.5).
     "replace (install|uninstall) -> Result<\\(\\), String> with Ok\\(\\(\\)\\)",
     # MMCSS "Pro Audio": its effect is only scheduling priority under load (the
@@ -55,7 +62,27 @@ exclude_re = [
     # missed, so update it then.
     "playout\\.rs:149:76: replace \\* with [+/] in Playout::push",
     # Debug output: cosmetic, no behaviour.
-    "<impl fmt::Debug for LiveWriter>::fmt",
+    "<impl (std::)?fmt::Debug for ",
+    # Equivalent: NaN becomes 0 either way (Rust's float-to-int cast saturates
+    # NaN to 0), and a subnormal rounds to 0 anyway.
+    "replace \\|\\| with && in pcm16",
+    # Equivalent: the bias keeps bit 7 set, so the segment loop always stops by 0.
+    "replace > with >= in mu_law_encode",
+    # Equivalent: sign, segment and mantissa bits don't overlap, so | and ^ agree.
+    "replace \\| with \\^ in mu_law_encode",
+    # Equivalent: keeping more history than taps - 1 changes nothing, since
+    # `base` follows the history's length. Pinned to its line and column (as
+    # the queue cap above); line 310's mutant there is caught.
+    "convert\\.rs:309:31: replace - with [+/] in Resampler::process",
+    # Equivalent output: an unreduced ratio only makes the filter table bigger.
+    "replace gcd -> u32 with 1",
+    # Equivalent: pushing nothing starts an empty reply, which ends at the next check.
+    "replace > with >= in Playout::push",
+    # Only waits of 49.7 days or more (INFINITE - 1 ms) differ.
+    "replace - with / in win::Bell::wait",
+    # The default: the Windows transport's lead, which only the VM sees; host
+    # tests use the test backend's own (core_host.rs).
+    "replace Transport::lead_frames -> u32",
     # Linux-only code inside shared files, not compiled on Windows where mutation
     # runs (as linux.rs above): the clock's and doorbell's `linux` modules, the
     # fallback clock, and the Linux core's setup.

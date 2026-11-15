@@ -372,6 +372,34 @@ mod tests {
     }
 
     #[test]
+    fn a_remove_device_command_removes_that_devices_node_and_no_other() {
+        let (transport, log, _) = stub(false);
+        let mut session = crate::session::Session::open(transport.as_ref()).unwrap();
+        let ring = || crate::ring::RingMemory::new(4_096).unwrap();
+        let bell = || crate::doorbell::Doorbell::new().unwrap();
+        let (ring_a, ring_b, bell_a, bell_b) = (ring(), ring(), bell(), bell());
+        let a = session
+            .create_device(abi::KIND_MICROPHONE, "A", &ring_a, bell_a.raw())
+            .unwrap();
+        session
+            .create_device(abi::KIND_MICROPHONE, "B", &ring_b, bell_b.raw())
+            .unwrap();
+
+        let removed = || -> Vec<String> {
+            log.lines()
+                .into_iter()
+                .filter(|line| line.starts_with("removed"))
+                .collect()
+        };
+        let before = removed();
+
+        session.remove_device(a).unwrap();
+
+        assert!(before.is_empty(), "removed before the command: {before:?}");
+        assert_eq!(removed(), ["removed A"]);
+    }
+
+    #[test]
     fn a_duplicate_name_is_refused_by_the_core_before_any_node_is_made() {
         let (transport, log, _) = stub(false);
         let builder = || {

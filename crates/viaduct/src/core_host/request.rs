@@ -34,3 +34,35 @@ pub(super) fn ring_of(input: &[u8]) -> Option<(*mut std::ffi::c_void, usize)> {
 pub(super) fn wake_of(input: &[u8]) -> Option<u64> {
     read_u64(input, offset_of!(CreateDeviceRequest, wake_event))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request(ring_address: u64, ring_bytes: u64) -> CreateDeviceRequest {
+        CreateDeviceRequest {
+            kind: abi::KIND_MICROPHONE,
+            name_len: 0,
+            name: [0; abi::DEVICE_NAME_MAX],
+            reserved: 0,
+            ring_address,
+            ring_bytes,
+            wake_event: 0,
+        }
+    }
+
+    fn names_a_ring(ring_address: u64, ring_bytes: u64) -> bool {
+        ring_of(abi::bytes_of(&request(ring_address, ring_bytes))).is_some()
+    }
+
+    #[test]
+    fn a_ring_is_named_by_a_nonzero_address_and_a_size_up_to_the_largest() {
+        let max = u64::from(abi::RING_MAX_BYTES);
+
+        assert!(names_a_ring(0x1000, 4_096));
+        assert!(names_a_ring(0x1000, max));
+        assert!(!names_a_ring(0x1000, max + 1));
+        assert!(!names_a_ring(0, 4_096));
+        assert!(!names_a_ring(0x1000, 0));
+    }
+}

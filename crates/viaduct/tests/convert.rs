@@ -213,6 +213,30 @@ fn pieces_of_any_size_give_exactly_what_one_call_gives() {
     }
 }
 
+#[test]
+fn a_stream_fed_one_sample_at_a_time_from_its_start_gives_what_one_call_gives() {
+    // From the very start: before the resampler's history is full, each call
+    // keeps everything it has, and none of it may be lost.
+    let input_format = format(44_100, 1, Encoding::F32);
+    let input = f32_bytes(&sine(44_100, 440.0, 0.01));
+    let at_once = convert(input_format, Format::DEVICE, &input);
+
+    let mut converter = Converter::new(input_format, Format::DEVICE).unwrap();
+    let mut pieces = Vec::new();
+    for sample in input.chunks(4) {
+        converter.convert(sample, &mut pieces);
+    }
+
+    assert_eq!(pieces, at_once);
+}
+
+#[test]
+fn with_rate_changes_the_rate_and_nothing_else() {
+    let format = format(48_000, 2, Encoding::I16).with_rate(44_100);
+
+    assert_eq!(format, self::format(44_100, 2, Encoding::I16));
+}
+
 /// How far `signal` is from a pure sine at `hz` (best-fitting amplitude and
 /// phase), in dB: the residual's power over the sine's. `signal` spans a whole
 /// number of the sine's cycles.

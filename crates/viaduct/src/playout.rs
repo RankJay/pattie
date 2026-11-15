@@ -289,6 +289,7 @@ mod tests {
     use super::*;
     use crate::Device;
     use crate::transport::TestBackend;
+    use std::time::Duration;
 
     /// A Microphone on a fresh test backend, a hand-driven playout on it, and the
     /// Backend's lead.
@@ -306,6 +307,57 @@ mod tests {
             .unwrap();
         let playout = Playout::manual(mic.inner().clone(), Format::DEVICE).unwrap();
         (backend, mic, playout, lead)
+    }
+
+    #[test]
+    fn wait_idle_waits_until_the_system_has_taken_the_whole_reply_from_the_ring() {
+        let (backend, mic, playout, _) = setup();
+        playout.push(&[0.5; 480]);
+        playout.shared.pump(); // all of it in the Ring, nothing left queued
+        let soon = || Instant::now() + Duration::from_millis(20);
+
+        let none_taken = playout.wait_idle(soon());
+        backend.driver_read(mic.id(), 240);
+        playout.shared.pump();
+        let half_taken = playout.wait_idle(soon());
+        backend.driver_read(mic.id(), 240);
+        playout.shared.pump();
+        let all_taken = playout.wait_idle(soon());
+
+        assert_eq!((none_taken, half_taken, all_taken), (false, false, true));
+    }
+
+    #[test]
+    fn two_seconds_pushed_at_once_are_all_queued() {
+        let (_backend, _mic, playout, _) = setup();
+
+        let added = playout.push(&[0.5; 96_000]);
+
+        assert_eq!((added, playout.queued_frames()), (96_000, 96_000));
+    }
+
+    #[test]
+    fn a_stereo_playout_counts_frames_not_samples() {
+        let backend = TestBackend::new().unwrap();
+        let mic = Device::builder()
+            .name("Agent Mic")
+            .format(48_000, 2)
+            .transport(backend.transport())
+            .create()
+            .unwrap();
+        let stereo = Format {
+            channels: 2,
+            ..Format::DEVICE
+        };
+        let playout = Playout::manual(mic.inner().clone(), stereo).unwrap();
+
+        let first = playout.push(&[0.5; 960]);
+        let second = playout.push(&[0.5; 480]);
+        let queued = playout.queued_frames();
+        let interrupted = playout.interrupt();
+
+        assert_eq!((first, second, queued), (480, 240, 720));
+        assert_eq!(interrupted.discarded_frames, 720);
     }
 
     #[test]

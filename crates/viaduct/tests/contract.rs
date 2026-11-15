@@ -84,15 +84,18 @@ contract_suite!(
     write_paced_delivers_everything_keeping_only_a_small_lead,
     write_paced_stops_at_its_deadline_with_only_the_lead_written,
     wait_for_playout_is_true_once_the_system_has_taken_everything,
+    wait_for_playout_waits_while_the_system_takes_the_audio,
     a_reply_pushed_at_once_reaches_the_system_whole_and_in_order,
     interrupt_stops_a_reply_with_at_most_the_lead_still_playing,
     a_playout_holds_the_writer_slot_until_dropped,
     wait_idle_is_true_once_a_reply_has_played,
     read_paced_returns_as_soon_as_the_system_plays_audio,
     read_paced_returns_nothing_once_its_deadline_passes,
+    read_paced_into_room_for_one_frame_waits_for_it,
     a_microphones_clock_says_how_far_and_when_the_system_last_took,
     a_speakers_clock_says_how_far_and_when_the_system_last_played,
     read_timed_says_when_the_first_frame_read_was_played,
+    read_timed_with_nothing_read_gives_no_time,
     next_play_time_says_when_the_next_frame_written_will_be_taken,
     a_devices_next_play_time_matches_its_writers,
     a_live_writers_audio_reaches_the_system_after_its_buffer_fills,
@@ -459,6 +462,24 @@ fn wait_for_playout_is_true_once_the_system_has_taken_everything(backend: &dyn B
     assert_eq!((while_queued, once_taken), (false, true));
 }
 
+fn wait_for_playout_waits_while_the_system_takes_the_audio(backend: &dyn Backend) {
+    let mic = builder(backend).name("Agent Mic").create().unwrap();
+    let mut tx = mic.writer().unwrap();
+    tx.write(&[0.5; 960]).unwrap();
+    let started = Instant::now();
+
+    let played = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            sleep_ms(50);
+            backend.driver_read(mic.id(), 960);
+        });
+        tx.wait_for_playout(started + Duration::from_secs(10))
+    });
+
+    assert!(played);
+    assert!(started.elapsed() < Duration::from_secs(5));
+}
+
 /// The system pulling 10 ms packets for `duration`, while `during` runs on this
 /// thread; returns what the system took.
 fn system_pulls_while<T>(
@@ -613,6 +634,28 @@ fn read_paced_returns_nothing_once_its_deadline_passes(backend: &dyn Backend) {
     assert!(started.elapsed() >= Duration::from_millis(14)); // a timer tick early at most
 }
 
+fn read_paced_into_room_for_one_frame_waits_for_it(backend: &dyn Backend) {
+    let speaker = builder(backend)
+        .name("Agent Speaker")
+        .kind(Kind::Speaker)
+        .create()
+        .unwrap();
+    let mut rx = speaker.reader().unwrap();
+    let mut out = [0.0f32; 1];
+    let started = Instant::now();
+
+    let got = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            sleep_ms(50);
+            backend.driver_write(speaker.id(), &[0.25; 480]);
+        });
+        rx.read_paced(&mut out, started + Duration::from_secs(10))
+            .unwrap()
+    });
+
+    assert_eq!((got, out[0]), (1, 0.25));
+}
+
 /// `at` lies between two Instants, give or take the clock conversion's error.
 fn between(at: Instant, from: Instant, to: Instant) -> bool {
     let slack = Duration::from_millis(1);
@@ -675,6 +718,24 @@ fn read_timed_says_when_the_first_frame_read_was_played(backend: &dyn Backend) {
 
     assert_eq!(timed.frames, 480);
     assert!(between(timed.first_at.unwrap(), from - TEN_MS, to - TEN_MS));
+}
+
+fn read_timed_with_nothing_read_gives_no_time(backend: &dyn Backend) {
+    let speaker = builder(backend)
+        .name("Agent Speaker")
+        .kind(Kind::Speaker)
+        .create()
+        .unwrap();
+    let mut rx = speaker.reader().unwrap();
+    backend.driver_write(speaker.id(), &[0.25; 480]);
+    rx.read(&mut [0.0; 480]).unwrap(); // the clock has a pass; nothing is left
+
+    let timed = rx
+        .read_timed(&mut [0.0; 480], Instant::now() + Duration::from_millis(30))
+        .unwrap();
+
+    assert_eq!(timed.frames, 0);
+    assert!(timed.first_at.is_none());
 }
 
 fn next_play_time_says_when_the_next_frame_written_will_be_taken(backend: &dyn Backend) {

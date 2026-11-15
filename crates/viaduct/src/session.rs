@@ -82,6 +82,20 @@ impl Session {
     }
 }
 
+impl Session {
+    /// Removes Device `id`: a command the SDK itself never sends (a Device goes
+    /// when its session closes), for tests of a Backend's side of it.
+    #[cfg(test)]
+    pub(crate) fn remove_device(&mut self, id: u32) -> Result<(), Error> {
+        let request = abi::RemoveDeviceRequest { device_id: id };
+        command::<()>(
+            self.connection.as_mut(),
+            abi::CMD_REMOVE_DEVICE,
+            abi::bytes_of(&request),
+        )
+    }
+}
+
 /// Sends one command and decodes its reply as `R`, a plain ABI struct.
 fn command<R: Copy + Default>(
     connection: &mut dyn Connection,

@@ -416,6 +416,46 @@ mod tests {
     }
 
     #[test]
+    fn a_stereo_starved_count_is_the_silent_frames_the_app_hears() {
+        let (backend, mic, live, lead) = setup_format(48_000, 2);
+        live.push(&[0.5; TARGET_FRAMES * 2]);
+        live.shared.pump();
+        for _ in 0..20 {
+            backend.driver_read(mic.id(), 480).unwrap();
+            live.shared.pump();
+            if live.stats().starved_frames > 0 {
+                break;
+            }
+        }
+
+        let heard = backend.driver_read(mic.id(), lead).unwrap();
+        let silent_tail = heard
+            .chunks_exact(2)
+            .rev()
+            .take_while(|frame| frame.iter().all(|&s| s == 0.0))
+            .count();
+
+        assert!(silent_tail > 0, "the source fell behind within 20 passes");
+        assert_eq!(live.stats().starved_frames, silent_tail as u64);
+    }
+
+    #[test]
+    fn a_held_correction_is_the_one_in_use() {
+        let (backend, mic, live) = setup();
+        live.hold_correction(Some(150.0));
+        live.push(&[0.5; TARGET_FRAMES * 4]);
+        live.shared.pump();
+        for pass in 1..=4u64 {
+            backend
+                .driver_read_at(mic.id(), 480, pass * 10_000_000)
+                .unwrap();
+            live.shared.pump();
+        }
+
+        assert_eq!(live.stats().correction_ppm, 150.0);
+    }
+
+    #[test]
     fn a_source_that_falls_behind_plays_counted_silence_then_fills_up_again() {
         let (backend, mic, live) = setup();
         live.push(&[0.5; TARGET_FRAMES]);
