@@ -1,10 +1,10 @@
-# Viaduct
+# Pattie
 
 **Named virtual microphones and speakers that any app can create, and every other app
 sees as real audio devices.**
 
 ```rust
-use viaduct::{Device, Kind};
+use pattie::{Device, Kind};
 
 let mic = Device::builder()
     .name("Agent Mic")
@@ -19,15 +19,14 @@ tx.write(&samples)?;            // whatever you write, Zoom hears
 
 No VB-CABLE, no admin prompt in your app, no reboot. Today Rust desktop apps that need
 a virtual mic (soundboards, routers, AI voice agents) tell their users to install a
-third-party cable. Viaduct is the missing piece: a kernel driver plus a small Rust SDK
+third-party cable. Pattie is the missing piece: a kernel driver plus a small Rust SDK
 that talks to it over shared memory.
 
 > **Status: v0 on Windows, plus Linux; not released.** The driver, SDK and CLI work end
 > to end in a test VM, including a real Zoom call; the Linux backend and the Python
 > binding work too. What's left before the v0 gate is an
 > attestation-signed driver installed on a clean Windows 11 with Secure Boot on.
-> Nothing is published to crates.io yet (the name `viaduct` is taken there; it gets
-> renamed before release).
+> Nothing is published to crates.io yet.
 
 ---
 
@@ -49,7 +48,7 @@ that talks to it over shared memory.
 
 ## What it is, and isn't
 
-| Viaduct is | Viaduct is not |
+| Pattie is | Pattie is not |
 | --- | --- |
 | A Windows audio driver that turns "create a device named X" into a real endpoint | A capture library (use `cpal`), a DSP or echo-cancellation library |
 | A Rust SDK: create a Device, write to its mic or read from its speaker | A meeting bot or recorder |
@@ -79,7 +78,7 @@ Measured in a VMware Windows 11 guest (test-signed driver, Driver Verifier on):
 ```mermaid
 flowchart LR
     subgraph App["Your app (user mode)"]
-        SDK["viaduct SDK<br/>(Rust)"]
+        SDK["pattie SDK<br/>(Rust)"]
     end
     subgraph Kernel["Windows kernel"]
         Shell["Driver shell<br/>(ACX/KMDF, C)"]
@@ -88,7 +87,7 @@ flowchart LR
     Engine["Windows audio engine"]
     Zoom["Zoom, Teams, OBS…"]
 
-    SDK -- "control: create / remove Device<br/>(IOCTL on \\.\Viaduct)" --> Shell
+    SDK -- "control: create / remove Device<br/>(IOCTL on \\.\Pattie)" --> Shell
     SDK <-- "audio: the Ring<br/>(shared memory, no syscalls)" --> Core
     Shell --- Core
     Shell <-- "endpoint per Device" --> Engine
@@ -98,8 +97,8 @@ flowchart LR
 1. **The root device.** Windows only runs a driver when a device needs it, and virtual
 
    hardware has no plug to announce one. So installation creates one permanent
-    "always plugged in" device, `Root\Viaduct`. Windows loads `viaduct.sys` for it, and
-    the driver opens its control door, `\\.\Viaduct`.
+    "always plugged in" device, `Root\Pattie`. Windows loads `pattie.sys` for it, and
+    the driver opens its control door, `\\.\Pattie`.
 2. **Creating a Device.** The SDK allocates a ring buffer (the **Ring**) in the app's
 
    memory and sends a create command with the name, kind and the Ring. The driver
@@ -137,7 +136,7 @@ correction) lives in the SDK, where a bug can't crash the machine.
 | **Ring** | The shared-memory ring buffer for one Device's audio: 32-bit float frames, one sample per channel, at the Device's rate. |
 | **Gap** | Frames the driver needed but the Ring didn't have (silence was played). |
 | **Overflow** | Frames the app wrote that didn't fit in the Ring (dropped). |
-| **Root device** | The one permanent device, `Root\Viaduct`, that makes Windows load the driver. |
+| **Root device** | The one permanent device, `Root\Pattie`, that makes Windows load the driver. |
 | **Endpoint** | What Windows and apps see: "Microphone (Agent Mic)". One per Device. |
 | **Core / shell** | The pure-C, host-tested logic / the Windows-specific kernel layer around it. |
 
@@ -155,8 +154,8 @@ in the core.
 - **The app allocates the Ring; the driver locks it.** The driver never trusts it:
 every index and size the app can touch is checked, since a hostile app controls
 every byte of the Ring.
-- **One ABI header, versioned (1.0).** `core/include/viaduct_abi.h` is the contract between SDK
-and driver. The SDK mirrors it in `crates/viaduct/src/abi.rs`, and a test checks
+- **One ABI header, versioned (1.0).** `core/include/pattie_abi.h` is the contract between SDK
+and driver. The SDK mirrors it in `crates/pattie/src/abi.rs`, and a test checks
 every constant, size and offset match. Hello negotiates: the driver accepts any SDK
 of its major and replies with its own version, and each connection speaks the
 lower minor, so an app with a newer SDK still works on an older driver. A minor
@@ -168,7 +167,7 @@ characters, case-sensitive. Windows may open the endpoint as float or 16-bit PCM
 the driver converts, the app always sees float. Writers and readers count in
 frames, and a write must end on a whole frame (ADR 0023).
 - **Same name and format, same endpoint.** A Device gets an ID derived from its
-kind, name and format (`viaduct::stable_id`), so the system reuses the endpoint and
+kind, name and format (`pattie::stable_id`), so the system reuses the endpoint and
 keeps the user's settings for it: the circuit device's instance ID on Windows, the
 PipeWire `node.name` on Linux. Another format is another endpoint, because Windows
 keeps a saved format per endpoint (ADR 0015).
@@ -179,31 +178,37 @@ so on a machine shared by several signed-in users (fast user switching, Remote
 Desktop) every session lists it, and another user who picks one user's Speaker
 sends that app their audio. v0 is supported on single-user machines (ADR 0011
 amendment).
-- **Installing is a separate admin step,** done once: `viaduct-cli install`. The SDK
+- **Installing is a separate admin step,** done once: `pattie-cli install`. The SDK
 never installs anything and returns `Error::DriverNotInstalled` if the driver isn't
 there.
 - **Tracing stays in production builds.** ETW (TraceLogging, provider
-`Viaduct.Driver`) costs nothing until someone records it.
+`Pattie.Driver`) costs nothing until someone records it.
 
 ## Repository layout
 
 ```
 core/
-  include/viaduct_abi.h     the SDK ↔ driver contract (the only shared header)
+  include/pattie_abi.h      the SDK ↔ driver contract (the only shared header)
   src/                      pure C core: Device table, Ring, clock, PCM16 conversion
                             (run by the Windows driver and, embedded, by the Linux backend)
   tests/                    host tests for the core (Rust harness via bindgen + cc)
   fuzz/                     libFuzzer + AddressSanitizer target for the core (Fuzzing the core)
 crates/
-  viaduct/                  the Rust SDK (public API: Device, Writer, Reader, Playout, Converter, Stats, Error,
+  pattie/                   the Rust SDK (public API: Device, Writer, Reader, Playout, Converter, Stats, Error,
                             stable_id); backends in src/windows.rs and src/linux.rs + src/linux/;
                             src/core_host.rs runs the C core in-process (Linux, and the
                             contract suite's test backend on every OS)
-  viaduct-cli/              test tool: mic, speaker, measure, install, uninstall
+  pattie-cli/               test tool: mic, speaker, measure, install, uninstall
+  pattie-install/           puts the driver on a machine or takes it off: the engine behind
+                            `pattie-cli install` and the MSI's custom action
+  pattie-msi/               the MSI's custom actions (a DLL over pattie-install)
+bindings/python/            the Python binding (`pattie` on PyPI), built with maturin
+integrations/pipecat/       the Pipecat transport (`pipecat-pattie` on PyPI)
 platforms/windows/
-  driver/                   the ACX/KMDF driver: shell sources, viaduct.inf, project
+  driver/                   the ACX/KMDF driver: shell sources, pattie.inf, project
   vm/                       scripts for the test VM (package, install, probe, trace)
-  release/                  make-attestation-cab.ps1 (the .cab for Microsoft signing)
+  release/                  make-attestation-cab.ps1 (the .cab for Microsoft signing);
+                            make-msi.ps1, pattie.wxs, identity.wxi (the installer); winget/
 target/                     build output (driver, VM package, attestation cab, CodeQL)
 clippy.toml, deny.toml      banned methods; allowed dependencies (Lint rules, Dependency checks)
 .github/workflows/          CI, nightly checks and releases (Continuous integration)
@@ -235,7 +240,7 @@ cargo test --workspace
 
 This runs the core's C logic, the ABI mirror check and the SDK contract tests against
 the Core host (the C core in-process, with test-driven nodes). One test, `windows_without_driver`, expects the driver to be absent,
-so it fails on a machine where Viaduct is installed; that's by design.
+so it fails on a machine where Pattie is installed; that's by design.
 
 Formatting, lints and coverage: see [Before you commit](#before-you-commit).
 
@@ -245,7 +250,7 @@ Use the **64-bit** MSBuild (the 32-bit one picks a validator that can't check x6
 drivers):
 
 ```bash
-"/c/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" platforms/windows/driver/viaduct.vcxproj -p:Configuration=Release -p:Platform=x64
+"/c/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" platforms/windows/driver/pattie.vcxproj -p:Configuration=Release -p:Platform=x64
 ```
 
 Add `-p:RunCodeAnalysis=true` for Microsoft's driver code analysis. Output goes to
@@ -273,7 +278,7 @@ The loop:
    ```
 
     and reboot (Driver Verifier needs it).
-5. **Guest:** run `.\viaduct-cli.exe mic "Agent Mic"`. It appears in Settings → Sound;
+5. **Guest:** run `.\pattie-cli.exe mic "Agent Mic"`. It appears in Settings → Sound;
 
    record it with Sound Recorder and you hear a tone. Press Enter and it's gone.
 
@@ -290,16 +295,16 @@ VMware issue.
 
 ## Command reference
 
-### `viaduct-cli`
+### `pattie-cli`
 
 | Command | What it does |
 | --- | --- |
-| `viaduct-cli mic "<name>" [--tone <hz>]` | Creates a mic and streams a sine tone into it (440 Hz by default) until Enter |
-| `viaduct-cli speaker "<name>"` | Creates a speaker and shows a level meter of what's played to it |
-| `viaduct-cli measure mic\|speaker "<name>" [--seconds 60]` | Opens the endpoint the way Zoom does (WASAPI) and reports latency, glitches, Gap and Overflow |
-| `viaduct-cli measure drift "<name>" [--seconds 3600] [--ppm 50] [--uncorrected]` | Feeds a live source that many ppm off the device through a `LiveWriter` and logs its latency every 10 s as CSV: drift compensation over hours (ADR 0022) |
-| `viaduct-cli install <package folder or viaduct.inf>` | **Admin.** Creates the root device if missing and installs the driver. Safe to repeat. |
-| `viaduct-cli uninstall` | **Admin.** Removes the root device, leftover endpoints and the driver package |
+| `pattie-cli mic "<name>" [--tone <hz>]` | Creates a mic and streams a sine tone into it (440 Hz by default) until Enter |
+| `pattie-cli speaker "<name>"` | Creates a speaker and shows a level meter of what's played to it |
+| `pattie-cli measure mic\|speaker "<name>" [--seconds 60]` | Opens the endpoint the way Zoom does (WASAPI) and reports latency, glitches, Gap and Overflow |
+| `pattie-cli measure drift "<name>" [--seconds 3600] [--ppm 50] [--uncorrected]` | Feeds a live source that many ppm off the device through a `LiveWriter` and logs its latency every 10 s as CSV: drift compensation over hours (ADR 0022) |
+| `pattie-cli install <package folder or pattie.inf>` | **Admin.** Creates the root device if missing and installs the driver. Safe to repeat. |
+| `pattie-cli uninstall` | **Admin.** Removes the root device, leftover endpoints and the driver package |
 
 ### Scripts
 
@@ -311,10 +316,10 @@ VMware issue.
 | `platforms/windows/vm/analyze-trace.ps1 <etl>` | host | The driver's events and DPC/ISR summary from a recording |
 | `prepare-vm.ps1` | guest | Test signing on, small crash dumps, kernel debugging off; refuses outside VMware |
 | `install-in-vm.ps1 [-Verifier] [-Signed <folder>]` | guest | Installs the test-signed driver, or with `-Signed` the Microsoft-signed one (needs Secure Boot on) |
-| `probe-endpoint.ps1` | guest | Opens each Viaduct audio interface the way Windows' audio service does |
+| `probe-endpoint.ps1` | guest | Opens each Pattie audio interface the way Windows' audio service does |
 | `trace-run.ps1 <name> [-Cpu]` | guest | Records the driver's ETW events (and CPU/audio with `-Cpu`) until Enter |
 | `cpu-load.ps1` | guest | Keeps every core busy, for tests under load |
-| `many-mics.ps1` | guest | Runs several `viaduct-cli mic` processes at once |
+| `many-mics.ps1` | guest | Runs several `pattie-cli mic` processes at once |
 
 ### Releasing a signed driver
 
@@ -323,7 +328,7 @@ VMware issue.
 3. Submit it in Partner Center (Hardware → Submit new hardware), Windows 11 x64.
 4. Download the signed files and install them with
 
-   `viaduct-cli install <folder>` on a clean machine, Secure Boot on.
+   `pattie-cli install <folder>` on a clean machine, Secure Boot on.
 
 ## Contributing
 
@@ -333,7 +338,7 @@ VMware issue.
 pass, and for anything subtle check that breaking the code breaks the test.
 - **Logic in the core, Windows in the shell.** New rules about Devices, names or the
 Ring go in `core/src/` with a host test in `core/tests/`. The shell stays thin.
-- **The ABI is a contract.** Change `viaduct_abi.h` and `abi.rs` together; the
+- **The ABI is a contract.** Change `pattie_abi.h` and `abi.rs` together; the
 `abi_mirror` test fails if they drift. Within major 1, only add (a new minor),
 and use the reserved spare bytes only for what ADR 0017 placed there.
 - **Check driver changes against Microsoft's samples** (the ACX samples and SdcaVad in
@@ -367,7 +372,7 @@ If you touched the driver, build it too (warnings are errors there), with Micros
 code analysis:
 
 ```bash
-"/c/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" platforms/windows/driver/viaduct.vcxproj -p:Configuration=Release -p:Platform=x64 -p:RunCodeAnalysis=true
+"/c/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" platforms/windows/driver/pattie.vcxproj -p:Configuration=Release -p:Platform=x64 -p:RunCodeAnalysis=true
 ```
 
 ### Continuous integration
@@ -379,7 +384,7 @@ Server 2025 with Visual Studio 2026, and Ubuntu 24.04):
 | --- | --- | --- |
 | `ci.yml` | every push to `main`/`master`, every pull request | fmt, clippy, docs and tests on Windows and on Linux (GCC and Clang); the Linux backend's tests on a headless PipeWire (all but the restart test); cargo-deny; the driver build with Microsoft's code analysis; Miri on the Ring; a 60 s fuzz run |
 | `nightly.yml` | daily at 03:17 UTC, or by hand | CodeQL with Microsoft's driver queries (fails on any result without a suppression; SARIF uploaded); cargo-mutants (Windows); coverage summary (Linux, with the Clang matching rustc's LLVM); a 10 min fuzz run keeping its corpus |
-| `release.yml` | a tag `v<a.b.c.d>` (the driver version), or by hand | the unsigned driver package, the attestation cab, and `viaduct-cli` for Windows and Linux, attached to a **draft** Release |
+| `release.yml` | a tag `v<a.b.c.d>` (the driver version), or by hand | the unsigned driver package, the attestation cab, and `pattie-cli` for Windows and Linux, attached to a **draft** Release |
 
 Still by hand: anything that loads the driver (the VM steps, the gate run), signing
 the cab with the EV certificate and submitting it, the real-desktop Linux checks
@@ -395,7 +400,7 @@ nuget restore platforms/windows/driver/packages.config -PackagesDirectory target
 ```
 
 ```bash
-"/c/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" platforms/windows/driver/viaduct.vcxproj -p:Configuration=Release -p:Platform=x64 -p:RunCodeAnalysis=true -p:ViaductWdkNuGet=true
+"/c/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" platforms/windows/driver/pattie.vcxproj -p:Configuration=Release -p:Platform=x64 -p:RunCodeAnalysis=true -p:PattieWdkNuGet=true
 ```
 
 `make-attestation-cab.ps1 -WdkNuGet` does the same for the cab, and finds MSBuild
@@ -418,7 +423,7 @@ cargo install cargo-llvm-cov --locked
 Then:
 
 ```bash
-CC="/c/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/Llvm/x64/bin/clang-cl.exe" cargo llvm-cov --workspace --include-ffi --summary-only --ignore-filename-regex 'viaduct[\\/]src[\\/]windows\.rs|viaduct-cli[\\/]src[\\/](main|measure)\.rs|viaduct-install[\\/]src[\\/]setup\.rs|viaduct-msi[\\/]src[\\/]msi\.rs|core_host[\\/]test_backend'
+CC="/c/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/Llvm/x64/bin/clang-cl.exe" cargo llvm-cov --workspace --include-ffi --summary-only --ignore-filename-regex 'pattie[\\/]src[\\/]windows\.rs|pattie-cli[\\/]src[\\/](main|measure)\.rs|pattie-install[\\/]src[\\/]setup\.rs|pattie-msi[\\/]src[\\/]msi\.rs|core_host[\\/]test_backend'
 ```
 
 Add `--show-missing-lines` to list the lines each file misses. Left out of the
@@ -428,12 +433,12 @@ test VM):
 
 | Left out | Why | Where its logic is tested |
 | --- | --- | --- |
-| `crates/viaduct/src/windows.rs` | The IOCTL transport to the real driver | VM; the not-installed path has a test |
-| `crates/viaduct-cli/src/main.rs` | The mic/speaker loops on a live Device | Parsing: `cli.rs` |
-| `crates/viaduct-cli/src/measure.rs` | WASAPI streams on a live endpoint | Pairing and statistics: `latency.rs` |
-| `crates/viaduct-install/src/setup.rs` | SetupAPI calls that change the machine | INF parsing and the outcome (exit codes, reboot): `lib.rs`; VM for the rest |
-| `crates/viaduct-msi/src/msi.rs` | The MSI's custom-action entry points (Windows Installer calls) | What each action returns: `lib.rs`; the authoring: `tests/authoring.rs`; VM (R3) for the rest |
-| `crates/viaduct/src/core_host/test_backend.rs` | Test scaffolding (the contract suite's nodes), never shipped | The contract tests it serves |
+| `crates/pattie/src/windows.rs` | The IOCTL transport to the real driver | VM; the not-installed path has a test |
+| `crates/pattie-cli/src/main.rs` | The mic/speaker loops on a live Device | Parsing: `cli.rs` |
+| `crates/pattie-cli/src/measure.rs` | WASAPI streams on a live endpoint | Pairing and statistics: `latency.rs` |
+| `crates/pattie-install/src/setup.rs` | SetupAPI calls that change the machine | INF parsing and the outcome (exit codes, reboot): `lib.rs`; VM for the rest |
+| `crates/pattie-msi/src/msi.rs` | The MSI's custom-action entry points (Windows Installer calls) | What each action returns: `lib.rs`; the authoring: `tests/authoring.rs`; VM (R3) for the rest |
+| `crates/pattie/src/core_host/test_backend.rs` | Test scaffolding (the contract suite's nodes), never shipped | The contract tests it serves |
 
 ### Property tests
 
@@ -468,7 +473,7 @@ Ring is a `malloc` of exactly the size the driver is told, so even a one-byte re
 past it is caught. Build it (Visual Studio's clang, which ships libFuzzer and ASan):
 
 ```bash
-mkdir -p target/fuzz/corpus && MSYS_NO_PATHCONV=1 "/c/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/Llvm/x64/bin/clang-cl.exe" -fsanitize=fuzzer,address /Zi /O1 /MT /W4 /WX -Wconversion -Wsign-conversion /std:c17 /Icore/include /Icore/src core/src/viaduct_core.c core/src/viaduct_ring.c core/src/viaduct_clock.c core/src/viaduct_pcm16.c core/fuzz/fuzz_core.c /Fotarget/fuzz/ /Fetarget/fuzz/fuzz_core.exe
+mkdir -p target/fuzz/corpus && MSYS_NO_PATHCONV=1 "/c/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/Llvm/x64/bin/clang-cl.exe" -fsanitize=fuzzer,address /Zi /O1 /MT /W4 /WX -Wconversion -Wsign-conversion /std:c17 /Icore/include /Icore/src core/src/pattie_core.c core/src/pattie_ring.c core/src/pattie_clock.c core/src/pattie_pcm16.c core/fuzz/fuzz_core.c /Fotarget/fuzz/ /Fetarget/fuzz/fuzz_core.exe
 ```
 
 Run it for as long as you like (here 10 minutes); ASan's DLL must be on the `PATH`:
@@ -513,7 +518,7 @@ confirm a test fails), as listed under Property tests.
 Miri runs the Rust tests in an interpreter that checks every memory access, and
 fails on undefined behaviour the compiled tests can pass straight through: reading
 past an allocation, a misaligned or dangling pointer, a data race between threads.
-It runs on the Ring's own tests (`crates/viaduct/src/ring.rs`), which play the
+It runs on the Ring's own tests (`crates/pattie/src/ring.rs`), which play the
 driver's side in Rust with the C core's counter protocol, two of them on a second
 thread. The SDK's other tests reach the Ring through the Core host's C core, and Miri
 can't run C. Once:
@@ -525,11 +530,11 @@ rustup toolchain install nightly --profile minimal --component miri,rust-src
 Then, after any change to `ring.rs` (each runs in seconds):
 
 ```bash
-cargo +nightly miri test -p viaduct --lib
+cargo +nightly miri test -p pattie --lib
 ```
 
 ```bash
-MIRIFLAGS="-Zmiri-many-seeds=0..32" cargo +nightly miri test -p viaduct --lib ring::
+MIRIFLAGS="-Zmiri-many-seeds=0..32" cargo +nightly miri test -p pattie --lib ring::
 ```
 
 The second tries 32 thread schedules, for the races only some schedules show.
@@ -565,14 +570,14 @@ After a driver change, build the database from a full rebuild, then analyze it
 (a few minutes in all):
 
 ```bash
-MSYS_NO_PATHCONV=1 /d/Tools/codeql-home/codeql/codeql.exe database create target/codeql/db --language=cpp --source-root=. --overwrite --command="\"C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\amd64\MSBuild.exe\" platforms\windows\driver\viaduct.vcxproj -t:Rebuild -p:Configuration=Release -p:Platform=x64"
+MSYS_NO_PATHCONV=1 /d/Tools/codeql-home/codeql/codeql.exe database create target/codeql/db --language=cpp --source-root=. --overwrite --command="\"C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\amd64\MSBuild.exe\" platforms\windows\driver\pattie.vcxproj -t:Rebuild -p:Configuration=Release -p:Platform=x64"
 ```
 
 ```bash
-MSYS_NO_PATHCONV=1 /d/Tools/codeql-home/codeql/codeql.exe database analyze target/codeql/db microsoft/windows-drivers:windows-driver-suites/recommended.qls microsoft/cpp-queries:AlertSuppression.ql --format=sarifv2.1.0 --output=target/codeql/viaduct.sarif
+MSYS_NO_PATHCONV=1 /d/Tools/codeql-home/codeql/codeql.exe database analyze target/codeql/db microsoft/windows-drivers:windows-driver-suites/recommended.qls microsoft/cpp-queries:AlertSuppression.ql --format=sarifv2.1.0 --output=target/codeql/pattie.sarif
 ```
 
-Want: no result without a suppression in `target/codeql/viaduct.sarif` (Visual
+Want: no result without a suppression in `target/codeql/pattie.sarif` (Visual
 Studio's or VS Code's SARIF viewer shows them). A false positive is suppressed in
 place with `/* codeql[rule-id] */` on the line above, after a comment saying why.
 There is one: the padding check on the packet array in `stream.c`, which doesn't know
@@ -592,11 +597,11 @@ sudo apt-get install build-essential clang libclang-dev pkg-config pipewire pipe
 curl --proto =https --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --component clippy,rustfmt
 ```
 
-Then from the checkout (`cd /mnt/d/Projects/viaduct`), with Linux build output
+Then from the checkout (`cd /mnt/d/Projects/pattie`), with Linux build output
 kept apart from Windows' `target/` and bindgen pointed at Ubuntu's libclang:
 
 ```bash
-CARGO_TARGET_DIR=~/viaduct-target LIBCLANG_PATH=/usr/lib/llvm-21/lib cargo test --workspace
+CARGO_TARGET_DIR=~/pattie-target LIBCLANG_PATH=/usr/lib/llvm-21/lib cargo test --workspace
 ```
 
 The same with `clippy --workspace --all-targets -- -D warnings`, and with `CC=clang`
@@ -607,7 +612,7 @@ The Linux backend's tests against a real PipeWire (a Microphone recorded with
 `pw-record`, a Speaker fed by `pw-play`) are opt-in, as they need PipeWire running:
 
 ```bash
-CARGO_TARGET_DIR=~/viaduct-target LIBCLANG_PATH=/usr/lib/llvm-21/lib cargo test -p viaduct --test linux_pipewire -- --ignored --test-threads=1
+CARGO_TARGET_DIR=~/pattie-target LIBCLANG_PATH=/usr/lib/llvm-21/lib cargo test -p pattie --test linux_pipewire -- --ignored --test-threads=1
 ```
 
 One of them, `a_device_comes_back_by_itself_after_pipewire_restarts`, restarts your
@@ -640,9 +645,9 @@ Where they live, from widest to narrowest:
 | --- | --- | --- |
 | Root `Cargo.toml`, `[workspace.lints]` | every crate (each opts in with `[lints] workspace = true`) | The `unsafe` rules below; no `dbg!`, `todo!`, `unimplemented!`; no pointer casts that hide a type or alignment change (`ptr_as_ptr`, `cast_ptr_alignment`, `transmute_ptr_to_ptr`); rustdoc links and HTML must be valid |
 | `clippy.toml` | every crate | Methods banned by name, each with its reason: `std::process::exit` (skips destructors, so a live Device isn't removed cleanly) and `std::thread::sleep` (a 1 ms sleep can last ~15.6 ms and starve an audio loop: use the SDK's `Writer::write_paced` or `Reader::read_paced`, which wake on the Device's doorbell). Also: the `unsafe fn` contract rule covers private functions, and tests may unwrap |
-| Top of `crates/viaduct/src/lib.rs` | the SDK only | It runs inside other people's apps: no `unwrap`/`expect`/`panic!`, no printing, no silently narrowing casts, and every public item is documented and has `Debug` |
+| Top of `crates/pattie/src/lib.rs` | the SDK only | It runs inside other people's apps: no `unwrap`/`expect`/`panic!`, no printing, no silently narrowing casts, and every public item is documented and has `Debug` |
 | `#![forbid(unsafe_code)]` at the top of a module | `cli.rs`, `latency.rs`, `error.rs`, `identity.rs`, `transport.rs` | The compiler guarantees these hold no `unsafe`, so a reviewer can skip them for memory safety |
-| `core/tests/build.rs`, `crates/viaduct/build.rs`, `viaduct.vcxproj` | the C core (and the driver) | Warnings are errors, plus implicit narrowing and sign changes: `-Wconversion -Wsign-conversion` under clang, C4242/C4244/C4365 under MSVC |
+| `core/tests/build.rs`, `crates/pattie/build.rs`, `pattie.vcxproj` | the C core (and the driver) | Warnings are errors, plus implicit narrowing and sign changes: `-Wconversion -Wsign-conversion` under clang, C4242/C4244/C4365 under MSVC |
 
 To make an exception in one place, use `#[expect(clippy::…, reason = "…")]` on that
 item or statement, never a crate-wide `allow`: the reason is written down, and the
@@ -659,7 +664,7 @@ other side. The rules here:
 saying why it's correct (clippy fails the build otherwise:
 `undocumented_unsafe_blocks`, `multiple_unsafe_ops_per_block`);
 - wrap it in a safe function or type (handles freed in `Drop`), so callers never see it;
-- shared memory with the kernel (`crates/viaduct/src/ring.rs`) is the one place that
+- shared memory with the kernel (`crates/pattie/src/ring.rs`) is the one place that
 deserves the most care; it follows the Ring protocol exactly, and Miri checks it (above).
 
 ### Style

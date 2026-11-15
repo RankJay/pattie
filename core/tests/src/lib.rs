@@ -24,20 +24,20 @@ pub struct OwnerRef(usize);
 
 /// The driver core, with storage owned the way the shell will own it.
 pub struct Driver {
-    core: Box<vd_core>,
-    // Boxed on purpose: the core keeps pointers to owners, and a Vec<vd_owner>
+    core: Box<pattie_core>,
+    // Boxed on purpose: the core keeps pointers to owners, and a Vec<pattie_owner>
     // would move them when it grows.
     #[expect(clippy::vec_box, reason = "the core holds pointers to each owner")]
-    owners: Vec<Box<vd_owner>>,
+    owners: Vec<Box<pattie_owner>>,
     rings: HashMap<u32, RingMemory>, // stays alive like pinned memory
 }
 
 impl Driver {
     pub fn new() -> Self {
         // SAFETY: a plain C struct of integers and pointers: all zeros is a valid value, set up by the init call next.
-        let mut core = Box::new(unsafe { MaybeUninit::<vd_core>::zeroed().assume_init() });
-        // SAFETY: `core` is a live vd_core, borrowed exclusively.
-        unsafe { vd_core_init(&mut *core) };
+        let mut core = Box::new(unsafe { MaybeUninit::<pattie_core>::zeroed().assume_init() });
+        // SAFETY: `core` is a live pattie_core, borrowed exclusively.
+        unsafe { pattie_core_init(&mut *core) };
         Driver {
             core,
             owners: Vec::new(),
@@ -48,15 +48,20 @@ impl Driver {
     /// Opens a new Owner connection.
     pub fn connect(&mut self) -> OwnerRef {
         // SAFETY: a plain C struct of integers and pointers: all zeros is a valid value, set up by the init call next.
-        let mut owner = Box::new(unsafe { MaybeUninit::<vd_owner>::zeroed().assume_init() });
-        // SAFETY: `owner` is a live vd_owner, borrowed exclusively.
-        unsafe { vd_owner_init(&mut *owner) };
+        let mut owner = Box::new(unsafe { MaybeUninit::<pattie_owner>::zeroed().assume_init() });
+        // SAFETY: `owner` is a live pattie_owner, borrowed exclusively.
+        unsafe { pattie_owner_init(&mut *owner) };
         self.owners.push(owner);
         OwnerRef(self.owners.len() - 1)
     }
 
     /// Sends one command as raw bytes, with no Ring; returns status and reply.
-    pub fn send(&mut self, owner: OwnerRef, command: u32, input: &[u8]) -> (vd_status, Vec<u8>) {
+    pub fn send(
+        &mut self,
+        owner: OwnerRef,
+        command: u32,
+        input: &[u8],
+    ) -> (pattie_status, Vec<u8>) {
         self.send_full(owner, command, input, None, 256)
     }
 
@@ -68,7 +73,7 @@ impl Driver {
         input: &[u8],
         ring: Option<&mut RingMemory>,
         reply_capacity: usize,
-    ) -> (vd_status, Vec<u8>) {
+    ) -> (pattie_status, Vec<u8>) {
         let (ring_memory, ring_len) = match ring {
             Some(memory) => (memory.as_mut_ptr(), memory.len()),
             None => (ptr::null_mut(), 0),
@@ -77,7 +82,7 @@ impl Driver {
         let mut output_len = 0usize;
         // SAFETY: core and owner are live and borrowed exclusively; each buffer goes with its own length. A Ring's heap buffer doesn't move when `create_device_with` stores it in `self.rings`, where it stays alive like pinned memory.
         let status = unsafe {
-            vd_core_command(
+            pattie_core_command(
                 &mut *self.core,
                 &mut *self.owners[owner.0],
                 command,
@@ -94,7 +99,7 @@ impl Driver {
         (status, output)
     }
 
-    pub fn hello(&mut self, owner: OwnerRef, major: u16, minor: u16) -> vd_status {
+    pub fn hello(&mut self, owner: OwnerRef, major: u16, minor: u16) -> pattie_status {
         self.hello_with(owner, major, minor, 256).0
     }
 
@@ -106,11 +111,11 @@ impl Driver {
         major: u16,
         minor: u16,
         reply_capacity: usize,
-    ) -> (vd_status, Vec<u8>) {
+    ) -> (pattie_status, Vec<u8>) {
         self.send_full(
             owner,
-            VD_CMD_HELLO,
-            as_bytes(&vd_hello_request { major, minor }),
+            PATTIE_CMD_HELLO,
+            as_bytes(&pattie_hello_request { major, minor }),
             None,
             reply_capacity,
         )
@@ -124,8 +129,8 @@ impl Driver {
 
     /// Sends Hello with the ABI version these tests were built against.
     pub fn greet(&mut self, owner: OwnerRef) {
-        let status = self.hello(owner, VIADUCT_ABI_MAJOR as u16, VIADUCT_ABI_MINOR as u16);
-        assert_eq!(status, VD_OK, "Hello failed");
+        let status = self.hello(owner, PATTIE_ABI_MAJOR as u16, PATTIE_ABI_MINOR as u16);
+        assert_eq!(status, PATTIE_OK, "Hello failed");
     }
 
     /// Creates a Device with a fresh, valid Ring; returns its ID or the status.
@@ -134,7 +139,7 @@ impl Driver {
         owner: OwnerRef,
         kind: u32,
         name: &str,
-    ) -> Result<u32, vd_status> {
+    ) -> Result<u32, pattie_status> {
         let ring = RingMemory::new(DEFAULT_RING_FRAMES);
         self.create_device_with(owner, create_device_request(kind, name), Some(ring), 256)
     }
@@ -143,27 +148,27 @@ impl Driver {
     pub fn create_device_with(
         &mut self,
         owner: OwnerRef,
-        mut request: vd_create_device_request,
+        mut request: pattie_create_device_request,
         mut ring: Option<RingMemory>,
         reply_capacity: usize,
-    ) -> Result<u32, vd_status> {
+    ) -> Result<u32, pattie_status> {
         if let Some(memory) = ring.as_mut() {
             request.ring_address = memory.as_mut_ptr() as u64;
             request.ring_bytes = memory.len() as u64;
         }
         let (status, reply) = self.send_full(
             owner,
-            VD_CMD_CREATE_DEVICE,
+            PATTIE_CMD_CREATE_DEVICE,
             as_bytes(&request),
             ring.as_mut(),
             reply_capacity,
         );
-        if status != VD_OK {
+        if status != PATTIE_OK {
             return Err(status);
         }
         assert_eq!(
             reply.len(),
-            size_of::<vd_create_device_reply>(),
+            size_of::<pattie_create_device_reply>(),
             "reply size"
         );
         let id = u32::from_ne_bytes(reply[..4].try_into().unwrap());
@@ -172,17 +177,18 @@ impl Driver {
         Ok(id)
     }
 
-    pub fn remove_device(&mut self, owner: OwnerRef, device_id: u32) -> vd_status {
-        let request = vd_remove_device_request { device_id };
-        self.send(owner, VD_CMD_REMOVE_DEVICE, as_bytes(&request)).0
+    pub fn remove_device(&mut self, owner: OwnerRef, device_id: u32) -> pattie_status {
+        let request = pattie_remove_device_request { device_id };
+        self.send(owner, PATTIE_CMD_REMOVE_DEVICE, as_bytes(&request))
+            .0
     }
 
     /// The Owner's handle closes; returns the removed Device IDs, sorted.
     pub fn close(&mut self, owner: OwnerRef) -> Vec<u32> {
-        let mut removed = [0u32; VD_MAX_DEVICES as usize];
-        // SAFETY: core and owner are live; `removed` holds VD_MAX_DEVICES IDs, the most the core reports.
+        let mut removed = [0u32; PATTIE_MAX_DEVICES as usize];
+        // SAFETY: core and owner are live; `removed` holds PATTIE_MAX_DEVICES IDs, the most the core reports.
         let count = unsafe {
-            vd_core_owner_closed(
+            pattie_core_owner_closed(
                 &mut *self.core,
                 &mut *self.owners[owner.0],
                 removed.as_mut_ptr(),
@@ -204,13 +210,13 @@ impl Driver {
     /// `None` when the core has no live Device with that ID.
     pub fn driver_read(&mut self, device_id: u32, count: usize) -> Option<Vec<f32>> {
         // SAFETY: `core` is live; the core returns null or a Ring it keeps attached.
-        let ring = unsafe { vd_core_device_ring(&mut *self.core, device_id) };
+        let ring = unsafe { pattie_core_device_ring(&mut *self.core, device_id) };
         if ring.is_null() {
             return None;
         }
         let mut out = vec![0.0f32; count];
         // SAFETY: `ring` is non-null and attached to memory in `self.rings`; `out` holds `count` frames.
-        unsafe { vd_ring_read(ring, out.as_mut_ptr(), count as u32) };
+        unsafe { pattie_ring_read(ring, out.as_mut_ptr(), count as u32) };
         Some(out)
     }
 }
@@ -247,12 +253,12 @@ impl Driver {
 
 impl Driver {
     /// What the core reports of a live Device it accepted
-    /// (`vd_core_device_info`); `None` for an unknown or removed one.
+    /// (`pattie_core_device_info`); `None` for an unknown or removed one.
     pub fn device_info(&self, device_id: u32) -> Option<DeviceInfo> {
         // SAFETY: a plain C struct of integers: all zeros is a valid value.
-        let mut info = unsafe { MaybeUninit::<vd_device_info>::zeroed().assume_init() };
+        let mut info = unsafe { MaybeUninit::<pattie_device_info>::zeroed().assume_init() };
         // SAFETY: `core` is live; `info` is a live out-parameter.
-        let found = unsafe { vd_core_device_info(&*self.core, device_id, &mut info) };
+        let found = unsafe { pattie_core_device_info(&*self.core, device_id, &mut info) };
         found.then(|| DeviceInfo {
             kind: info.kind,
             name: String::from_utf16(&info.name[..info.name_len as usize])
@@ -262,7 +268,7 @@ impl Driver {
     }
 }
 
-/// A Device as `vd_core_device_info` reports it.
+/// A Device as `pattie_core_device_info` reports it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeviceInfo {
     pub kind: u32,
@@ -275,7 +281,7 @@ pub fn stable_id(kind: u32, name: &str, sample_rate: u32, channels: u16) -> u64 
     let units: Vec<u16> = name.encode_utf16().collect();
     // SAFETY: `units` holds `units.len()` code units, read only during the call.
     unsafe {
-        vd_stable_id(
+        pattie_stable_id(
             kind,
             units.as_ptr(),
             units.len() as u32,
@@ -302,11 +308,11 @@ impl Default for Driver {
 }
 
 /// A Create Device request as the SDK would build it, before its Ring is set.
-pub fn create_device_request(kind: u32, name: &str) -> vd_create_device_request {
-    let mut request = vd_create_device_request {
+pub fn create_device_request(kind: u32, name: &str) -> pattie_create_device_request {
+    let mut request = pattie_create_device_request {
         kind,
         name_len: 0,
-        name: [0; VD_DEVICE_NAME_MAX as usize],
+        name: [0; PATTIE_DEVICE_NAME_MAX as usize],
         reserved: 0,
         ring_address: 0,
         ring_bytes: 0,
@@ -340,7 +346,7 @@ impl RingMemory {
 
     /// Bytes a correctly sized Ring of `capacity_frames` frames of `channels` needs.
     pub fn bytes_for_format(capacity_frames: u32, channels: u16) -> usize {
-        size_of::<vd_ring_header>()
+        size_of::<pattie_ring_header>()
             + capacity_frames as usize * usize::from(channels.max(1)) * size_of::<f32>()
     }
 
@@ -377,7 +383,7 @@ impl RingMemory {
     /// `len` bytes whose header claims `capacity_frames`, agreeing or not.
     pub fn with_claim(capacity_frames: u32, len: usize) -> Self {
         // Always back at least a whole header, so the claim can be written.
-        let backed_words = len.max(size_of::<vd_ring_header>()).div_ceil(8);
+        let backed_words = len.max(size_of::<pattie_ring_header>()).div_ceil(8);
         let mut words = vec![0u64; backed_words + GUARD_WORDS];
         words[backed_words..].fill(GUARD);
         let mut memory = RingMemory {
@@ -408,15 +414,15 @@ impl RingMemory {
             .all(|&word| word == GUARD)
     }
 
-    pub fn header(&self) -> &vd_ring_header {
+    pub fn header(&self) -> &pattie_ring_header {
         // SAFETY: `words` always backs a whole header, 8-byte aligned (`with_claim`); the header is plain integers.
-        unsafe { &*self.words.as_ptr().cast::<vd_ring_header>() }
+        unsafe { &*self.words.as_ptr().cast::<pattie_ring_header>() }
     }
 
     /// The app may scribble on the header at any time; the driver must cope.
-    pub fn header_mut(&mut self) -> &mut vd_ring_header {
+    pub fn header_mut(&mut self) -> &mut pattie_ring_header {
         // SAFETY: as `header`, and `&mut self` makes the borrow exclusive.
-        unsafe { &mut *self.words.as_mut_ptr().cast::<vd_ring_header>() }
+        unsafe { &mut *self.words.as_mut_ptr().cast::<pattie_ring_header>() }
     }
 
     /// The app-side helpers index frames by the header's capacity: check the
@@ -444,7 +450,7 @@ impl RingMemory {
             self.words
                 .as_mut_ptr()
                 .cast::<u8>()
-                .add(size_of::<vd_ring_header>())
+                .add(size_of::<pattie_ring_header>())
                 .cast()
         }
     }
@@ -494,7 +500,7 @@ impl RingMemory {
     }
 }
 
-/// The driver's private view of a Ring's counters (`vd_ring`).
+/// The driver's private view of a Ring's counters (`pattie_ring`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RingCounters {
     pub capacity: u32,
@@ -508,7 +514,7 @@ pub struct RingCounters {
 /// `app_*` methods do what the SDK does; `driver_*` methods call the core.
 pub struct Ring {
     memory: RingMemory,
-    view: Box<vd_ring>,
+    view: Box<pattie_ring>,
 }
 
 impl Ring {
@@ -527,7 +533,7 @@ impl Ring {
 
     /// Tells the driver the Ring is `memory_len` bytes and claims
     /// `capacity_frames` in its header, whether or not those agree.
-    pub fn attach(capacity_frames: u32, memory_len: usize) -> Result<Self, vd_status> {
+    pub fn attach(capacity_frames: u32, memory_len: usize) -> Result<Self, pattie_status> {
         Self::attach_memory(RingMemory::with_claim(capacity_frames, memory_len))
     }
 
@@ -548,7 +554,7 @@ impl Ring {
         sample_rate: u32,
         channels: u16,
         memory_len: usize,
-    ) -> Result<Self, vd_status> {
+    ) -> Result<Self, pattie_status> {
         Self::attach_memory(RingMemory::with_claim_format(
             capacity_frames,
             sample_rate,
@@ -557,19 +563,19 @@ impl Ring {
         ))
     }
 
-    fn attach_memory(mut memory: RingMemory) -> Result<Self, vd_status> {
+    fn attach_memory(mut memory: RingMemory) -> Result<Self, pattie_status> {
         let memory_len = memory.len();
         // SAFETY: a plain C struct of integers and pointers: all zeros is a valid value, set up by the init call next.
-        let mut view = Box::new(unsafe { MaybeUninit::<vd_ring>::zeroed().assume_init() });
+        let mut view = Box::new(unsafe { MaybeUninit::<pattie_ring>::zeroed().assume_init() });
         // SAFETY: `view` is borrowed exclusively; the pointer and length describe `memory`, whose heap buffer `Ring` keeps alive with the view.
-        let status = unsafe { vd_ring_attach(&mut *view, memory.as_mut_ptr(), memory_len) };
-        if status != VD_OK {
+        let status = unsafe { pattie_ring_attach(&mut *view, memory.as_mut_ptr(), memory_len) };
+        if status != PATTIE_OK {
             return Err(status);
         }
         Ok(Ring { memory, view })
     }
 
-    pub fn header(&self) -> &vd_ring_header {
+    pub fn header(&self) -> &pattie_ring_header {
         self.memory.header()
     }
 
@@ -589,7 +595,7 @@ impl Ring {
         self.memory.guard_intact()
     }
 
-    pub fn app_header_mut(&mut self) -> &mut vd_ring_header {
+    pub fn app_header_mut(&mut self) -> &mut pattie_ring_header {
         self.memory.header_mut()
     }
 
@@ -605,7 +611,7 @@ impl Ring {
     pub fn driver_write(&mut self, src: &[f32]) {
         let frames = self.whole_frames(src.len());
         // SAFETY: `view` was attached to `self.memory`, which lives as long as it; the slice holds `frames` whole frames.
-        unsafe { vd_ring_write(&mut *self.view, src.as_ptr(), frames) };
+        unsafe { pattie_ring_write(&mut *self.view, src.as_ptr(), frames) };
     }
 
     /// The driver's own idea of the channels (its private copy, never the
@@ -617,7 +623,7 @@ impl Ring {
     /// The driver's own idea of the sample rate, through the core's accessor.
     pub fn driver_sample_rate(&self) -> u32 {
         // SAFETY: the view is attached and lives as long as `self`.
-        unsafe { vd_ring_sample_rate(&*self.view) }
+        unsafe { pattie_ring_sample_rate(&*self.view) }
     }
 
     fn whole_frames(&self, samples: usize) -> u32 {
@@ -630,33 +636,33 @@ impl Ring {
     pub fn driver_read(&mut self, dst: &mut [f32]) {
         let frames = self.whole_frames(dst.len());
         // SAFETY: `view` was attached to `self.memory`, which lives as long as it; the slice holds `frames` whole frames.
-        unsafe { vd_ring_read(&mut *self.view, dst.as_mut_ptr(), frames) };
+        unsafe { pattie_ring_read(&mut *self.view, dst.as_mut_ptr(), frames) };
     }
 
     /// As `driver_read`, when Windows streams the Microphone as 16-bit PCM.
     pub fn driver_read_pcm16(&mut self, dst: &mut [i16]) {
         let frames = self.whole_frames(dst.len());
         // SAFETY: as in `driver_read`.
-        unsafe { vd_ring_read_pcm16(&mut *self.view, dst.as_mut_ptr(), frames) };
+        unsafe { pattie_ring_read_pcm16(&mut *self.view, dst.as_mut_ptr(), frames) };
     }
 
     /// As `driver_write`, when Windows plays 16-bit PCM to a Speaker.
     pub fn driver_write_pcm16(&mut self, src: &[i16]) {
         let frames = self.whole_frames(src.len());
         // SAFETY: as in `driver_write`.
-        unsafe { vd_ring_write_pcm16(&mut *self.view, src.as_ptr(), frames) };
+        unsafe { pattie_ring_write_pcm16(&mut *self.view, src.as_ptr(), frames) };
     }
 
     /// After a Microphone pass: the driver publishes its read position at `ns`.
     pub fn driver_publish_read_clock(&mut self, ns: u64) {
         // SAFETY: `view` was attached to `self.memory`, which lives as long as it.
-        unsafe { vd_ring_publish_read_clock(&mut *self.view, ns) };
+        unsafe { pattie_ring_publish_read_clock(&mut *self.view, ns) };
     }
 
     /// After a Speaker pass: the driver publishes its write position at `ns`.
     pub fn driver_publish_write_clock(&mut self, ns: u64) {
         // SAFETY: `view` was attached to `self.memory`, which lives as long as it.
-        unsafe { vd_ring_publish_write_clock(&mut *self.view, ns) };
+        unsafe { pattie_ring_publish_write_clock(&mut *self.view, ns) };
     }
 
     /// A recording starts: the driver drops stale Microphone audio, keeping at
@@ -665,19 +671,19 @@ impl Ring {
     pub fn driver_losses(&self) -> (u64, u64) {
         let (mut gap, mut overflow) = (0u64, 0u64);
         // SAFETY: the view is attached and lives as long as `self`.
-        unsafe { vd_ring_losses(&*self.view, &mut gap, &mut overflow) };
+        unsafe { pattie_ring_losses(&*self.view, &mut gap, &mut overflow) };
         (gap, overflow)
     }
 
     /// As `driver_skip_stale`, returning how many frames were skipped.
     pub fn driver_skip_stale_counted(&mut self, keep_frames: u32) -> u64 {
         // SAFETY: the view is attached and lives as long as `self`.
-        unsafe { vd_ring_skip_stale(&mut *self.view, keep_frames) }
+        unsafe { pattie_ring_skip_stale(&mut *self.view, keep_frames) }
     }
 
     pub fn driver_skip_stale(&mut self, keep_frames: u32) {
         // SAFETY: `view` was attached to `self.memory`, which lives as long as it.
-        unsafe { vd_ring_skip_stale(&mut *self.view, keep_frames) };
+        unsafe { pattie_ring_skip_stale(&mut *self.view, keep_frames) };
     }
 }
 

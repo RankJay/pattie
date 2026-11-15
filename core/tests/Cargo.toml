@@ -1,5 +1,5 @@
 [package]
-name = "viaduct-core-tests"
+name = "pattie-core-tests"
 version = "0.0.0"
 edition = "2024"
 publish = false
@@ -12,7 +12,7 @@ bindgen = "0.73.2"
 cc = "1.11.0"
 
 [dev-dependencies]
-viaduct = { path = "../../crates/viaduct" }
+pattie = { path = "../../crates/pattie" }
 proptest = "1"
 
 [lints]

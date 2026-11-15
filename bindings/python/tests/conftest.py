@@ -3,7 +3,7 @@ driver, so the suite runs on any machine."""
 
 import pytest
 
-from viaduct import _testing
+from pattie import _testing
 
 
 @pytest.fixture

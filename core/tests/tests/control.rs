@@ -1,7 +1,7 @@
 //! Seam A: the control path (ADR 0008).
 
-use viaduct_core_tests::ffi::*;
-use viaduct_core_tests::{
+use pattie_core_tests::ffi::*;
+use pattie_core_tests::{
     DEFAULT_RING_FRAMES, DeviceInfo, Driver, RingMemory, as_bytes, create_device_request, stable_id,
 };
 
@@ -10,23 +10,23 @@ fn create_with_a_too_small_reply_buffer_fails_without_using_up_an_id() {
     let mut driver = Driver::new();
     let owner = driver.connect();
     driver.greet(owner);
-    let request = create_device_request(VD_KIND_MICROPHONE, "Agent Mic");
+    let request = create_device_request(PATTIE_KIND_MICROPHONE, "Agent Mic");
     let ring = RingMemory::new(DEFAULT_RING_FRAMES);
 
     let failed = driver.create_device_with(owner, request, Some(ring), 2);
-    let next = driver.create_device(owner, VD_KIND_MICROPHONE, "Agent Mic");
+    let next = driver.create_device(owner, PATTIE_KIND_MICROPHONE, "Agent Mic");
 
-    assert_eq!((failed, next), (Err(VD_ERR_BUFFER_TOO_SMALL), Ok(1)));
+    assert_eq!((failed, next), (Err(PATTIE_ERR_BUFFER_TOO_SMALL), Ok(1)));
 }
 
 #[test]
 fn create_device_without_a_ring_is_rejected() {
     let (mut driver, owner) = greeted_driver();
-    let request = create_device_request(VD_KIND_MICROPHONE, "Agent Mic");
+    let request = create_device_request(PATTIE_KIND_MICROPHONE, "Agent Mic");
 
     let created = driver.create_device_with(owner, request, None, 256);
 
-    assert_eq!(created, Err(VD_ERR_BAD_RING));
+    assert_eq!(created, Err(PATTIE_ERR_BAD_RING));
 }
 
 #[test]
@@ -37,7 +37,7 @@ fn the_wake_event_is_the_shells_business_and_never_refuses_a_create() {
         .into_iter()
         .zip(["Zero", "Seven", "Max"])
         .map(|(wake, name)| {
-            let mut request = create_device_request(VD_KIND_MICROPHONE, name);
+            let mut request = create_device_request(PATTIE_KIND_MICROPHONE, name);
             request.wake_event = wake;
             let ring = RingMemory::new(DEFAULT_RING_FRAMES);
             driver.create_device_with(owner, request, Some(ring), 256)
@@ -50,20 +50,20 @@ fn the_wake_event_is_the_shells_business_and_never_refuses_a_create() {
 #[test]
 fn a_bad_ring_rejects_the_create_without_using_up_an_id() {
     let (mut driver, owner) = greeted_driver();
-    let request = create_device_request(VD_KIND_MICROPHONE, "Agent Mic");
+    let request = create_device_request(PATTIE_KIND_MICROPHONE, "Agent Mic");
     let not_a_power_of_two = RingMemory::new(300);
 
     let failed = driver.create_device_with(owner, request, Some(not_a_power_of_two), 256);
-    let next = driver.create_device(owner, VD_KIND_MICROPHONE, "Agent Mic");
+    let next = driver.create_device(owner, PATTIE_KIND_MICROPHONE, "Agent Mic");
 
-    assert_eq!((failed, next), (Err(VD_ERR_BAD_RING), Ok(1)));
+    assert_eq!((failed, next), (Err(PATTIE_ERR_BAD_RING), Ok(1)));
 }
 
 #[test]
 fn audio_the_app_writes_reaches_the_driver_through_its_devices_ring() {
     let (mut driver, owner) = greeted_driver();
     let id = driver
-        .create_device(owner, VD_KIND_MICROPHONE, "Agent Mic")
+        .create_device(owner, PATTIE_KIND_MICROPHONE, "Agent Mic")
         .unwrap();
     driver.app_ring(id).app_write(&[0.5, -0.25]);
 
@@ -78,10 +78,10 @@ fn a_removed_or_closed_devices_ring_is_no_longer_reachable() {
     let leaving = driver.connect();
     driver.greet(leaving);
     let removed = driver
-        .create_device(owner, VD_KIND_MICROPHONE, "Removed")
+        .create_device(owner, PATTIE_KIND_MICROPHONE, "Removed")
         .unwrap();
     let closed = driver
-        .create_device(leaving, VD_KIND_MICROPHONE, "Closed")
+        .create_device(leaving, PATTIE_KIND_MICROPHONE, "Closed")
         .unwrap();
     driver.remove_device(owner, removed);
     driver.close(leaving);
@@ -96,7 +96,7 @@ fn a_removed_or_closed_devices_ring_is_no_longer_reachable() {
 
 /// The driver's version as Hello's reply carries it.
 fn driver_version() -> Vec<u8> {
-    [VIADUCT_ABI_MAJOR as u16, VIADUCT_ABI_MINOR as u16]
+    [PATTIE_ABI_MAJOR as u16, PATTIE_ABI_MINOR as u16]
         .iter()
         .flat_map(|v| v.to_le_bytes())
         .collect()
@@ -107,15 +107,10 @@ fn hello_with_matching_version_is_accepted_and_replies_with_the_drivers_version(
     let mut driver = Driver::new();
     let owner = driver.connect();
 
-    let reply = driver.hello_with(
-        owner,
-        VIADUCT_ABI_MAJOR as u16,
-        VIADUCT_ABI_MINOR as u16,
-        256,
-    );
+    let reply = driver.hello_with(owner, PATTIE_ABI_MAJOR as u16, PATTIE_ABI_MINOR as u16, 256);
 
-    assert_eq!(reply, (VD_OK, driver_version()));
-    assert_eq!(driver.agreed_minor(owner), Some(VIADUCT_ABI_MINOR as u16));
+    assert_eq!(reply, (PATTIE_OK, driver_version()));
+    assert_eq!(driver.agreed_minor(owner), Some(PATTIE_ABI_MINOR as u16));
 }
 
 #[test]
@@ -124,16 +119,12 @@ fn hello_with_a_different_major_version_is_rejected() {
     let owner = driver.connect();
 
     let statuses = [
-        driver.hello(owner, VIADUCT_ABI_MAJOR as u16 + 1, 0),
-        driver.hello(
-            owner,
-            VIADUCT_ABI_MAJOR as u16 - 1,
-            VIADUCT_ABI_MINOR as u16,
-        ),
+        driver.hello(owner, PATTIE_ABI_MAJOR as u16 + 1, 0),
+        driver.hello(owner, PATTIE_ABI_MAJOR as u16 - 1, PATTIE_ABI_MINOR as u16),
     ];
 
     // Newer and older majors alike: a major change may break anything.
-    assert_eq!(statuses, [VD_ERR_VERSION; 2]);
+    assert_eq!(statuses, [PATTIE_ERR_VERSION; 2]);
     assert_eq!(driver.agreed_minor(owner), None);
 }
 
@@ -144,29 +135,29 @@ fn an_sdk_newer_than_the_driver_is_accepted_and_speaks_the_drivers_minor() {
 
     let reply = driver.hello_with(
         newer,
-        VIADUCT_ABI_MAJOR as u16,
-        VIADUCT_ABI_MINOR as u16 + 3,
+        PATTIE_ABI_MAJOR as u16,
+        PATTIE_ABI_MINOR as u16 + 3,
         256,
     );
 
     // The reply tells the SDK which minor to fall back to.
-    assert_eq!(reply, (VD_OK, driver_version()));
-    assert_eq!(driver.agreed_minor(newer), Some(VIADUCT_ABI_MINOR as u16));
+    assert_eq!(reply, (PATTIE_OK, driver_version()));
+    assert_eq!(driver.agreed_minor(newer), Some(PATTIE_ABI_MINOR as u16));
 }
 
 #[test]
 fn hello_needs_room_for_its_reply() {
     let mut driver = Driver::new();
     let owner = driver.connect();
-    let major = VIADUCT_ABI_MAJOR as u16;
+    let major = PATTIE_ABI_MAJOR as u16;
 
-    let short = driver.hello_with(owner, major, 0, size_of::<vd_hello_reply>() - 1);
+    let short = driver.hello_with(owner, major, 0, size_of::<pattie_hello_reply>() - 1);
 
-    assert_eq!(short, (VD_ERR_BUFFER_TOO_SMALL, vec![]));
+    assert_eq!(short, (PATTIE_ERR_BUFFER_TOO_SMALL, vec![]));
     assert_eq!(driver.agreed_minor(owner), None);
     assert_eq!(
-        driver.create_device(owner, VD_KIND_MICROPHONE, "Agent Mic"),
-        Err(VD_ERR_HELLO_REQUIRED)
+        driver.create_device(owner, PATTIE_KIND_MICROPHONE, "Agent Mic"),
+        Err(PATTIE_ERR_HELLO_REQUIRED)
     );
 }
 
@@ -174,11 +165,11 @@ fn hello_needs_room_for_its_reply() {
 fn a_rejected_hello_leaves_the_owner_ungreeted() {
     let mut driver = Driver::new();
     let owner = driver.connect();
-    driver.hello(owner, VIADUCT_ABI_MAJOR as u16 + 1, 0);
+    driver.hello(owner, PATTIE_ABI_MAJOR as u16 + 1, 0);
 
-    let created = driver.create_device(owner, VD_KIND_MICROPHONE, "Agent Mic");
+    let created = driver.create_device(owner, PATTIE_KIND_MICROPHONE, "Agent Mic");
 
-    assert_eq!(created, Err(VD_ERR_HELLO_REQUIRED));
+    assert_eq!(created, Err(PATTIE_ERR_HELLO_REQUIRED));
 }
 
 #[test]
@@ -186,9 +177,9 @@ fn command_before_hello_is_rejected() {
     let mut driver = Driver::new();
     let owner = driver.connect();
 
-    let (status, _) = driver.send(owner, VD_CMD_CREATE_DEVICE, &[]);
+    let (status, _) = driver.send(owner, PATTIE_CMD_CREATE_DEVICE, &[]);
 
-    assert_eq!(status, VD_ERR_HELLO_REQUIRED);
+    assert_eq!(status, PATTIE_ERR_HELLO_REQUIRED);
 }
 
 #[test]
@@ -197,9 +188,9 @@ fn malformed_commands_are_rejected() {
     let owner = driver.connect();
     driver.greet(owner);
     let malformed: [(u32, &[u8]); 3] = [
-        (VD_CMD_CREATE_DEVICE, &[0; 3]), // truncated request
-        (VD_CMD_HELLO, &[0; 3]),         // truncated request
-        (99, &[]),                       // no such command
+        (PATTIE_CMD_CREATE_DEVICE, &[0; 3]), // truncated request
+        (PATTIE_CMD_HELLO, &[0; 3]),         // truncated request
+        (99, &[]),                           // no such command
     ];
 
     let statuses: Vec<_> = malformed
@@ -207,7 +198,7 @@ fn malformed_commands_are_rejected() {
         .map(|&(command, input)| driver.send(owner, command, input).0)
         .collect();
 
-    assert_eq!(statuses, vec![VD_ERR_BAD_REQUEST; 3]);
+    assert_eq!(statuses, vec![PATTIE_ERR_BAD_REQUEST; 3]);
 }
 
 #[test]
@@ -216,12 +207,12 @@ fn first_microphone_created_gets_device_id_1() {
     let owner = driver.connect();
     driver.greet(owner);
 
-    let created = driver.create_device(owner, VD_KIND_MICROPHONE, "Agent Mic");
+    let created = driver.create_device(owner, PATTIE_KIND_MICROPHONE, "Agent Mic");
 
     assert_eq!(created, Ok(1));
 }
 
-fn greeted_driver() -> (Driver, viaduct_core_tests::OwnerRef) {
+fn greeted_driver() -> (Driver, pattie_core_tests::OwnerRef) {
     let mut driver = Driver::new();
     let owner = driver.connect();
     driver.greet(owner);
@@ -230,11 +221,11 @@ fn greeted_driver() -> (Driver, viaduct_core_tests::OwnerRef) {
 
 fn send_create(
     driver: &mut Driver,
-    owner: viaduct_core_tests::OwnerRef,
-    request: &vd_create_device_request,
-) -> vd_status {
+    owner: pattie_core_tests::OwnerRef,
+    request: &pattie_create_device_request,
+) -> pattie_status {
     driver
-        .send(owner, VD_CMD_CREATE_DEVICE, as_bytes(request))
+        .send(owner, PATTIE_CMD_CREATE_DEVICE, as_bytes(request))
         .0
 }
 
@@ -247,7 +238,7 @@ fn unknown_device_kinds_are_rejected() {
         .map(|&kind| driver.create_device(owner, kind, "Agent Mic"))
         .collect();
 
-    assert_eq!(statuses, vec![Err(VD_ERR_BAD_KIND); 3]);
+    assert_eq!(statuses, vec![Err(PATTIE_ERR_BAD_KIND); 3]);
 }
 
 #[test]
@@ -263,19 +254,22 @@ fn empty_names_and_names_with_control_characters_are_rejected() {
 
     let statuses: Vec<_> = bad
         .iter()
-        .map(|name| driver.create_device(owner, VD_KIND_MICROPHONE, name))
+        .map(|name| driver.create_device(owner, PATTIE_KIND_MICROPHONE, name))
         .collect();
 
-    assert_eq!(statuses, vec![Err(VD_ERR_BAD_NAME); bad.len()]);
+    assert_eq!(statuses, vec![Err(PATTIE_ERR_BAD_NAME); bad.len()]);
 }
 
 #[test]
 fn a_name_length_beyond_63_is_rejected() {
     let (mut driver, owner) = greeted_driver();
-    let mut request = create_device_request(VD_KIND_MICROPHONE, "Agent Mic");
-    request.name_len = VD_DEVICE_NAME_MAX + 1;
+    let mut request = create_device_request(PATTIE_KIND_MICROPHONE, "Agent Mic");
+    request.name_len = PATTIE_DEVICE_NAME_MAX + 1;
 
-    assert_eq!(send_create(&mut driver, owner, &request), VD_ERR_BAD_NAME);
+    assert_eq!(
+        send_create(&mut driver, owner, &request),
+        PATTIE_ERR_BAD_NAME
+    );
 }
 
 #[test]
@@ -284,7 +278,7 @@ fn a_63_character_name_is_accepted() {
     let longest = "M".repeat(63);
 
     assert_eq!(
-        driver.create_device(owner, VD_KIND_MICROPHONE, &longest),
+        driver.create_device(owner, PATTIE_KIND_MICROPHONE, &longest),
         Ok(1)
     );
 }
@@ -292,12 +286,12 @@ fn a_63_character_name_is_accepted() {
 #[test]
 fn a_nonzero_reserved_field_is_rejected() {
     let (mut driver, owner) = greeted_driver();
-    let mut request = create_device_request(VD_KIND_MICROPHONE, "Agent Mic");
+    let mut request = create_device_request(PATTIE_KIND_MICROPHONE, "Agent Mic");
     request.reserved = 1;
 
     assert_eq!(
         send_create(&mut driver, owner, &request),
-        VD_ERR_BAD_REQUEST
+        PATTIE_ERR_BAD_REQUEST
     );
 }
 
@@ -307,12 +301,12 @@ fn a_duplicate_name_of_the_same_kind_is_rejected_even_from_another_owner() {
     let second = driver.connect();
     driver.greet(second);
     driver
-        .create_device(first, VD_KIND_MICROPHONE, "Agent Mic")
+        .create_device(first, PATTIE_KIND_MICROPHONE, "Agent Mic")
         .unwrap();
 
-    let again = driver.create_device(second, VD_KIND_MICROPHONE, "Agent Mic");
+    let again = driver.create_device(second, PATTIE_KIND_MICROPHONE, "Agent Mic");
 
-    assert_eq!(again, Err(VD_ERR_DUPLICATE_NAME));
+    assert_eq!(again, Err(PATTIE_ERR_DUPLICATE_NAME));
 }
 
 #[test]
@@ -320,9 +314,9 @@ fn the_same_name_is_fine_across_kinds_and_letter_case() {
     let (mut driver, owner) = greeted_driver();
 
     let created = [
-        driver.create_device(owner, VD_KIND_MICROPHONE, "Agent"),
-        driver.create_device(owner, VD_KIND_SPEAKER, "Agent"),
-        driver.create_device(owner, VD_KIND_MICROPHONE, "agent"),
+        driver.create_device(owner, PATTIE_KIND_MICROPHONE, "Agent"),
+        driver.create_device(owner, PATTIE_KIND_SPEAKER, "Agent"),
+        driver.create_device(owner, PATTIE_KIND_MICROPHONE, "agent"),
     ];
 
     assert_eq!(created, [Ok(1), Ok(2), Ok(3)]);
@@ -331,43 +325,43 @@ fn the_same_name_is_fine_across_kinds_and_letter_case() {
 #[test]
 fn a_ninth_live_device_is_rejected() {
     let (mut driver, owner) = greeted_driver();
-    for n in 0..VD_MAX_DEVICES {
+    for n in 0..PATTIE_MAX_DEVICES {
         driver
-            .create_device(owner, VD_KIND_MICROPHONE, &format!("Mic {n}"))
+            .create_device(owner, PATTIE_KIND_MICROPHONE, &format!("Mic {n}"))
             .unwrap();
     }
 
-    let ninth = driver.create_device(owner, VD_KIND_MICROPHONE, "One too many");
+    let ninth = driver.create_device(owner, PATTIE_KIND_MICROPHONE, "One too many");
 
-    assert_eq!(ninth, Err(VD_ERR_TOO_MANY_DEVICES));
+    assert_eq!(ninth, Err(PATTIE_ERR_TOO_MANY_DEVICES));
 }
 
 #[test]
 fn removing_a_device_frees_its_name_and_its_id_is_not_reused() {
     let (mut driver, owner) = greeted_driver();
     let id = driver
-        .create_device(owner, VD_KIND_MICROPHONE, "Agent Mic")
+        .create_device(owner, PATTIE_KIND_MICROPHONE, "Agent Mic")
         .unwrap();
 
     let removed = driver.remove_device(owner, id);
-    let again = driver.create_device(owner, VD_KIND_MICROPHONE, "Agent Mic");
+    let again = driver.create_device(owner, PATTIE_KIND_MICROPHONE, "Agent Mic");
 
-    assert_eq!((removed, again), (VD_OK, Ok(2)));
+    assert_eq!((removed, again), (PATTIE_OK, Ok(2)));
 }
 
 #[test]
 fn removing_a_device_makes_room_under_the_limit() {
     let (mut driver, owner) = greeted_driver();
-    for n in 0..VD_MAX_DEVICES {
+    for n in 0..PATTIE_MAX_DEVICES {
         driver
-            .create_device(owner, VD_KIND_MICROPHONE, &format!("Mic {n}"))
+            .create_device(owner, PATTIE_KIND_MICROPHONE, &format!("Mic {n}"))
             .unwrap();
     }
     driver.remove_device(owner, 3);
 
-    let created = driver.create_device(owner, VD_KIND_MICROPHONE, "Replacement");
+    let created = driver.create_device(owner, PATTIE_KIND_MICROPHONE, "Replacement");
 
-    assert_eq!(created, Ok(VD_MAX_DEVICES + 1));
+    assert_eq!(created, Ok(PATTIE_MAX_DEVICES + 1));
 }
 
 #[test]
@@ -376,10 +370,10 @@ fn removing_an_unknown_already_removed_or_someone_elses_device_fails_the_same_wa
     let stranger = driver.connect();
     driver.greet(stranger);
     let mine = driver
-        .create_device(owner, VD_KIND_MICROPHONE, "Mine")
+        .create_device(owner, PATTIE_KIND_MICROPHONE, "Mine")
         .unwrap();
     let gone = driver
-        .create_device(owner, VD_KIND_MICROPHONE, "Gone")
+        .create_device(owner, PATTIE_KIND_MICROPHONE, "Gone")
         .unwrap();
     driver.remove_device(owner, gone);
 
@@ -389,7 +383,7 @@ fn removing_an_unknown_already_removed_or_someone_elses_device_fails_the_same_wa
         driver.remove_device(stranger, mine),
     ];
 
-    assert_eq!(statuses, [VD_ERR_NO_SUCH_DEVICE; 3]);
+    assert_eq!(statuses, [PATTIE_ERR_NO_SUCH_DEVICE; 3]);
 }
 
 #[test]
@@ -398,18 +392,20 @@ fn closing_an_owner_removes_exactly_its_own_devices() {
     let staying = driver.connect();
     driver.greet(staying);
     driver
-        .create_device(leaving, VD_KIND_MICROPHONE, "A")
+        .create_device(leaving, PATTIE_KIND_MICROPHONE, "A")
         .unwrap();
     let kept = driver
-        .create_device(staying, VD_KIND_MICROPHONE, "B")
+        .create_device(staying, PATTIE_KIND_MICROPHONE, "B")
         .unwrap();
-    driver.create_device(leaving, VD_KIND_SPEAKER, "C").unwrap();
+    driver
+        .create_device(leaving, PATTIE_KIND_SPEAKER, "C")
+        .unwrap();
 
     let removed = driver.close(leaving);
 
     assert_eq!(
         (removed, driver.remove_device(staying, kept)),
-        (vec![1, 3], VD_OK)
+        (vec![1, 3], PATTIE_OK)
     );
 }
 
@@ -419,11 +415,11 @@ fn names_of_a_closed_owners_devices_are_free_again() {
     let next = driver.connect();
     driver.greet(next);
     driver
-        .create_device(leaving, VD_KIND_MICROPHONE, "Agent Mic")
+        .create_device(leaving, PATTIE_KIND_MICROPHONE, "Agent Mic")
         .unwrap();
     driver.close(leaving);
 
-    let created = driver.create_device(next, VD_KIND_MICROPHONE, "Agent Mic");
+    let created = driver.create_device(next, PATTIE_KIND_MICROPHONE, "Agent Mic");
 
     assert_eq!(created, Ok(2));
 }
@@ -444,7 +440,7 @@ fn characters_just_outside_the_control_ranges_are_allowed_in_names() {
         .iter()
         .map(|name| {
             driver
-                .create_device(owner, VD_KIND_MICROPHONE, name)
+                .create_device(owner, PATTIE_KIND_MICROPHONE, name)
                 .is_ok()
         })
         .collect();
@@ -458,32 +454,34 @@ fn device_id_0_never_names_a_device_though_free_slots_hold_0() {
     // A slot this Owner freed keeps its owner but holds ID 0 again; the live
     // Device is created first so it doesn't reuse that slot.
     driver
-        .create_device(owner, VD_KIND_MICROPHONE, "Agent Mic")
+        .create_device(owner, PATTIE_KIND_MICROPHONE, "Agent Mic")
         .unwrap();
     let freed = driver
-        .create_device(owner, VD_KIND_MICROPHONE, "Freed")
+        .create_device(owner, PATTIE_KIND_MICROPHONE, "Freed")
         .unwrap();
     driver.remove_device(owner, freed);
 
     let removed = driver.remove_device(owner, 0);
     let ring = driver.driver_read(0, 1);
 
-    assert_eq!((removed, ring), (VD_ERR_NO_SUCH_DEVICE, None));
+    assert_eq!((removed, ring), (PATTIE_ERR_NO_SUCH_DEVICE, None));
 }
 
 #[test]
 fn a_remove_request_of_the_wrong_size_is_rejected() {
     let (mut driver, owner) = greeted_driver();
     let id = driver
-        .create_device(owner, VD_KIND_MICROPHONE, "Agent Mic")
+        .create_device(owner, PATTIE_KIND_MICROPHONE, "Agent Mic")
         .unwrap();
-    let request = as_bytes(&vd_remove_device_request { device_id: id }).to_vec();
+    let request = as_bytes(&pattie_remove_device_request { device_id: id }).to_vec();
 
-    let short = driver.send(owner, VD_CMD_REMOVE_DEVICE, &request[..3]).0;
+    let short = driver
+        .send(owner, PATTIE_CMD_REMOVE_DEVICE, &request[..3])
+        .0;
     let long = driver
         .send(
             owner,
-            VD_CMD_REMOVE_DEVICE,
+            PATTIE_CMD_REMOVE_DEVICE,
             &[request.as_slice(), &[0]].concat(),
         )
         .0;
@@ -491,7 +489,7 @@ fn a_remove_request_of_the_wrong_size_is_rejected() {
 
     assert_eq!(
         (short, long, still_there),
-        (VD_ERR_BAD_REQUEST, VD_ERR_BAD_REQUEST, true)
+        (PATTIE_ERR_BAD_REQUEST, PATTIE_ERR_BAD_REQUEST, true)
     );
 }
 
@@ -499,10 +497,10 @@ fn a_remove_request_of_the_wrong_size_is_rejected() {
 fn the_core_reports_the_device_it_accepted_with_its_stable_id() {
     let (mut driver, owner) = greeted_driver();
     let mic = driver
-        .create_device(owner, VD_KIND_MICROPHONE, "Agent Mic")
+        .create_device(owner, PATTIE_KIND_MICROPHONE, "Agent Mic")
         .unwrap();
     let speaker = driver
-        .create_device(owner, VD_KIND_SPEAKER, "Agent Speaker")
+        .create_device(owner, PATTIE_KIND_SPEAKER, "Agent Speaker")
         .unwrap();
 
     let reported = [driver.device_info(mic), driver.device_info(speaker)];
@@ -513,12 +511,12 @@ fn the_core_reports_the_device_it_accepted_with_its_stable_id() {
         reported,
         [
             Some(DeviceInfo {
-                kind: VD_KIND_MICROPHONE,
+                kind: PATTIE_KIND_MICROPHONE,
                 name: "Agent Mic".to_string(),
                 stable_id: 0x41B2_8DFC_5B21_A0BE,
             }),
             Some(DeviceInfo {
-                kind: VD_KIND_SPEAKER,
+                kind: PATTIE_KIND_SPEAKER,
                 name: "Agent Speaker".to_string(),
                 stable_id: 0x2939_5CD2_B4F8_7993,
             }),
@@ -530,7 +528,7 @@ fn the_core_reports_the_device_it_accepted_with_its_stable_id() {
 fn an_unknown_or_removed_device_has_no_info() {
     let (mut driver, owner) = greeted_driver();
     let mic = driver
-        .create_device(owner, VD_KIND_MICROPHONE, "Agent Mic")
+        .create_device(owner, PATTIE_KIND_MICROPHONE, "Agent Mic")
         .unwrap();
     driver.remove_device(owner, mic);
 
@@ -547,8 +545,8 @@ fn an_unknown_or_removed_device_has_no_info() {
 #[test]
 fn stable_ids_are_case_sensitive_and_hash_the_kind_first() {
     let ids = [
-        stable_id(VD_KIND_MICROPHONE, "agent mic", 48_000, 1),
-        stable_id(VD_KIND_SPEAKER, "Agent Mic", 48_000, 1),
+        stable_id(PATTIE_KIND_MICROPHONE, "agent mic", 48_000, 1),
+        stable_id(PATTIE_KIND_SPEAKER, "Agent Mic", 48_000, 1),
     ];
 
     assert_eq!(ids, [0x0B0C_D977_01FA_B0BE, 0x9D54_51AA_D474_9C6F]);
@@ -557,9 +555,9 @@ fn stable_ids_are_case_sensitive_and_hash_the_kind_first() {
 #[test]
 fn the_same_name_in_another_format_is_another_device_to_the_system() {
     let ids = [
-        stable_id(VD_KIND_MICROPHONE, "Agent Mic", 96_000, 1),
-        stable_id(VD_KIND_MICROPHONE, "Agent Mic", 48_000, 2),
-        stable_id(VD_KIND_MICROPHONE, "Agent Mic", 44_100, 2),
+        stable_id(PATTIE_KIND_MICROPHONE, "Agent Mic", 96_000, 1),
+        stable_id(PATTIE_KIND_MICROPHONE, "Agent Mic", 48_000, 2),
+        stable_id(PATTIE_KIND_MICROPHONE, "Agent Mic", 44_100, 2),
     ];
 
     // So Windows never meets a saved device format the pin no longer offers
@@ -581,7 +579,7 @@ fn the_core_hashes_the_format_its_ring_attached_with() {
     let mic = driver
         .create_device_with(
             owner,
-            create_device_request(VD_KIND_MICROPHONE, "Agent Mic"),
+            create_device_request(PATTIE_KIND_MICROPHONE, "Agent Mic"),
             Some(ring),
             256,
         )
@@ -591,7 +589,7 @@ fn the_core_hashes_the_format_its_ring_attached_with() {
     let speaker = driver
         .create_device_with(
             owner,
-            create_device_request(VD_KIND_SPEAKER, "Agent Speaker"),
+            create_device_request(PATTIE_KIND_SPEAKER, "Agent Speaker"),
             Some(zeroed),
             256,
         )
@@ -614,9 +612,9 @@ fn a_create_that_arrives_after_its_owner_closed_creates_nothing() {
     let (mut driver, owner) = greeted_driver();
     driver.close(owner);
 
-    let late = driver.create_device(owner, VD_KIND_MICROPHONE, "Agent Mic");
+    let late = driver.create_device(owner, PATTIE_KIND_MICROPHONE, "Agent Mic");
 
-    assert_eq!(late, Err(VD_ERR_BAD_REQUEST));
+    assert_eq!(late, Err(PATTIE_ERR_BAD_REQUEST));
     assert_eq!(driver.live_devices(), []);
 }
 
@@ -626,14 +624,17 @@ fn a_closed_owner_can_neither_greet_again_nor_remove() {
     let other = driver.connect();
     driver.greet(other);
     let kept = driver
-        .create_device(other, VD_KIND_MICROPHONE, "Agent Mic")
+        .create_device(other, PATTIE_KIND_MICROPHONE, "Agent Mic")
         .unwrap();
     driver.close(owner);
 
-    let hello = driver.hello(owner, VIADUCT_ABI_MAJOR as u16, VIADUCT_ABI_MINOR as u16);
+    let hello = driver.hello(owner, PATTIE_ABI_MAJOR as u16, PATTIE_ABI_MINOR as u16);
     let remove = driver.remove_device(owner, kept);
 
-    assert_eq!((hello, remove), (VD_ERR_BAD_REQUEST, VD_ERR_BAD_REQUEST));
+    assert_eq!(
+        (hello, remove),
+        (PATTIE_ERR_BAD_REQUEST, PATTIE_ERR_BAD_REQUEST)
+    );
     assert_eq!(
         driver.live_devices().len(),
         1,
@@ -647,15 +648,15 @@ fn device_ids_wrap_past_zero_and_skip_ids_still_live() {
     // Device only (ABI freeze review 2026-11-14, finding C).
     let (mut driver, owner) = greeted_driver();
     let first = driver
-        .create_device(owner, VD_KIND_MICROPHONE, "A")
+        .create_device(owner, PATTIE_KIND_MICROPHONE, "A")
         .unwrap();
     driver.set_next_device_id(u32::MAX);
 
     let last = driver
-        .create_device(owner, VD_KIND_MICROPHONE, "B")
+        .create_device(owner, PATTIE_KIND_MICROPHONE, "B")
         .unwrap();
     let wrapped = driver
-        .create_device(owner, VD_KIND_MICROPHONE, "C")
+        .create_device(owner, PATTIE_KIND_MICROPHONE, "C")
         .unwrap();
 
     assert_eq!(

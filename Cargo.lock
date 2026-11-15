@@ -299,6 +299,60 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
+name = "pattie"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "libc",
+ "libloading",
+ "pattie",
+ "windows-sys",
+]
+
+[[package]]
+name = "pattie-cli"
+version = "0.1.0"
+dependencies = [
+ "pattie",
+ "pattie-install",
+ "windows",
+]
+
+[[package]]
+name = "pattie-core-tests"
+version = "0.0.0"
+dependencies = [
+ "bindgen",
+ "cc",
+ "pattie",
+ "proptest",
+]
+
+[[package]]
+name = "pattie-install"
+version = "0.1.0"
+dependencies = [
+ "windows",
+]
+
+[[package]]
+name = "pattie-msi"
+version = "0.1.0"
+dependencies = [
+ "pattie-install",
+ "roxmltree",
+ "windows",
+]
+
+[[package]]
+name = "pattie-python"
+version = "0.1.0"
+dependencies = [
+ "pattie",
+ "pyo3",
+]
+
+[[package]]
 name = "portable-atomic"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -639,60 +693,6 @@ name = "unicode-ident"
 version = "1.0.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2c754d6c33795a1c324727428e5a7dedb5b06195f9890bdbcba760d3e246563"
-
-[[package]]
-name = "viaduct"
-version = "0.1.0"
-dependencies = [
- "cc",
- "libc",
- "libloading",
- "viaduct",
- "windows-sys",
-]
-
-[[package]]
-name = "viaduct-cli"
-version = "0.1.0"
-dependencies = [
- "viaduct",
- "viaduct-install",
- "windows",
-]
-
-[[package]]
-name = "viaduct-core-tests"
-version = "0.0.0"
-dependencies = [
- "bindgen",
- "cc",
- "proptest",
- "viaduct",
-]
-
-[[package]]
-name = "viaduct-install"
-version = "0.1.0"
-dependencies = [
- "windows",
-]
-
-[[package]]
-name = "viaduct-msi"
-version = "0.1.0"
-dependencies = [
- "roxmltree",
- "viaduct-install",
- "windows",
-]
-
-[[package]]
-name = "viaduct-python"
-version = "0.1.0"
-dependencies = [
- "pyo3",
- "viaduct",
-]
 
 [[package]]
 name = "wait-timeout"

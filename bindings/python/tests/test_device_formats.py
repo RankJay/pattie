@@ -7,9 +7,9 @@ import time
 
 import pytest
 
-import viaduct
-from viaduct import _testing
-from viaduct.aio import AsyncMicrophone
+import pattie
+from pattie import _testing
+from pattie.aio import AsyncMicrophone
 
 
 def floats(values: list[float]) -> bytes:
@@ -30,12 +30,12 @@ def test_a_stereo_microphone_says_its_format_and_carries_whole_frames(
 ) -> None:
     samples = stereo(441)
 
-    with viaduct.Microphone("Stereo Mic", rate=44_100, channels=2, _backend=backend) as mic:
+    with pattie.Microphone("Stereo Mic", rate=44_100, channels=2, _backend=backend) as mic:
         written = mic.write_nowait(floats(samples))
         taken = backend.driver_read(mic.id, 441)
 
         assert (mic.rate, mic.channels) == (44_100, 2)
-        assert mic.format == viaduct.Format(44_100, "f32", channels=2)
+        assert mic.format == pattie.Format(44_100, "f32", channels=2)
 
     assert written == 441, "frames"
     assert taken is not None
@@ -45,7 +45,7 @@ def test_a_stereo_microphone_says_its_format_and_carries_whole_frames(
 def test_a_paced_write_to_a_stereo_microphone_counts_frames(
     backend: _testing.TestBackend,
 ) -> None:
-    with viaduct.Microphone("Stereo Mic", channels=2, _backend=backend) as mic:
+    with pattie.Microphone("Stereo Mic", channels=2, _backend=backend) as mic:
         written = mic.write(floats(stereo(4_800)), timeout=0.05)
 
     # Only the lead goes in before the timeout: well under 4,800 frames, and a
@@ -58,7 +58,7 @@ def test_a_write_cut_mid_frame_carries_the_rest_to_the_next(
 ) -> None:
     samples = stereo(2)
 
-    with viaduct.Microphone("Stereo Mic", channels=2, _backend=backend) as mic:
+    with pattie.Microphone("Stereo Mic", channels=2, _backend=backend) as mic:
         # Three samples are a frame and a half: the half waits for the rest.
         first = mic.write_nowait(floats(samples[:3]))
         second = mic.write_nowait(floats(samples[3:]))
@@ -72,8 +72,8 @@ def test_a_write_cut_mid_frame_carries_the_rest_to_the_next(
 def test_mono_written_to_a_stereo_microphone_fills_both_channels(
     backend: _testing.TestBackend,
 ) -> None:
-    with viaduct.Microphone(
-        "Stereo Mic", channels=2, format=viaduct.Format(48_000), _backend=backend
+    with pattie.Microphone(
+        "Stereo Mic", channels=2, format=pattie.Format(48_000), _backend=backend
     ) as mic:
         written = mic.write_nowait(floats([0.5] * 480))
         taken = backend.driver_read(mic.id, 480)
@@ -86,7 +86,7 @@ def test_mono_written_to_a_stereo_microphone_fills_both_channels(
 def test_a_stereo_96_khz_speaker_reads_whole_frames(backend: _testing.TestBackend) -> None:
     samples = stereo(960)
 
-    with viaduct.Speaker("Stereo Speaker", rate=96_000, channels=2, _backend=backend) as speaker:
+    with pattie.Speaker("Stereo Speaker", rate=96_000, channels=2, _backend=backend) as speaker:
         assert backend.driver_write(speaker.id, floats(samples))
         data = speaker.read()
 
@@ -98,8 +98,8 @@ def test_a_stereo_96_khz_speaker_reads_whole_frames(backend: _testing.TestBacken
 def test_a_mono_speaker_format_mixes_a_stereo_speaker_down(
     backend: _testing.TestBackend,
 ) -> None:
-    with viaduct.Speaker(
-        "Stereo Speaker", channels=2, format=viaduct.Format(48_000), _backend=backend
+    with pattie.Speaker(
+        "Stereo Speaker", channels=2, format=pattie.Format(48_000), _backend=backend
     ) as speaker:
         backend.driver_write(speaker.id, floats([0.25, 0.75] * 480))
         data = speaker.read()
@@ -109,7 +109,7 @@ def test_a_mono_speaker_format_mixes_a_stereo_speaker_down(
 
 def test_heard_ms_counts_at_the_microphones_rate(backend: _testing.TestBackend) -> None:
     with (
-        viaduct.Microphone("Agent Mic", rate=96_000, _backend=backend) as mic,
+        pattie.Microphone("Agent Mic", rate=96_000, _backend=backend) as mic,
         mic.playout() as playout,
     ):
         playout.push(floats([0.5] * 96_000))
@@ -127,7 +127,7 @@ def test_heard_ms_counts_at_the_microphones_rate(backend: _testing.TestBackend) 
 
 
 def test_played_ms_counts_at_the_microphones_rate(backend: _testing.TestBackend) -> None:
-    with viaduct.Microphone("Agent Mic", rate=44_100, _backend=backend) as mic:
+    with pattie.Microphone("Agent Mic", rate=44_100, _backend=backend) as mic:
         mic.write_nowait(floats([0.1] * 2_205))
         backend.driver_read(mic.id, 2_205)
 
@@ -139,14 +139,14 @@ def test_played_ms_counts_at_the_microphones_rate(backend: _testing.TestBackend)
 def test_a_device_format_outside_the_three_rates_and_eight_channels_is_refused(
     backend: _testing.TestBackend, rate: int, channels: int
 ) -> None:
-    with pytest.raises(viaduct.UnsupportedFormat, match="kHz"):
-        viaduct.Microphone("Agent Mic", rate=rate, channels=channels, _backend=backend)
+    with pytest.raises(pattie.UnsupportedFormat, match="kHz"):
+        pattie.Microphone("Agent Mic", rate=rate, channels=channels, _backend=backend)
 
 
 def test_an_async_stereo_microphone_writes_whole_frames(backend: _testing.TestBackend) -> None:
     async def main() -> None:
         async with AsyncMicrophone("Stereo Mic", rate=44_100, channels=2, _backend=backend) as mic:
-            assert mic.format == viaduct.Format(44_100, "f32", channels=2)
+            assert mic.format == pattie.Format(44_100, "f32", channels=2)
             done = asyncio.Event()
 
             async def pull() -> int:

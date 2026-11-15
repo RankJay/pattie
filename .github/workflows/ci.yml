@@ -1,0 +1,275 @@
+# Every push and pull request: the checks README "Before you commit" lists, on
+# Windows and Linux, plus what's fast enough to run every time (real-PipeWire
+# tests, Miri, a fuzzer smoke run, the driver build). Slower checks: nightly.yml.
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+jobs:
+  rust-windows:
+    name: Rust (Windows)
+    runs-on: windows-2025-vs2026
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      # The workspace includes the Python binding; PyO3's build needs Python 3.14+.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Point bindgen at Visual Studio's libclang
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # .cargo/config.toml names the Community edition; the runner has another.
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -prerelease -property installationPath
+          $dir = Join-Path $vs 'VC\Tools\Llvm\x64\bin'
+          if (-not (Test-Path (Join-Path $dir 'libclang.dll'))) { $dir = 'C:\Program Files\LLVM\bin' }
+          "LIBCLANG_PATH=$dir" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+      # act cannot start a Windows container while Docker is in Linux mode, so the
+      # Windows job is mapped onto an Ubuntu image (-P). runner.os is then Linux.
+      - name: Point bindgen at libclang
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq clang libclang-dev
+          echo "LIBCLANG_PATH=$(dirname "$(printf '%s\n' /usr/lib/llvm-*/lib/libclang.so* | sort -V | tail -1)")" >> "$GITHUB_ENV"
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo doc --workspace --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+      - run: cargo test --workspace
+
+  rust-linux:
+    name: Rust (Linux, ${{ matrix.cc }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        cc: [gcc, clang]
+    env:
+      CC: ${{ matrix.cc }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.cc }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Install clang and libclang (bindgen)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq clang libclang-dev
+      - name: Point bindgen at libclang
+        run: echo "LIBCLANG_PATH=$(dirname "$(printf '%s\n' /usr/lib/llvm-*/lib/libclang.so* | sort -V | tail -1)")" >> "$GITHUB_ENV"
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo doc --workspace --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+      - run: cargo test --workspace
+
+  pipewire:
+    name: Linux backend on real PipeWire
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install PipeWire, WirePlumber and libclang
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang libclang-dev pipewire pipewire-bin wireplumber dbus
+          echo "LIBCLANG_PATH=$(dirname "$(printf '%s\n' /usr/lib/llvm-*/lib/libclang.so* | sort -V | tail -1)")" >> "$GITHUB_ENV"
+      - name: Build the tests
+        run: cargo test -p pattie --test linux_pipewire --no-run
+      - name: Run them against a headless PipeWire
+        # No systemd user session on the runner: start PipeWire and WirePlumber by
+        # hand. The restart test needs `systemctl --user`, so it stays manual.
+        run: |
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/xdg"
+          mkdir -m 700 "$XDG_RUNTIME_DIR"
+          dbus-run-session -- bash -euo pipefail -c '
+            pipewire & sleep 1
+            wireplumber & sleep 2
+            wpctl status
+            cargo test -p pattie --test linux_pipewire -- --ignored --test-threads=1 \
+              --skip a_device_comes_back_by_itself_after_pipewire_restarts
+          '
+
+  python:
+    name: Python binding (${{ matrix.os }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows
+            runner: windows-2025-vs2026
+          - os: linux
+            runner: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: bindings/python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: python
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.14"
+      # Builds the extension with the SDK's test backend (pyproject's [tool.uv]).
+      - run: uv sync --locked
+      - run: uv run --no-sync ruff format --check .
+      - run: uv run --no-sync ruff check .
+      - run: uv run --no-sync ty check
+      - run: uv run --no-sync pytest -q
+
+  pipecat:
+    name: Pipecat transport (${{ matrix.os }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows
+            runner: windows-2025-vs2026
+          - os: linux
+            runner: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: integrations/pipecat
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: pipecat
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.14"
+      # Builds the local binding with its test backend (pyproject's [tool.uv]).
+      - run: uv sync --locked
+      - run: uv run --no-sync ruff format --check .
+      - run: uv run --no-sync ruff check .
+      - run: uv run --no-sync ty check
+      - run: uv run --no-sync pytest -q
+      - name: Against a real, headless PipeWire
+        if: matrix.os == 'linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq pipewire pipewire-bin wireplumber dbus
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/xdg"
+          mkdir -m 700 "$XDG_RUNTIME_DIR"
+          dbus-run-session -- bash -euo pipefail -c '
+            pipewire & sleep 1
+            wireplumber & sleep 2
+            PATTIE_PIPEWIRE=1 uv run --no-sync pytest -q tests/test_pipewire.py
+          '
+      # The pin allows any 1.x: catch a newer Pipecat that breaks the transport.
+      - name: Against the newest Pipecat 1.x
+        if: matrix.os == 'linux'
+        run: |
+          uv sync --upgrade-package pipecat-ai
+          uv run --no-sync pytest -q
+
+  deny:
+    name: Dependencies (cargo-deny)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+
+  driver:
+    name: Driver build and code analysis
+    runs-on: windows-2025-vs2026
+    steps:
+      - uses: actions/checkout@v4
+      # The 64-bit MSBuild: with the 32-bit one (the action's default) the NuGet
+      # kit picks its x86 tools and fails (stampinf, Prefast, InfVerif; checked
+      # locally 2026-11-14).
+      - uses: microsoft/setup-msbuild@v2
+        with:
+          msbuild-architecture: x64
+      - name: Restore the WDK and SDK from NuGet
+        # The runner's own WDK isn't reliable (actions/runner-images#13071, #14263).
+        run: nuget restore platforms/windows/driver/packages.config -PackagesDirectory target/nuget -NonInteractive
+      - name: Build (Release, warnings are errors, Microsoft's code analysis)
+        run: msbuild platforms/windows/driver/pattie.vcxproj -p:Configuration=Release -p:Platform=x64 -p:RunCodeAnalysis=true -p:PattieWdkNuGet=true -nologo -v:minimal
+      # The installer (ADR 0024) stays buildable: a test MSI from the driver just
+      # built, then Windows Installer's ICE validation. Only a build check: the
+      # payload's catalog is a placeholder (no signing in CI), so the MSI isn't
+      # kept. Release MSIs are built by hand from Partner Center's output.
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install WiX v6
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 6.0.2
+          "$env:USERPROFILE\.dotnet\tools" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+      - name: Build and validate a test MSI
+        shell: pwsh
+        run: |
+          $payload = 'target/msi-ci-payload'
+          New-Item -ItemType Directory -Force $payload | Out-Null
+          Copy-Item target/driver/x64/Release/pattie.inf, target/driver/x64/Release/pattie.sys $payload
+          Set-Content "$payload/pattie.cat" 'placeholder: CI builds the MSI only'
+          ./platforms/windows/release/make-msi.ps1 -Payload $payload
+          $msi = Get-ChildItem target/msi/*-test.msi | Select-Object -First 1
+          if (-not $msi) { throw 'make-msi.ps1 produced no MSI' }
+          wix msi validate $msi.FullName
+          if ($LASTEXITCODE -ne 0) { throw "ICE validation failed ($LASTEXITCODE)" }
+
+  miri:
+    name: Miri (the Ring's unsafe code)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri, rust-src
+      - run: cargo miri setup
+      # Only the SDK's pure-Rust unit tests: on Linux the lib also holds the Linux
+      # backend's tests, which call the C core, and Miri can't run C.
+      - run: "cargo miri test -p pattie --lib -- ring:: error:: identity::"
+      - run: "cargo miri test -p pattie --lib -- ring::"
+        env:
+          MIRIFLAGS: -Zmiri-many-seeds=0..32
+
+  fuzz-smoke:
+    name: Fuzz the core (60 s)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the fuzzer (libFuzzer + AddressSanitizer)
+        # clang is on GitHub's image; installing it keeps the job portable (act's
+        # images have none).
+        run: |
+          command -v clang >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq clang; }
+          mkdir -p target/fuzz/corpus
+          clang -fsanitize=fuzzer,address -g -O1 -std=c17 -Wall -Wextra -Werror -Wconversion -Wsign-conversion \
+            -Icore/include -Icore/src core/src/pattie_core.c core/src/pattie_ring.c core/src/pattie_clock.c \
+            core/src/pattie_pcm16.c core/fuzz/fuzz_core.c -o target/fuzz/fuzz_core
+      - name: Run it
+        run: target/fuzz/fuzz_core -max_total_time=60 -max_len=4096 -rss_limit_mb=2048 target/fuzz/corpus

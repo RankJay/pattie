@@ -7,7 +7,7 @@
     Starts recording, waits while you do the run in another window, then stops on
     Enter and leaves the files next to this script:
 
-      <Name>-driver.etl  the driver's own events ("Viaduct.Driver", src/trace.h),
+      <Name>-driver.etl  the driver's own events ("Pattie.Driver", src/trace.h),
                          recorded with Windows' logman
       <Name>-cpu.etl     with -Cpu: WPR's built-in CPU and Audio profiles (CPU
                          sampling, DPC/ISR, audio-engine glitches). Keep these
@@ -30,8 +30,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $here = $PSScriptRoot
-$session = 'ViaductDriver'
-$provider = '{a97790c8-3349-54e2-c7f3-9ad24f60a4ce}' # "Viaduct.Driver" (src/trace.c)
+$session = 'PattieDriver'
+. (Join-Path $here 'trace-provider.ps1')
+$provider = $PattieProvider
 $driverEtl = Join-Path $here "$Name-driver.etl"
 $cpuEtl = Join-Path $here "$Name-cpu.etl"
 
@@ -42,7 +43,7 @@ if (-not $admin) { throw 'Run this as Administrator.' }
 # A session left over from an interrupted run would block the new one.
 & logman stop $session -ets *> $null
 
-# All keywords, level 5 (verbose): every Viaduct event.
+# All keywords, level 5 (verbose): every Pattie event.
 & logman start $session -p $provider 0xffffffffffffffff 5 -o $driverEtl -ets
 if ($LASTEXITCODE -ne 0) { throw "logman start failed ($LASTEXITCODE)" }
 

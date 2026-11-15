@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The installer (ADR 0024): one per-machine MSI for end users (double-click,
+  UAC) and for apps (msiexec /i pattie.msi /qn; exit 0, 3010 when a restart
+  finishes it, 1603 on failure). Built by make-msi.ps1, which passes:
+    ProductVersion  X.Y.Z, from the payload's DriverVer
+    UpgradeCode     identity.wxi's release code, or its test code
+    Payload         the driver folder (pattie.inf, .sys, .cat), byte for byte
+    Cli             pattie-cli.exe
+    ActionsDll      pattie_msi.dll, the custom actions (crates/pattie-msi)
+  crates/pattie-msi/tests/authoring.rs checks the rules below.
+-->
+<?include identity.wxi ?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="$(var.ProductName)" Manufacturer="$(var.Manufacturer)"
+           Version="$(var.ProductVersion)" UpgradeCode="$(var.UpgradeCode)"
+           Scope="perMachine">
+
+    <!--
+      The trap: a MajorUpgrade runs the old product's uninstall, which would take
+      off the driver just upgraded. So the old product goes only after the new
+      driver is on (afterInstallExecute), and UninstallDriver's condition
+      excludes an upgrade's removal (UPGRADINGPRODUCTCODE). Downgrades are
+      refused, as ADR 0016 refuses them.
+    -->
+    <MajorUpgrade Schedule="afterInstallExecute"
+                  DowngradeErrorMessage="A newer version of $(var.ProductName) is already installed. Uninstall it first to install this older one." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="$(var.InstallFolder)">
+        <Directory Id="DRIVERFOLDER" Name="driver" />
+      </Directory>
+    </StandardDirectory>
+
+    <!-- The driver package exactly as Partner Center signed it. -->
+    <ComponentGroup Id="Driver" Directory="DRIVERFOLDER">
+      <Component>
+        <File Source="$(var.Payload)\pattie.inf" />
+      </Component>
+      <Component>
+        <File Source="$(var.Payload)\pattie.sys" />
+      </Component>
+      <Component>
+        <File Source="$(var.Payload)\pattie.cat" />
+      </Component>
+    </ComponentGroup>
+    <ComponentGroup Id="Tools" Directory="INSTALLFOLDER">
+      <Component>
+        <File Source="$(var.Cli)" Name="pattie-cli.exe" />
+      </Component>
+    </ComponentGroup>
+
+    <Feature Id="Main">
+      <ComponentGroupRef Id="Driver" />
+      <ComponentGroupRef Id="Tools" />
+    </Feature>
+
+    <Binary Id="PattieActions" SourceFile="$(var.ActionsDll)" />
+
+    <!-- A deferred action's only input is CustomActionData: the driver folder. -->
+    <CustomAction Id="SetInstallDriverData" Property="InstallDriver" Value="[DRIVERFOLDER]" />
+    <CustomAction Id="RollbackInstallDriver" BinaryRef="PattieActions"
+                  DllEntry="RollbackInstallDriver" Execute="rollback" Impersonate="no"
+                  Return="ignore" />
+    <CustomAction Id="InstallDriver" BinaryRef="PattieActions" DllEntry="InstallDriver"
+                  Execute="deferred" Impersonate="no" Return="check" />
+    <CustomAction Id="UninstallDriver" BinaryRef="PattieActions" DllEntry="UninstallDriver"
+                  Execute="deferred" Impersonate="no" Return="check" />
+    <!--
+      A deferred action can't call MsiSetMode: it leaves a marker when a restart
+      finishes its work, and this immediate action turns that into the restart
+      request, so msiexec ends with 3010 (VM-STEPS R3).
+    -->
+    <CustomAction Id="CheckRebootRequired" BinaryRef="PattieActions"
+                  DllEntry="CheckRebootRequired" Execute="immediate" Return="ignore" />
+    <!--
+      A marker a failed earlier run left (CheckRebootRequired never ran) is dropped
+      first. Neither marker action runs in the old product's removal inside an
+      upgrade (UPGRADINGPRODUCTCODE): that comes after the new product's
+      InstallDriver and would drop its fresh marker (VM-STEPS R4).
+    -->
+    <CustomAction Id="ClearRebootMarker" BinaryRef="PattieActions"
+                  DllEntry="ClearRebootMarker" Execute="immediate" Return="ignore" />
+    <!-- Sets the private PattieRootPresent when a root device is already there (a pattie-cli install). -->
+    <CustomAction Id="DetectExistingDriver" BinaryRef="PattieActions"
+                  DllEntry="DetectExistingDriver" Execute="immediate" Return="ignore" />
+
+    <InstallExecuteSequence>
+      <Custom Action="ClearRebootMarker" Before="InstallInitialize" Condition="NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="DetectExistingDriver" Before="InstallInitialize" Condition="NOT Installed" />
+      <Custom Action="SetInstallDriverData" Before="InstallDriver" Condition="NOT REMOVE" />
+      <!--
+        Rollback only on a first install onto a machine without Pattie: an upgrade
+        keeps the new driver rather than none, a repair keeps the working one, and
+        an adopted pattie-cli install keeps its own.
+      -->
+      <Custom Action="RollbackInstallDriver" Before="InstallDriver"
+              Condition="NOT Installed AND NOT WIX_UPGRADE_DETECTED AND NOT PattieRootPresent" />
+      <Custom Action="InstallDriver" After="InstallFiles" Condition="NOT REMOVE" />
+      <Custom Action="UninstallDriver" Before="RemoveFiles"
+              Condition='REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE' />
+      <Custom Action="CheckRebootRequired" After="InstallFinalize" Condition="NOT UPGRADINGPRODUCTCODE" />
+    </InstallExecuteSequence>
+  </Package>
+</Wix>

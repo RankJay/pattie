@@ -6,8 +6,8 @@ import time
 
 import pytest
 
-from viaduct import _testing
-from viaduct.aio import AsyncMicrophone, AsyncSpeaker
+from pattie import _testing
+from pattie.aio import AsyncMicrophone, AsyncSpeaker
 
 
 def floats(values: list[float]) -> bytes:

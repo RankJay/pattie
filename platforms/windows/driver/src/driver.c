@@ -8,10 +8,10 @@
  */
 #include "shell.h"
 
-static EVT_WDF_DRIVER_DEVICE_ADD VdEvtRootDeviceAdd;
-static EVT_WDF_DRIVER_UNLOAD VdEvtDriverUnload;
-static EVT_WDF_OBJECT_CONTEXT_CLEANUP VdEvtRootCleanup;
-static EVT_WDF_DEVICE_QUERY_REMOVE VdEvtRootQueryRemove;
+static EVT_WDF_DRIVER_DEVICE_ADD PattieEvtRootDeviceAdd;
+static EVT_WDF_DRIVER_UNLOAD PattieEvtDriverUnload;
+static EVT_WDF_OBJECT_CONTEXT_CLEANUP PattieEvtRootCleanup;
+static EVT_WDF_DEVICE_QUERY_REMOVE PattieEvtRootQueryRemove;
 
 /*
  * The trace provider is registered before anything else and unregistered if
@@ -24,21 +24,21 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     WDF_OBJECT_ATTRIBUTES attributes;
     ACX_DRIVER_CONFIG acxConfig;
     WDFDRIVER driver;
-    VD_DRIVER_CONTEXT *ctx;
+    PATTIE_DRIVER_CONTEXT *ctx;
     NTSTATUS status;
 
-    status = TraceLoggingRegister(VdTraceProvider);
+    status = TraceLoggingRegister(PattieTraceProvider);
     if (!NT_SUCCESS(status)) {
         return status;
     }
 
-    WDF_DRIVER_CONFIG_INIT(&config, VdEvtRootDeviceAdd);
-    config.EvtDriverUnload = VdEvtDriverUnload;
-    WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&attributes, VD_DRIVER_CONTEXT);
+    WDF_DRIVER_CONFIG_INIT(&config, PattieEvtRootDeviceAdd);
+    config.EvtDriverUnload = PattieEvtDriverUnload;
+    WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&attributes, PATTIE_DRIVER_CONTEXT);
     status = WdfDriverCreate(DriverObject, RegistryPath, &attributes, &config, &driver);
     if (NT_SUCCESS(status)) {
-        ctx = VdDriverContext(driver); /* zeroed by WDF */
-        vd_core_init(&ctx->Core);
+        ctx = PattieDriverContext(driver); /* zeroed by WDF */
+        pattie_core_init(&ctx->Core);
         status = WdfWaitLockCreate(WDF_NO_OBJECT_ATTRIBUTES, &ctx->Lock);
     }
     if (NT_SUCCESS(status)) {
@@ -46,21 +46,21 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
         status = AcxDriverInitialize(driver, &acxConfig);
     }
     if (!NT_SUCCESS(status)) {
-        TraceLoggingUnregister(VdTraceProvider);
+        TraceLoggingUnregister(PattieTraceProvider);
     }
     return status;
 }
 
-static VOID VdEvtDriverUnload(WDFDRIVER Driver)
+static VOID PattieEvtDriverUnload(WDFDRIVER Driver)
 {
     UNREFERENCED_PARAMETER(Driver);
 
-    TraceLoggingUnregister(VdTraceProvider);
+    TraceLoggingUnregister(PattieTraceProvider);
 }
 
-static NTSTATUS VdEvtRootDeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT DeviceInit)
+static NTSTATUS PattieEvtRootDeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT DeviceInit)
 {
-    VD_DRIVER_CONTEXT *ctx = VdDriverContext(Driver);
+    PATTIE_DRIVER_CONTEXT *ctx = PattieDriverContext(Driver);
     ACX_DEVICEINIT_CONFIG acxInitConfig;
     ACX_DEVICE_CONFIG acxConfig;
     WDF_PNPPOWER_EVENT_CALLBACKS pnpPowerCallbacks;
@@ -80,11 +80,11 @@ static NTSTATUS VdEvtRootDeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT DeviceInit)
 
     /* Set on the DeviceInit before WdfDeviceCreate, as Microsoft's ACX samples do. */
     WDF_PNPPOWER_EVENT_CALLBACKS_INIT(&pnpPowerCallbacks);
-    pnpPowerCallbacks.EvtDeviceQueryRemove = VdEvtRootQueryRemove;
+    pnpPowerCallbacks.EvtDeviceQueryRemove = PattieEvtRootQueryRemove;
     WdfDeviceInitSetPnpPowerEventCallbacks(DeviceInit, &pnpPowerCallbacks);
 
     WDF_OBJECT_ATTRIBUTES_INIT(&attributes);
-    attributes.EvtCleanupCallback = VdEvtRootCleanup;
+    attributes.EvtCleanupCallback = PattieEvtRootCleanup;
     status = WdfDeviceCreate(&DeviceInit, &attributes, &device);
     if (!NT_SUCCESS(status)) {
         return status;
@@ -97,7 +97,7 @@ static NTSTATUS VdEvtRootDeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT DeviceInit)
     }
 
     ctx->Root = device;
-    status = VdControlDeviceCreate(Driver);
+    status = PattieControlDeviceCreate(Driver);
     if (!NT_SUCCESS(status)) {
         ctx->Root = NULL;
     }
@@ -113,27 +113,27 @@ static NTSTATUS VdEvtRootDeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT DeviceInit)
  * so (the reboot flag, or 3010 from the installer).
  *
  * An Owner that opens after this allows the removal is left to the gone path
- * (VdEvtIoDeviceControl): a race the veto narrows but can't close, since WDF
+ * (PattieEvtIoDeviceControl): a race the veto narrows but can't close, since WDF
  * has no callback for a canceled removal.
  */
-static NTSTATUS VdEvtRootQueryRemove(WDFDEVICE Device)
+static NTSTATUS PattieEvtRootQueryRemove(WDFDEVICE Device)
 {
-    VD_DRIVER_CONTEXT *ctx = VdDriverContext(WdfGetDriver());
+    PATTIE_DRIVER_CONTEXT *ctx = PattieDriverContext(WdfGetDriver());
     LONG owners = InterlockedCompareExchange(&ctx->OpenOwners, 0, 0);
 
     UNREFERENCED_PARAMETER(Device);
     if (owners > 0) {
-        TraceLoggingWrite(VdTraceProvider, "QueryRemoveVetoed",
-                          TraceLoggingLevel(VD_TRACE_LEVEL_INFO),
+        TraceLoggingWrite(PattieTraceProvider, "QueryRemoveVetoed",
+                          TraceLoggingLevel(PATTIE_TRACE_LEVEL_INFO),
                           TraceLoggingInt32(owners, "OpenOwners"));
         return STATUS_DEVICE_BUSY;
     }
     return STATUS_SUCCESS;
 }
 
-static VOID VdEvtRootCleanup(WDFOBJECT Object)
+static VOID PattieEvtRootCleanup(WDFOBJECT Object)
 {
-    VD_DRIVER_CONTEXT *ctx = VdDriverContext(WdfGetDriver());
+    PATTIE_DRIVER_CONTEXT *ctx = PattieDriverContext(WdfGetDriver());
 
     UNREFERENCED_PARAMETER(Object);
 

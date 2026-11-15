@@ -5,9 +5,6 @@
 .agents/
 .claude/
 
-# Temporary
-.github/
-
 # Python binding: uv's virtual environment and build output
 bindings/python/.venv/
 integrations/pipecat/.venv/
@@ -15,3 +12,7 @@ integrations/pipecat/.venv/
 __pycache__/
 *.pyd
 *.so
+
+
+# Env variables
+.env

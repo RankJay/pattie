@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Prepares the test VM for loading Viaduct. Runs INSIDE THE VMWARE GUEST ONLY.
+    Prepares the test VM for loading Pattie. Runs INSIDE THE VMWARE GUEST ONLY.
 
 .DESCRIPTION
     Refuses to run unless this is a VMware virtual machine with Secure Boot already

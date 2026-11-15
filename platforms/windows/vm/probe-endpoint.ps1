@@ -1,10 +1,10 @@
 <#
 .SYNOPSIS
-    Probes the live Viaduct endpoint's KS filters. Runs INSIDE THE TEST VM ONLY.
+    Probes the live Pattie endpoint's KS filters. Runs INSIDE THE TEST VM ONLY.
 
 .DESCRIPTION
-    For every enabled audio interface on a Viaduct child device (start
-    viaduct-cli first so one exists), opens the interface the way Windows' audio
+    For every enabled audio interface on a Pattie child device (start
+    pattie-cli first so one exists), opens the interface the way Windows' audio
     service does and asks the KS filter how many pin types it has
     (KSPROPERTY_PIN_CTYPES). A healthy ACX capture or render circuit answers 2.
 
@@ -21,7 +21,7 @@ Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
 using Microsoft.Win32.SafeHandles;
-public static class VdKs {
+public static class PattieKs {
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     public static extern SafeFileHandle CreateFile(string name, uint access, uint share, IntPtr security,
                                                    uint disposition, uint flags, IntPtr template);
@@ -49,12 +49,12 @@ $IOCTL_KS_PROPERTY = [uint32]0x002F0003   # CTL_CODE(FILE_DEVICE_KS, 0, METHOD_N
 $found = $false
 foreach ($name in $categories.Keys) {
     $paths = & pnputil /enum-interfaces /class $categories[$name] /enabled |
-        Select-String -Pattern 'Interface Path:\s+(\\\\\?\\Viaduct#.*)$' |
+        Select-String -Pattern 'Interface Path:\s+(\\\\\?\\Pattie#.*)$' |
         ForEach-Object { $_.Matches[0].Groups[1].Value.Trim() }
     foreach ($path in $paths) {
         $found = $true
         # GENERIC_READ | GENERIC_WRITE (PowerShell 5.1 reads 0xC0000000 as a negative Int32)
-        $handle = [VdKs]::CreateFile($path, [uint32]3221225472, 3, [IntPtr]::Zero, 3, 0, [IntPtr]::Zero)
+        $handle = [PattieKs]::CreateFile($path, [uint32]3221225472, 3, [IntPtr]::Zero, 3, 0, [IntPtr]::Zero)
         if ($handle.IsInvalid) {
             $err = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
             "{0,-9} OPEN FAILED  win32 {1} ({2})  {3}" -f $name, $err, (New-Object ComponentModel.Win32Exception $err).Message, $path
@@ -62,7 +62,7 @@ foreach ($name in $categories.Keys) {
         }
         $out = New-Object byte[] 4
         $returned = 0
-        if ([VdKs]::DeviceIoControl($handle, $IOCTL_KS_PROPERTY, $property, 24, $out, 4, [ref]$returned, [IntPtr]::Zero)) {
+        if ([PattieKs]::DeviceIoControl($handle, $IOCTL_KS_PROPERTY, $property, 24, $out, 4, [ref]$returned, [IntPtr]::Zero)) {
             "{0,-9} opened, pin types = {1}  {2}" -f $name, [BitConverter]::ToUInt32($out, 0), $path
         } else {
             $err = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
@@ -71,4 +71,4 @@ foreach ($name in $categories.Keys) {
         $handle.Dispose()
     }
 }
-if (-not $found) { 'No enabled Viaduct audio interfaces. Is viaduct-cli running?' }
+if (-not $found) { 'No enabled Pattie audio interfaces. Is pattie-cli running?' }

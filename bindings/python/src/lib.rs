@@ -1,7 +1,8 @@
-//! The Python binding (ADR 0019): the native module `viaduct._viaduct`, which the
-//! `viaduct` package re-exports. Every audio rule lives in the Rust SDK. This file
+//! The Python binding (ADR 0019): the native module `pattie._pattie`, which the
+//! `pattie` package re-exports. Every audio rule lives in the Rust SDK. This file
 //! turns its types into Python ones, and releases the GIL whenever a call waits.
 
+use pattie as sdk;
 use pyo3::buffer::PyBuffer;
 use pyo3::create_exception;
 use pyo3::exceptions::{PyException, PyTypeError, PyValueError};
@@ -11,102 +12,101 @@ use pyo3::types::{PyBytes, PyMemoryView};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
 use std::time::{Duration, Instant};
-use viaduct as sdk;
 
 create_exception!(
-    viaduct,
+    pattie,
     Error,
     PyException,
-    "Base class of every Viaduct error."
+    "Base class of every Pattie error."
 );
 create_exception!(
-    viaduct,
+    pattie,
     DriverNotInstalled,
     Error,
-    "The Viaduct driver isn't installed."
+    "The Pattie driver isn't installed."
 );
 create_exception!(
-    viaduct,
+    pattie,
     AudioServerUnavailable,
     Error,
     "Linux: PipeWire isn't running or reachable, or PulseAudio serves audio instead."
 );
 create_exception!(
-    viaduct,
+    pattie,
     AccessDenied,
     Error,
     "This user may not open the driver."
 );
 create_exception!(
-    viaduct,
+    pattie,
     NoBackend,
     Error,
-    "Viaduct doesn't support this OS yet."
+    "Pattie doesn't support this OS yet."
 );
 create_exception!(
-    viaduct,
+    pattie,
     VersionMismatch,
     Error,
     "The driver is too old or too new."
 );
 create_exception!(
-    viaduct,
+    pattie,
     UnsupportedFormat,
     Error,
-    "A rate, encoding or channel count Viaduct can't take."
+    "A rate, encoding or channel count Pattie can't take."
 );
 create_exception!(
-    viaduct,
+    pattie,
     BadBufferSize,
     Error,
-    "A Ring size Viaduct can't use."
+    "A Ring size Pattie can't use."
 );
 create_exception!(
-    viaduct,
+    pattie,
     BadName,
     Error,
     "An empty, too long or unprintable Device name."
 );
 create_exception!(
-    viaduct,
+    pattie,
     DuplicateName,
     Error,
     "A Device of this kind already has that name."
 );
-create_exception!(viaduct, TooManyDevices, Error, "Too many Devices are live.");
+create_exception!(pattie, TooManyDevices, Error, "Too many Devices are live.");
 create_exception!(
-    viaduct,
+    pattie,
     WrongKind,
     Error,
     "A microphone call on a speaker, or the other way round."
 );
 create_exception!(
-    viaduct,
+    pattie,
     AlreadyTaken,
     Error,
     "The Device's writer or reader is already in use."
 );
 create_exception!(
-    viaduct,
+    pattie,
     SystemRefused,
     Error,
     "The operating system refused to create the audio device."
 );
 create_exception!(
-    viaduct,
+    pattie,
     ProtocolError,
     Error,
     "The driver and this package disagree: a bug."
 );
-create_exception!(viaduct, OsError, Error, "An operating-system error.");
+create_exception!(pattie, OsError, Error, "An operating-system error.");
 create_exception!(
-    viaduct,
+    pattie,
     DriverRemoved,
     Error,
     "The driver was removed or is being updated while the Device was live: create it again."
 );
 create_exception!(
-    viaduct,
+    pattie,
     AudioLost,
     Error,
     "Audio was dropped or ran out (strict=True)."
@@ -118,7 +118,7 @@ fn to_py(error: sdk::Error) -> PyErr {
     let text = error.to_string();
     match error {
         sdk::Error::DriverNotInstalled => DriverNotInstalled::new_err(format!(
-            "{text}: install it once, as administrator, with `viaduct-cli install <driver package folder>`"
+            "{text}: install it once, as administrator, with `pattie-cli install <driver package folder>`"
         )),
         sdk::Error::AudioServerUnavailable => AudioServerUnavailable::new_err(format!(
             "{text}: start it with `systemctl --user start pipewire pipewire-pulse wireplumber`"
@@ -225,7 +225,7 @@ fn f32_samples(bytes: &[u8]) -> Vec<f32> {
 }
 
 /// A stream's sample rate, encoding and channel count.
-#[pyclass(module = "viaduct", frozen, eq, from_py_object)]
+#[pyclass(module = "pattie", frozen, eq, from_py_object)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Format {
     #[pyo3(get)]
@@ -332,7 +332,7 @@ impl Format {
 
 /// Audio a Device lost so far, and how much is waiting now, in frames at the
 /// Device's rate.
-#[pyclass(module = "viaduct", frozen, eq)]
+#[pyclass(module = "pattie", frozen, eq)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Stats {
     /// Frames listeners heard as silence because the app fell behind.
@@ -379,7 +379,7 @@ fn transport(
         return Ok(Some(test.get().inner.transport()));
     }
     Err(PyTypeError::new_err(format!(
-        "_backend must be a viaduct._testing.TestBackend, not {}",
+        "_backend must be a pattie._testing.TestBackend, not {}",
         backend.get_type().name()?
     )))
 }
@@ -405,7 +405,7 @@ fn closed() -> PyErr {
 }
 
 /// Makes lost audio visible: a call that lost some logs a warning (logger
-/// "viaduct"), or raises AudioLost with `strict=True`.
+/// "pattie"), or raises AudioLost with `strict=True`.
 ///
 /// Only what's lost during the call counts. Silence before the first write, or
 /// in a pause between writes, is Gap too, but the app chose it.
@@ -434,7 +434,7 @@ impl LossWatch {
             return Err(AudioLost::new_err(message));
         }
         py.import("logging")?
-            .call_method1("getLogger", ("viaduct",))?
+            .call_method1("getLogger", ("pattie",))?
             .call_method1("warning", (message,))?;
         Ok(())
     }
@@ -460,7 +460,7 @@ fn perf_seconds(py: Python<'_>, at: Instant) -> PyResult<f64> {
 /// Where the system's side of a Device had got to, and when (ADR 0022): its
 /// count had reached `frames` (at the Device's rate) at `at`, a
 /// `time.perf_counter()` time.
-#[pyclass(module = "viaduct", frozen)]
+#[pyclass(module = "pattie", frozen)]
 struct Clock {
     #[pyo3(get)]
     frames: u64,
@@ -489,7 +489,7 @@ impl Clock {
 }
 
 /// How a LiveWriter is doing.
-#[pyclass(module = "viaduct", frozen)]
+#[pyclass(module = "pattie", frozen)]
 struct LiveStats {
     /// Frames waiting in its buffer: the latency it holds (about 40 ms).
     #[pyo3(get)]
@@ -521,7 +521,7 @@ type LiveSlot = Arc<RwLock<Option<Arc<sdk::LiveWriter>>>>;
 /// A microphone's input for a live source (Microphone.live_writer()): audio
 /// relayed in real time from something with its own clock, held at about 40 ms
 /// and kept there for hours by drift compensation (ADR 0022).
-#[pyclass(module = "viaduct")]
+#[pyclass(module = "pattie")]
 struct LiveWriter {
     inner: LiveSlot,
 }
@@ -651,7 +651,7 @@ type PlayoutSlot = Arc<RwLock<Option<Arc<sdk::Playout>>>>;
 /// Locks are always taken in this order, so no two calls wait on each other:
 /// `writing`, then `device`, then `handed`. Only `writing` is held while
 /// waiting for listeners.
-#[pyclass(module = "viaduct")]
+#[pyclass(module = "pattie")]
 struct Microphone {
     id: u32,
     /// What write() takes.
@@ -979,7 +979,7 @@ struct Reading {
 ///
 /// Locks are always taken `reading`, then `device`. Only `reading` is held while
 /// waiting for audio.
-#[pyclass(module = "viaduct")]
+#[pyclass(module = "pattie")]
 struct Speaker {
     id: u32,
     /// The Device's own format: float at its rate and channels.
@@ -1188,7 +1188,7 @@ impl Speaker {
 
 /// What interrupt() cut: how much of the reply listeners heard, and how much was
 /// dropped before it reached them.
-#[pyclass(module = "viaduct", frozen, eq)]
+#[pyclass(module = "pattie", frozen, eq)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Interrupted {
     /// Frames of the reply that listeners took, at the microphone's rate.
@@ -1220,7 +1220,7 @@ impl Interrupted {
 
 /// A voice agent's output (Microphone.playout()): audio pushed at any speed is
 /// played at the listeners' pace; interrupt() stops it at once.
-#[pyclass(module = "viaduct")]
+#[pyclass(module = "pattie")]
 struct Playout {
     /// Shared, so push() and interrupt() from other threads don't wait behind a
     /// wait_idle() in progress, and with the microphone, whose close() ends it.
@@ -1298,7 +1298,7 @@ impl Playout {
 /// Converts audio between two Formats, keeping its state from one call to the
 /// next, so a stream converted in pieces of any size comes out the same as one
 /// converted at once.
-#[pyclass(module = "viaduct")]
+#[pyclass(module = "pattie")]
 struct Converter {
     inner: Mutex<sdk::Converter>,
 }
@@ -1351,9 +1351,9 @@ mod testing {
 
     /// The SDK's test backend: Devices without the driver, and the system's side
     /// of them played by the test. Only in the project's own test builds.
-    #[pyclass(module = "viaduct._testing", frozen)]
+    #[pyclass(module = "pattie._testing", frozen)]
     pub(crate) struct TestBackend {
-        pub(crate) inner: viaduct::transport::TestBackend,
+        pub(crate) inner: pattie::transport::TestBackend,
     }
 
     #[pymethods]
@@ -1361,7 +1361,7 @@ mod testing {
         #[new]
         fn new() -> PyResult<TestBackend> {
             Ok(TestBackend {
-                inner: viaduct::transport::TestBackend::new().map_err(super::to_py)?,
+                inner: pattie::transport::TestBackend::new().map_err(super::to_py)?,
             })
         }
 
@@ -1396,8 +1396,8 @@ mod testing {
     #[pyfunction]
     pub(crate) fn sdk_error(py: Python<'_>, name: &str) -> PyResult<Py<PyAny>> {
         let error = match name {
-            "DriverNotInstalled" => viaduct::Error::DriverNotInstalled,
-            "DriverRemoved" => viaduct::Error::DriverRemoved,
+            "DriverNotInstalled" => pattie::Error::DriverNotInstalled,
+            "DriverRemoved" => pattie::Error::DriverRemoved,
             _ => {
                 return Err(pyo3::exceptions::PyValueError::new_err(format!(
                     "no SDK error named {name}"
@@ -1409,7 +1409,7 @@ mod testing {
 }
 
 #[pymodule]
-fn _viaduct(module: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _pattie(module: &Bound<'_, PyModule>) -> PyResult<()> {
     let py = module.py();
     for (name, error) in [
         ("Error", py.get_type::<Error>()),

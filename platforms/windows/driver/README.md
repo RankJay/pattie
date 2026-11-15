@@ -1,4 +1,4 @@
-# Viaduct driver shell
+# Pattie driver shell
 
 The thin ACX/KMDF shell around the pure C core in `core/` (ADR 0002). It only
 translates between Windows and the core; every decision is made, and tested, in
@@ -6,13 +6,13 @@ the core. Layout (ADR 0010, ADR 0011, ADR 0013):
 
 | Piece | File | Role |
 | --- | --- | --- |
-| Root ACX device | `src/driver.c` | Installed by `viaduct.inf`; parents the circuit devices |
-| Control device `\\.\Viaduct` | `src/control.c` | Owners' commands: one handle per Owner, one buffered IOCTL per command; pins Rings in the caller's context |
+| Root ACX device | `src/driver.c` | Installed by `pattie.inf`; parents the circuit devices |
+| Control device `\\.\Pattie` | `src/control.c` | Owners' commands: one handle per Owner, one buffered IOCTL per command; pins Rings in the caller's context |
 | Circuit devices | `src/endpoint.c` | One raw child per Device: create with a stable instance ID from kind + name (ADR 0015), add its circuit once, name it, safe teardown |
 | Circuit | `src/circuit.c` | The child's one capture or render circuit: host and bridge pins, float and PCM16 formats |
 | Interface values | `src/interfaces.c` | The audio interface values an INF would write, which a runtime child has no INF for |
 | Streaming | `src/stream.c` | One timer pass per packet, one copy between the Ring and the ACX packet (PCM16 converted) |
-| Tracing | `src/trace.c`, `src/trace.h` | The `Viaduct.Driver` ETW provider: stream format, packets, timer lateness, Gap/Overflow, Device start |
+| Tracing | `src/trace.c`, `src/trace.h` | The `Pattie.Driver` ETW provider: stream format, packets, timer lateness, Gap/Overflow, Device start |
 
 ## Build (compile only)
 
@@ -21,7 +21,7 @@ Needs Visual Studio's driver tools plus a matching Windows SDK and Driver Kit
 API-validator helper that can't check x64 drivers.
 
 ```bash
-"/c/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" platforms/windows/driver/viaduct.vcxproj -p:Configuration=Debug -p:Platform=x64
+"/c/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" platforms/windows/driver/pattie.vcxproj -p:Configuration=Debug -p:Platform=x64
 ```
 
 Platforms: `x64`, `ARM64`. Configurations: `Debug`, `Release`. Add
@@ -32,14 +32,14 @@ Building never signs, installs or loads anything: `SignMode` is `Off` (no test
 certificate is created), and catalog generation and deployment are disabled.
 
 `DriverVer`'s version comes from the build time unless
-`-p:ViaductDriverVersion=a.b.c.d` sets it. A release goes through
+`-p:PattieDriverVersion=a.b.c.d` sets it. A release goes through
 `platforms/windows/release/make-attestation-cab.ps1 -Version a.b.c.d`, which builds
 with that version and packs the `.cab` for Microsoft's attestation signing
 (`.ai/ops/vm-steps.md`, section H).
 
-On a machine, the driver goes on with `viaduct-cli install <package folder>` and
-comes off with `viaduct-cli uninstall`, both as administrator (ADR 0016): install
-creates the `Root\Viaduct` device only if there is none, and doesn't replace a
+On a machine, the driver goes on with `pattie-cli install <package folder>` and
+comes off with `pattie-cli uninstall`, both as administrator (ADR 0016): install
+creates the `Root\Pattie` device only if there is none, and doesn't replace a
 driver of the same or a newer version.
 
 ## Kernel-mode notes

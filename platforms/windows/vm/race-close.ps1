@@ -4,7 +4,7 @@
     security review of 2026-11-14 (.ai/research/security-review-kernel-2026-11-14.md).
 
 .DESCRIPTION
-    -Mode Race (finding 1): opens \\.\Viaduct, says Hello, and has 6 threads
+    -Mode Race (finding 1): opens \\.\Pattie, says Hello, and has 6 threads
     send overlapped Create Device requests at once while another thread closes
     the handle, so some are still queued or in flight; repeats. (Threads,
     because the driver's sequential queue runs an idle queue's request on the
@@ -19,7 +19,7 @@
     that are refused at once with ERROR_BUSY (170). Then it closes the handle.
 
     -Mode Gone (ADR 0024, VM-STEPS R5): a forced removal under a live Owner.
-    Opens \\.\Viaduct, says Hello, creates a Device, then disables the root
+    Opens \\.\Pattie, says Hello, creates a Device, then disables the root
     device with CM_DISABLE_ABSOLUTE ("don't ask the driver"), which skips the
     query-remove veto as no installer or pnputil does. On the still-open handle
     it then sends Hello and Create Device, which must fail with
@@ -27,8 +27,8 @@
     re-enables the root and checks a new Owner can create a Device again.
 
     -Mode Names (finding 5): opening the device with a trailing name
-    (\\.\Viaduct\x) must fail with ERROR_FILE_NOT_FOUND (2); opening
-    \\.\Viaduct itself must still work.
+    (\\.\Pattie\x) must fail with ERROR_FILE_NOT_FOUND (2); opening
+    \\.\Pattie itself must still work.
 
     Run it in the guest with Driver Verifier on, then exit PowerShell (the
     process exit is when locked pages would bugcheck), and check
@@ -54,7 +54,7 @@ Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
 
-public static class ViaductRaw
+public static class PattieRaw
 {
     const uint GENERIC_READ = 0x80000000, GENERIC_WRITE = 0x40000000;
     const uint OPEN_EXISTING = 3, FILE_FLAG_OVERLAPPED = 0x40000000;
@@ -84,9 +84,9 @@ public static class ViaductRaw
 
     static IntPtr Open()
     {
-        IntPtr h = CreateFileW(@"\\.\Viaduct", GENERIC_READ | GENERIC_WRITE, 0, IntPtr.Zero,
+        IntPtr h = CreateFileW(@"\\.\Pattie", GENERIC_READ | GENERIC_WRITE, 0, IntPtr.Zero,
                                OPEN_EXISTING, FILE_FLAG_OVERLAPPED, IntPtr.Zero);
-        if (h == new IntPtr(-1)) throw new Exception("open \\\\.\\Viaduct: " + Marshal.GetLastWin32Error());
+        if (h == new IntPtr(-1)) throw new Exception("open \\\\.\\Pattie: " + Marshal.GetLastWin32Error());
         if (ring == IntPtr.Zero) {
             ring = VirtualAlloc(IntPtr.Zero, new UIntPtr(RingBytes), 0x3000, 0x04); // commit+reserve, RW
             Marshal.WriteInt32(ring, 128, 4096);                                  // capacity_frames
@@ -279,8 +279,8 @@ public static class ViaductRaw
         cr = CM_Enable_DevNode(root, 0);
         log.Add("CM_Enable_DevNode: CONFIGRET " + cr);
         System.Threading.Thread.Sleep(5000);
-        int opened = TryOpen(@"\\.\Viaduct");
-        log.Add(@"A new Owner opens \\.\Viaduct: error " + opened + "   <- want 0");
+        int opened = TryOpen(@"\\.\Pattie");
+        log.Add(@"A new Owner opens \\.\Pattie: error " + opened + "   <- want 0");
         if (opened == 0) {
             IntPtr fresh = Open();
             log.Add("  Hello:  " + Outcome(fresh, 1, Hello()));
@@ -303,7 +303,7 @@ public static class ViaductRaw
 '@
 
 if ($Mode -eq 'Race') {
-    $c = [ViaductRaw]::Race($Rounds)
+    $c = [PattieRaw]::Race($Rounds)
     "Race, $Rounds rounds: 6 threads send Creates while another closes the handle"
     "  created: $($c[0]); refused after the close: $($c[1]); cancelled at the close: $($c[3])"
     "  busy: $($c[2]); too many Devices: $($c[4]); other (handle already closed, ...): $($c[5])"
@@ -313,9 +313,9 @@ if ($Mode -eq 'Race') {
         Where-Object { $_.FriendlyName -like '*(Race *' -and $_.Status -eq 'OK' })
     "  'Race' endpoints still present: $($left.Count)   <- expect 0"
 } elseif ($Mode -eq 'Gone') {
-    $root = (Get-PnpDevice -FriendlyName 'Viaduct Virtual Audio' -ErrorAction Stop).InstanceId
+    $root = (Get-PnpDevice -FriendlyName 'Pattie Virtual Audio' -ErrorAction Stop).InstanceId
     "Gone: a forced removal of $root under a live Owner"
-    [ViaductRaw]::Gone($root, [bool]$Hard) | ForEach-Object { "  $_" }
+    [PattieRaw]::Gone($root, [bool]$Hard) | ForEach-Object { "  $_" }
     Start-Sleep -Seconds 2
     $after = Get-PnpDevice -InstanceId $root
     "  the root now: Status $($after.Status), Problem $($after.Problem)   <- want OK"
@@ -323,13 +323,13 @@ if ($Mode -eq 'Race') {
         Where-Object { $_.FriendlyName -like '*(Gone *' -and $_.Status -eq 'OK' })
     "  'Gone' endpoints still present: $($left.Count)   <- expect 0"
 } elseif ($Mode -eq 'Names') {
-    $named = [ViaductRaw]::TryOpen('\\.\Viaduct\x')
-    $plain = [ViaductRaw]::TryOpen('\\.\Viaduct')
-    "Opening \\.\Viaduct\x: error $named   <- expect 2 (ERROR_FILE_NOT_FOUND)"
-    "Opening \\.\Viaduct:   error $plain   <- expect 0 (it opens)"
+    $named = [PattieRaw]::TryOpen('\\.\Pattie\x')
+    $plain = [PattieRaw]::TryOpen('\\.\Pattie')
+    "Opening \\.\Pattie\x: error $named   <- expect 2 (ERROR_FILE_NOT_FOUND)"
+    "Opening \\.\Pattie:   error $plain   <- expect 0 (it opens)"
     return
 } else {
-    $c = [ViaductRaw]::Burst()
+    $c = [PattieRaw]::Burst()
     "Burst: 40 threads send a Create each, at once, on one handle"
     "  created: $($c[0]); busy (ERROR_BUSY): $($c[2]); too many Devices: $($c[4]); other: $($c[1] + $c[3] + $c[5])"
     "  expect: created at most 8, and busy above 0 (only 16 may hold a pinned Ring at once)"

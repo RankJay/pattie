@@ -1,4 +1,4 @@
-# pipecat-viaduct
+# pipecat-pattie
 
 A [Pipecat](https://github.com/pipecat-ai/pipecat) transport that gives a bot its
 own microphone and speaker. Zoom, Teams, Meet, Discord and OBS list them as
@@ -6,9 +6,9 @@ ordinary devices, "Microphone (Agent Mic)" and "Speakers (Agent Speaker)", with 
 virtual cable to install and no window to share.
 
 ```python
-from pipecat_viaduct import ViaductTransport, ViaductTransportParams
+from pipecat_pattie import PattieTransport, PattieTransportParams
 
-transport = ViaductTransport(ViaductTransportParams(audio_in_enabled=True, audio_out_enabled=True))
+transport = PattieTransport(PattieTransportParams(audio_in_enabled=True, audio_out_enabled=True))
 pipeline = Pipeline(
     [
         transport.input(),  # what the meeting plays to "Agent Speaker"
@@ -30,11 +30,11 @@ come back under the same names, as the same devices, the next time it runs.
 
 | | |
 | --- | --- |
-| Formats | The pipeline keeps its own rates (16 kHz in and 24 kHz out, say); Viaduct converts to and from the Devices' 48 kHz |
+| Formats | The pipeline keeps its own rates (16 kHz in and 24 kHz out, say); Pattie converts to and from the Devices' 48 kHz |
 | Interruptions | Pipecat's own: the device holds only ~20 ms beyond the chunk being written, so a barge-in cuts within about 60 ms (set `audio_out_10ms_chunks=2` for less) |
 | Speaking events | Writes take as long as the audio does, so Pipecat's bot-started / bot-stopped speaking events and its clock stay true |
 | Turn ends | While nothing plays to the speaker, the input sends silence in 20 ms frames, so voice activity detection always sees a turn end |
-| Lost audio | Logged as a warning (logger `viaduct`), or raised as `viaduct.AudioLost` with `strict=True` |
+| Lost audio | Logged as a warning (logger `pattie`), or raised as `pattie.AudioLost` with `strict=True` |
 
 ## Parameters
 
@@ -49,14 +49,14 @@ Everything in Pipecat's `TransportParams`, plus:
 | `strict` | `False` | Raise on lost audio instead of logging it |
 
 Only the enabled sides get a Device (`audio_in_enabled`, `audio_out_enabled`).
-`transport.microphone` and `transport.speaker` are the `viaduct.Microphone` and
-`viaduct.Speaker`, for their stats and clocks.
+`transport.microphone` and `transport.speaker` are the `pattie.Microphone` and
+`pattie.Speaker`, for their stats and clocks.
 
 ## Requirements
 
 - Python 3.14 and `pipecat-ai` 1.16 or newer (1.x).
-- Windows 11 with the Viaduct driver installed, or Linux with PipeWire (the
-  `viaduct-audio` package's requirements).
+- Windows 11 with the Pattie driver installed, or Linux with PipeWire (the
+  `pattie` package's requirements).
 
 ## Try it
 
@@ -71,7 +71,7 @@ uv run examples/echo_bot.py
 ## Development
 
 ```bash
-uv sync                 # builds the local viaduct binding with its test backend
+uv sync                 # builds the local pattie binding with its test backend
 uv run pytest -q        # the transport against the SDK's test backend
-VIADUCT_PIPEWIRE=1 uv run pytest -q tests/test_pipewire.py   # Linux, real PipeWire
+PATTIE_PIPEWIRE=1 uv run pytest -q tests/test_pipewire.py   # Linux, real PipeWire
 ```

@@ -51,6 +51,31 @@ wheels = [
 ]
 
 [[package]]
+name = "pattie"
+version = "0.1.0"
+source = { editable = "." }
+
+[package.dev-dependencies]
+dev = [
+    { name = "maturin" },
+    { name = "pytest" },
+    { name = "ruff" },
+    { name = "ty" },
+    { name = "websockets" },
+]
+
+[package.metadata]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "maturin", specifier = ">=1.16,<2" },
+    { name = "pytest", specifier = ">=9" },
+    { name = "ruff", specifier = ">=0.14" },
+    { name = "ty", specifier = ">=0.0.1a30" },
+    { name = "websockets", specifier = ">=17.4" },
+]
+
+[[package]]
 name = "pluggy"
 version = "1.7.0"
 source = { registry = "https://pypi.org/simple" }
@@ -132,31 +157,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/2f/1b/c845fcda0d2549c4d7b6023dde2cbac8a108253e3fe7ceae02b2e1f58fab/ty-0.0.100-py3-none-win32.whl", hash = "sha256:6eeb12edfb3608427aa657983b1ddad1d0c73915752d092bfe5c35315804b071", size = 13789591, upload-time = "2026-11-09T20:16:20.28Z" },
     { url = "https://files.pythonhosted.org/packages/3b/35/2becc700b2384a2d0b373626ed59c6706d2089888a14721199dba1aa3094/ty-0.0.100-py3-none-win_amd64.whl", hash = "sha256:01c230d3046f0d5e8ab6e1def4131aab21659a1d290cc88b39b4fde04bfad0c0", size = 14440120, upload-time = "2026-11-09T20:16:22.858Z" },
     { url = "https://files.pythonhosted.org/packages/5f/d5/5c46cefc47f3c18c09caf5a370eb9a70945d9f86fd79ac6e0a5e40180fe4/ty-0.0.100-py3-none-win_arm64.whl", hash = "sha256:e5ef15fae8544582d03c78b5287abd18eac78e5f21dff80b5febb2e038e97205", size = 13909648, upload-time = "2026-11-09T20:16:25.274Z" },
-]
-
-[[package]]
-name = "viaduct-audio"
-version = "0.1.0"
-source = { editable = "." }
-
-[package.dev-dependencies]
-dev = [
-    { name = "maturin" },
-    { name = "pytest" },
-    { name = "ruff" },
-    { name = "ty" },
-    { name = "websockets" },
-]
-
-[package.metadata]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "maturin", specifier = ">=1.16,<2" },
-    { name = "pytest", specifier = ">=9" },
-    { name = "ruff", specifier = ">=0.14" },
-    { name = "ty", specifier = ">=0.0.1a30" },
-    { name = "websockets", specifier = ">=17.4" },
 ]
 
 [[package]]

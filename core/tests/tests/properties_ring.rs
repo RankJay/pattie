@@ -8,10 +8,10 @@
 //!   between driver calls. The driver must stay inside the Ring's memory, keep its
 //!   own counters moving forward, and account for every frame.
 
+use pattie_core_tests::Ring;
+use pattie_core_tests::ffi::{pattie_pcm16_from_sample, pattie_sample_from_pcm16};
 use proptest::prelude::*;
 use std::collections::VecDeque;
-use viaduct_core_tests::Ring;
-use viaduct_core_tests::ffi::{vd_pcm16_from_sample, vd_sample_from_pcm16};
 
 /// Ring sizes to try: the smallest allowed, and one more.
 fn capacity() -> impl Strategy<Value = u32> {
@@ -25,12 +25,12 @@ fn sample(index: u64) -> f32 {
 
 fn to_pcm16(bits: u32) -> i16 {
     // SAFETY: a pure C function of plain integers: no pointers, no state.
-    unsafe { vd_pcm16_from_sample(bits) }
+    unsafe { pattie_pcm16_from_sample(bits) }
 }
 
 fn from_pcm16(pcm: i16) -> u32 {
     // SAFETY: a pure C function of plain integers: no pointers, no state.
-    unsafe { vd_sample_from_pcm16(pcm) }
+    unsafe { pattie_sample_from_pcm16(pcm) }
 }
 
 #[derive(Clone, Debug)]

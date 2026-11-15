@@ -8,8 +8,8 @@ import time
 
 import pytest
 
-import viaduct
-from viaduct import _testing
+import pattie
+from pattie import _testing
 
 TEN_MS = 0.010
 SLACK = 0.002  # the clock's conversion, and a busy test machine
@@ -38,7 +38,7 @@ def pull_for(backend: _testing.TestBackend, device_id: int, seconds: float) -> l
 def test_a_live_writers_audio_reaches_the_system_once_its_buffer_fills(
     backend: _testing.TestBackend,
 ) -> None:
-    with viaduct.Microphone("Agent Mic", _backend=backend) as mic:
+    with pattie.Microphone("Agent Mic", _backend=backend) as mic:
         live = mic.live_writer()
         assert live.push(floats([0.5] * 9_600)) == 9_600  # 200 ms from the source
 
@@ -50,8 +50,8 @@ def test_a_live_writers_audio_reaches_the_system_once_its_buffer_fills(
 
 
 def test_a_live_writer_converts_its_format(backend: _testing.TestBackend) -> None:
-    with viaduct.Microphone("Agent Mic", _backend=backend) as mic:
-        live = mic.live_writer(viaduct.Format(24_000, "pcm16"))
+    with pattie.Microphone("Agent Mic", _backend=backend) as mic:
+        live = mic.live_writer(pattie.Format(24_000, "pcm16"))
 
         # 240 samples at 24 kHz: 480 frames at 48 kHz.
         assert live.push(array.array("h", [1_000] * 240).tobytes()) == 480
@@ -60,7 +60,7 @@ def test_a_live_writer_converts_its_format(backend: _testing.TestBackend) -> Non
 def test_a_live_writer_past_one_second_drops_its_oldest_audio(
     backend: _testing.TestBackend,
 ) -> None:
-    with viaduct.Microphone("Agent Mic", _backend=backend) as mic:
+    with pattie.Microphone("Agent Mic", _backend=backend) as mic:
         live = mic.live_writer()
 
         live.push(floats([0.1] * 50_000))
@@ -72,9 +72,9 @@ def test_a_live_writer_past_one_second_drops_its_oldest_audio(
 def test_a_live_writer_holds_the_writer_and_closing_the_mic_ends_it(
     backend: _testing.TestBackend,
 ) -> None:
-    mic = viaduct.Microphone("Agent Mic", _backend=backend)
+    mic = pattie.Microphone("Agent Mic", _backend=backend)
     live = mic.live_writer()
-    with pytest.raises(viaduct.AlreadyTaken):
+    with pytest.raises(pattie.AlreadyTaken):
         mic.write(floats([0.1] * 10))
 
     mic.close()
@@ -87,7 +87,7 @@ def test_a_live_writer_holds_the_writer_and_closing_the_mic_ends_it(
 def test_a_microphones_clock_says_how_far_and_when_the_system_took(
     backend: _testing.TestBackend,
 ) -> None:
-    with viaduct.Microphone("Agent Mic", _backend=backend) as mic:
+    with pattie.Microphone("Agent Mic", _backend=backend) as mic:
         mic.write_nowait(floats([0.5] * 960))
         before_any = (mic.clock, mic.next_play_time)
 
@@ -108,7 +108,7 @@ def test_a_microphones_clock_says_how_far_and_when_the_system_took(
 def test_read_timed_says_when_the_first_frame_read_was_played(
     backend: _testing.TestBackend,
 ) -> None:
-    with viaduct.Speaker("Agent Speaker", _backend=backend) as speaker:
+    with pattie.Speaker("Agent Speaker", _backend=backend) as speaker:
         assert speaker.read_timed(timeout=0) == (b"", None)
 
         start = time.perf_counter()
@@ -129,7 +129,7 @@ def test_read_timed_says_when_the_first_frame_read_was_played(
 def test_a_read_timed_from_another_thread_wakes_when_audio_is_played(
     backend: _testing.TestBackend,
 ) -> None:
-    with viaduct.Speaker("Agent Speaker", _backend=backend) as speaker:
+    with pattie.Speaker("Agent Speaker", _backend=backend) as speaker:
         result: list[tuple[bytes, float | None]] = []
         reader = threading.Thread(target=lambda: result.append(speaker.read_timed(timeout=5)))
         reader.start()

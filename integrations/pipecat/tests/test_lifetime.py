@@ -3,20 +3,20 @@
 import asyncio
 from typing import Any
 
+import pattie
 import pytest
-import viaduct
 from conftest import SystemPull, pcm16
+from pattie import _testing
 from pipecat.frames.frames import OutputAudioRawFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.tests.utils import SleepFrame, run_test
-from viaduct import _testing
 
-from pipecat_viaduct import ViaductTransport, ViaductTransportParams
+from pipecat_pattie import PattieTransport, PattieTransportParams
 
 
-def both(backend: _testing.TestBackend, **params: Any) -> ViaductTransport:
-    return ViaductTransport(
-        ViaductTransportParams(
+def both(backend: _testing.TestBackend, **params: Any) -> PattieTransport:
+    return PattieTransport(
+        PattieTransportParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
             audio_out_sample_rate=24_000,
@@ -27,7 +27,7 @@ def both(backend: _testing.TestBackend, **params: Any) -> ViaductTransport:
     )
 
 
-async def run_briefly(transport: ViaductTransport) -> None:
+async def run_briefly(transport: PattieTransport) -> None:
     pipeline = Pipeline([transport.input(), transport.output()])
     await run_test(pipeline, frames_to_send=[SleepFrame(sleep=0.2)])
 
@@ -98,8 +98,8 @@ async def test_running_again_creates_the_devices_again_under_the_same_names(
 
 
 def test_only_the_enabled_sides_get_a_device(backend: _testing.TestBackend) -> None:
-    speaking = ViaductTransport(ViaductTransportParams(audio_out_enabled=True), _backend=backend)
-    listening = ViaductTransport(ViaductTransportParams(audio_in_enabled=True), _backend=backend)
+    speaking = PattieTransport(PattieTransportParams(audio_out_enabled=True), _backend=backend)
+    listening = PattieTransport(PattieTransportParams(audio_in_enabled=True), _backend=backend)
 
     assert speaking.microphone is not None
     assert speaking.speaker is None
@@ -108,7 +108,7 @@ def test_only_the_enabled_sides_get_a_device(backend: _testing.TestBackend) -> N
 
 
 def test_by_default_the_bot_has_both_at_48_khz_mono(backend: _testing.TestBackend) -> None:
-    transport = ViaductTransport(_backend=backend)
+    transport = PattieTransport(_backend=backend)
 
     assert transport.microphone is not None
     assert transport.speaker is not None
@@ -122,10 +122,10 @@ def test_the_devices_format_is_a_parameter(backend: _testing.TestBackend) -> Non
     assert (transport.speaker.rate, transport.speaker.channels) == (44_100, 2)
 
 
-def test_a_name_already_in_use_raises_viaducts_own_error(backend: _testing.TestBackend) -> None:
+def test_a_name_already_in_use_raises_patties_own_error(backend: _testing.TestBackend) -> None:
     first = both(backend)
 
-    with pytest.raises(viaduct.DuplicateName, match="pick another name"):
+    with pytest.raises(pattie.DuplicateName, match="pick another name"):
         both(backend)
     assert first.microphone is not None
     assert not first.microphone.closed

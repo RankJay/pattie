@@ -1,16 +1,16 @@
 //! Seam B, Windows-facing format: float samples to and from 16-bit PCM with
 //! integer-only arithmetic (ADR 0005, ADR 0008).
 
-use viaduct_core_tests::ffi::*;
+use pattie_core_tests::ffi::*;
 
 fn to_pcm16(sample: f32) -> i16 {
     // SAFETY: a pure C function of plain integers: no pointers, no state.
-    unsafe { vd_pcm16_from_sample(sample.to_bits()) }
+    unsafe { pattie_pcm16_from_sample(sample.to_bits()) }
 }
 
 fn from_pcm16(pcm: i16) -> u32 {
     // SAFETY: a pure C function of plain integers: no pointers, no state.
-    unsafe { vd_sample_from_pcm16(pcm) }
+    unsafe { pattie_sample_from_pcm16(pcm) }
 }
 
 #[test]
@@ -31,7 +31,7 @@ fn every_pcm16_value_becomes_exactly_that_value_over_32768() {
 fn every_pcm16_value_survives_the_round_trip_through_a_float_sample() {
     let changed: Vec<i16> = (i16::MIN..=i16::MAX)
         // SAFETY: a pure C function of plain integers: no pointers, no state.
-        .filter(|&pcm| unsafe { vd_pcm16_from_sample(from_pcm16(pcm)) } != pcm)
+        .filter(|&pcm| unsafe { pattie_pcm16_from_sample(from_pcm16(pcm)) } != pcm)
         .collect();
 
     assert_eq!(
@@ -62,7 +62,7 @@ fn conversion_matches_a_float_reference_across_the_whole_bit_space() {
         .chain(near_full_scale)
         .filter(
             // SAFETY: a pure C function of plain integers: no pointers, no state.
-            |&bits| unsafe { vd_pcm16_from_sample(bits) } != reference_pcm16(f32::from_bits(bits)),
+            |&bits| unsafe { pattie_pcm16_from_sample(bits) } != reference_pcm16(f32::from_bits(bits)),
         )
         .collect();
 
@@ -126,7 +126,7 @@ fn rounding_is_half_away_from_zero_and_unrepresentable_values_are_silence() {
 
 // The Ring in 16-bit PCM: the app side stays float (ADR 0005).
 
-use viaduct_core_tests::Ring;
+use pattie_core_tests::Ring;
 
 #[test]
 fn frames_the_app_writes_come_out_of_a_pcm16_read_converted() {
@@ -173,12 +173,12 @@ fn a_full_ring_drops_new_pcm16_frames_counted_as_overflow() {
     assert_eq!((header.write_frames, header.overflow_frames), (256, 4));
 }
 
-/// The SDK converts 16-bit PCM in user space (`viaduct::Converter`, ADR 0019) and
-/// the driver in the kernel (`viaduct_pcm16.c`): one rule, so audio converted on
+/// The SDK converts 16-bit PCM in user space (`pattie::Converter`, ADR 0019) and
+/// the driver in the kernel (`pattie_pcm16.c`): one rule, so audio converted on
 /// either side comes out the same (architecture review 2026-11-09, candidate 6).
 mod the_sdk_converter_agrees_with_the_core {
     use super::*;
-    use viaduct::{Converter, Encoding, Format};
+    use pattie::{Converter, Encoding, Format};
 
     const PCM16: Format = Format {
         rate: 48_000,

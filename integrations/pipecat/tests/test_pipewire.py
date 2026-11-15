@@ -1,6 +1,6 @@
 """The transport against a real PipeWire (Linux): what a pipeline says is what a
 recording of the bot's microphone hears. Opt-in, as the SDK's own PipeWire
-tests are: `VIADUCT_PIPEWIRE=1 pytest tests/test_pipewire.py`."""
+tests are: `PATTIE_PIPEWIRE=1 pytest tests/test_pipewire.py`."""
 
 import array
 import asyncio
@@ -11,16 +11,16 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pattie
 import pytest
-import viaduct
 from pipecat.frames.frames import OutputAudioRawFrame
 from pipecat.tests.utils import SleepFrame, run_test
 
-from pipecat_viaduct import ViaductTransport, ViaductTransportParams
+from pipecat_pattie import PattieTransport, PattieTransportParams
 
 pytestmark = pytest.mark.skipif(
-    sys.platform != "linux" or os.environ.get("VIADUCT_PIPEWIRE") != "1",
-    reason="needs a running PipeWire with pw-record; set VIADUCT_PIPEWIRE=1",
+    sys.platform != "linux" or os.environ.get("PATTIE_PIPEWIRE") != "1",
+    reason="needs a running PipeWire with pw-record; set PATTIE_PIPEWIRE=1",
 )
 
 
@@ -46,15 +46,15 @@ def wav_samples(path: Path) -> list[float]:
 
 async def test_a_recording_of_the_bots_microphone_hears_what_the_pipeline_says() -> None:
     name = f"Pipecat Test Mic {os.getpid()}"
-    transport = ViaductTransport(
-        ViaductTransportParams(
+    transport = PattieTransport(
+        PattieTransportParams(
             audio_out_enabled=True,
             audio_out_sample_rate=24_000,
             audio_out_end_silence_secs=0,
             mic_name=name,
         )
     )
-    node = "viaduct." + viaduct.stable_id("microphone", name)
+    node = "pattie." + pattie.stable_id("microphone", name)
     with tempfile.TemporaryDirectory() as folder:
         wav = Path(folder) / "heard.wav"
         recorder = await asyncio.create_subprocess_exec(

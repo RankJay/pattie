@@ -5,17 +5,17 @@ import array
 import asyncio
 
 from conftest import f32
+from pattie import _testing
 from pipecat.frames.frames import Frame, InputAudioRawFrame
 from pipecat.tests.utils import SleepFrame, run_test
-from viaduct import _testing
 
-from pipecat_viaduct import ViaductTransport, ViaductTransportParams
+from pipecat_pattie import PattieTransport, PattieTransportParams
 
 
-def listening(backend: _testing.TestBackend) -> ViaductTransport:
+def listening(backend: _testing.TestBackend) -> PattieTransport:
     """A transport with only its speaker, the pipeline at 16 kHz."""
-    return ViaductTransport(
-        ViaductTransportParams(audio_in_enabled=True, audio_in_sample_rate=16_000),
+    return PattieTransport(
+        PattieTransportParams(audio_in_enabled=True, audio_in_sample_rate=16_000),
         _backend=backend,
     )
 

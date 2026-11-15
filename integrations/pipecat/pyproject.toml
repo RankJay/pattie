@@ -3,9 +3,9 @@ requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
-name = "pipecat-viaduct"
+name = "pipecat-pattie"
 version = "0.1.0"
-description = "A Pipecat transport for Viaduct: a bot's own virtual microphone and speaker, which meeting apps see as real devices"
+description = "A Pipecat transport for Pattie: a bot's own virtual microphone and speaker, which meeting apps see as real devices"
 readme = "README.md"
 requires-python = ">=3.14"
 license = "MIT OR Apache-2.0"
@@ -17,21 +17,21 @@ classifiers = [
     "Topic :: Multimedia :: Sound/Audio",
     "Typing :: Typed",
 ]
-dependencies = ["pipecat-ai>=1.16,<2", "viaduct-audio>=0.1"]
+dependencies = ["pipecat-ai>=1.16,<2", "pattie>=0.1"]
 
 [dependency-groups]
 dev = ["pytest>=9", "pytest-asyncio>=1", "ruff>=0.14", "ty>=0.0.1a30"]
 
 [tool.uv.sources]
 # The binding from this repository, built with its test backend
-# (viaduct._testing) so these tests run without the driver.
-viaduct-audio = { path = "../../bindings/python", editable = true }
+# (pattie._testing) so these tests run without the driver.
+pattie = { path = "../../bindings/python", editable = true }
 
 [tool.uv]
-config-settings-package = { viaduct-audio = { build-args = "--features test-backend" } }
+config-settings-package = { pattie = { build-args = "--features test-backend" } }
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/pipecat_viaduct"]
+packages = ["src/pipecat_pattie"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

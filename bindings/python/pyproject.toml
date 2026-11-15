@@ -3,7 +3,7 @@ requires = ["maturin>=1.16,<2"]
 build-backend = "maturin"
 
 [project]
-name = "viaduct-audio"
+name = "pattie"
 version = "0.1.0"
 description = "Virtual microphones and speakers that every app sees as real audio devices"
 readme = "README.md"
@@ -31,11 +31,11 @@ dev = [
 ]
 
 [tool.maturin]
-module-name = "viaduct._viaduct"
+module-name = "pattie._pattie"
 python-source = "python"
 
 [tool.uv]
-# The project's own builds include the SDK's test backend (viaduct._testing) so
+# The project's own builds include the SDK's test backend (pattie._testing) so
 # the tests run without the driver. Wheels for users are built by release.yml
 # with plain `maturin build`, which leaves it out.
 config-settings = { build-args = "--features test-backend" }
@@ -44,9 +44,9 @@ cache-keys = [
     { file = "pyproject.toml" },
     { file = "Cargo.toml" },
     { file = "src/**/*.rs" },
-    { file = "../../crates/viaduct/Cargo.toml" },
-    { file = "../../crates/viaduct/src/**/*.rs" },
-    { file = "../../crates/viaduct/build.rs" },
+    { file = "../../crates/pattie/Cargo.toml" },
+    { file = "../../crates/pattie/src/**/*.rs" },
+    { file = "../../crates/pattie/build.rs" },
     { file = "../../core/**/*.{c,h}" },
 ]
 
@@ -66,7 +66,7 @@ ignore = [
 
 [tool.ruff.lint.isort]
 # The package lives in python/, so ruff can't tell it's this project's own.
-known-first-party = ["viaduct"]
+known-first-party = ["pattie"]
 
 [tool.ty.environment]
 python-version = "3.14"

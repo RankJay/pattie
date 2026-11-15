@@ -3,20 +3,20 @@
 # Coverage): code that only does something against a live driver, endpoint or
 # machine setup, checked in the test VM. And test code itself.
 exclude_globs = [
-    "crates/viaduct/src/windows.rs",
-    "crates/viaduct-cli/src/main.rs",
-    "crates/viaduct-cli/src/measure.rs",
-    "crates/viaduct-install/src/setup.rs",
-    "crates/viaduct-msi/src/msi.rs",
+    "crates/pattie/src/windows.rs",
+    "crates/pattie-cli/src/main.rs",
+    "crates/pattie-cli/src/measure.rs",
+    "crates/pattie-install/src/setup.rs",
+    "crates/pattie-msi/src/msi.rs",
     # The Linux backend: not compiled on Windows, where mutation runs (locally and
     # nightly.yml), so every mutant there would read as missed. Its tests run on
     # Linux (ci.yml), the PipeWire parts against a real PipeWire.
-    "crates/viaduct/src/linux.rs",
-    "crates/viaduct/src/linux/**",
-    "crates/viaduct/src/core_host/claim.rs",
+    "crates/pattie/src/linux.rs",
+    "crates/pattie/src/linux/**",
+    "crates/pattie/src/core_host/claim.rs",
     # Test scaffolding (the contract suite's nodes), never shipped; coverage
     # leaves it out too.
-    "crates/viaduct/src/core_host/test_backend.rs",
+    "crates/pattie/src/core_host/test_backend.rs",
     "testing/**",
     "core/tests/**",
     # The Python binding: its tests are Python (pytest), which cargo-mutants
@@ -45,7 +45,7 @@ exclude_re = [
     "win::<impl Drop for Bell>::drop",
     # Test code inside src/ (the `mod tests` helpers).
     " tests::",
-    # The non-Windows stand-ins for viaduct-install/src/setup.rs, which changes
+    # The non-Windows stand-ins for pattie-install/src/setup.rs, which changes
     # the machine (VM-STEPS D.5 and R).
     "replace (install|uninstall) -> Result<Outcome, String> with Ok",
     # MMCSS "Pro Audio": its effect is only scheduling priority under load (the

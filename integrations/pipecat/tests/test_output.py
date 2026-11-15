@@ -5,17 +5,17 @@ import time
 from typing import Any
 
 from conftest import SystemPull, pcm16
+from pattie import _testing
 from pipecat.frames.frames import InterruptionFrame, OutputAudioRawFrame
 from pipecat.tests.utils import SleepFrame, run_test
-from viaduct import _testing
 
-from pipecat_viaduct import ViaductTransport, ViaductTransportParams
+from pipecat_pattie import PattieTransport, PattieTransportParams
 
 
-def speaking(backend: _testing.TestBackend, **params: Any) -> ViaductTransport:
+def speaking(backend: _testing.TestBackend, **params: Any) -> PattieTransport:
     """A transport with only its microphone, the pipeline at 24 kHz."""
-    return ViaductTransport(
-        ViaductTransportParams(
+    return PattieTransport(
+        PattieTransportParams(
             audio_out_enabled=True,
             audio_out_sample_rate=24_000,
             audio_out_end_silence_secs=0,

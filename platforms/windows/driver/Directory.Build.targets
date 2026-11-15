@@ -1,6 +1,6 @@
-<!-- The SDK NuGet package's targets, for -p:ViaductWdkNuGet=true (see Directory.Build.props). -->
+<!-- The SDK NuGet package's targets, for -p:PattieWdkNuGet=true (see Directory.Build.props). -->
 <Project>
-  <ImportGroup Condition="'$(ViaductWdkNuGet)' == 'true'">
-    <Import Project="$(ViaductNuGetDir)Microsoft.Windows.SDK.CPP.$(ViaductKitVersion)\build\native\Microsoft.Windows.SDK.cpp.targets" />
+  <ImportGroup Condition="'$(PattieWdkNuGet)' == 'true'">
+    <Import Project="$(PattieNuGetDir)Microsoft.Windows.SDK.CPP.$(PattieKitVersion)\build\native\Microsoft.Windows.SDK.cpp.targets" />
   </ImportGroup>
 </Project>

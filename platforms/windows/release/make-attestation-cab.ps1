@@ -6,9 +6,9 @@
 .DESCRIPTION
     1. Builds the Release driver (x64) with DriverVer's version set to -Version.
     2. Checks the stamped INF carries that version.
-    3. Stages viaduct.inf, viaduct.sys and viaduct.pdb in one subfolder (Partner
+    3. Stages pattie.inf, pattie.sys and pattie.pdb in one subfolder (Partner
        Center wants no files at the cab's root, one subfolder per driver package)
-       and packs them with makecab into target\attestation\viaduct-<Version>.cab.
+       and packs them with makecab into target\attestation\pattie-<Version>.cab.
 
     No catalog is made: Microsoft creates and signs it. The cab itself must then
     be signed with the company's EV code-signing certificate before upload; the
@@ -34,8 +34,8 @@ $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
 $driverOut = Join-Path $repo 'target\driver\x64\Release'
 $out = Join-Path $repo 'target\attestation'
-$stage = Join-Path $out 'viaduct'
-$cabName = "viaduct-$Version.cab"
+$stage = Join-Path $out 'pattie'
+$cabName = "pattie-$Version.cab"
 
 # MSBuild from the newest Visual Studio, whichever edition (vswhere ships with the
 # Visual Studio Installer).
@@ -45,14 +45,14 @@ $msbuild = & $vswhere -latest -prerelease -requires Microsoft.Component.MSBuild 
     Select-Object -First 1
 if (-not $msbuild) { throw 'No Visual Studio with MSBuild found' }
 $nugetArgs = @() # an explicit array: splatting a lone string would pass its characters
-if ($WdkNuGet) { $nugetArgs += '-p:ViaductWdkNuGet=true' }
+if ($WdkNuGet) { $nugetArgs += '-p:PattieWdkNuGet=true' }
 
 Write-Host "== Building the Release driver, version $Version"
-& $msbuild (Join-Path $repo 'platforms\windows\driver\viaduct.vcxproj') -t:Rebuild `
-    -p:Configuration=Release -p:Platform=x64 "-p:ViaductDriverVersion=$Version" @nugetArgs -nologo -v:minimal
+& $msbuild (Join-Path $repo 'platforms\windows\driver\pattie.vcxproj') -t:Rebuild `
+    -p:Configuration=Release -p:Platform=x64 "-p:PattieDriverVersion=$Version" @nugetArgs -nologo -v:minimal
 if ($LASTEXITCODE -ne 0) { throw "Driver build failed (exit $LASTEXITCODE)" }
 
-$stamped = Select-String -Path (Join-Path $driverOut 'viaduct.inf') -Pattern '^\s*DriverVer\s*=\s*(.+)$'
+$stamped = Select-String -Path (Join-Path $driverOut 'pattie.inf') -Pattern '^\s*DriverVer\s*=\s*(.+)$'
 if ($null -eq $stamped -or $stamped.Matches[0].Groups[1].Value -notmatch ",\s*$([regex]::Escape($Version))\s*$") {
     throw "The built INF doesn't carry version $Version ($($stamped.Line))"
 }
@@ -61,12 +61,12 @@ Write-Host "Stamped: $($stamped.Line.Trim())"
 Write-Host '== Staging the package'
 if (Test-Path $out) { Remove-Item -Recurse -Force $out }
 New-Item -ItemType Directory -Force $stage | Out-Null
-foreach ($file in 'viaduct.inf', 'viaduct.sys', 'viaduct.pdb') {
+foreach ($file in 'pattie.inf', 'pattie.sys', 'pattie.pdb') {
     Copy-Item (Join-Path $driverOut $file) $stage
 }
 
 Write-Host '== Packing the cab'
-$ddf = Join-Path $out 'viaduct.ddf'
+$ddf = Join-Path $out 'pattie.ddf'
 $lines = @(
     '.OPTION EXPLICIT'
     '.Set CabinetFileCountThreshold=0'
@@ -80,7 +80,7 @@ $lines = @(
     '.Set Compress=on'
     ".Set CabinetNameTemplate=$cabName"
     ".Set DiskDirectoryTemplate=$out"
-    '.Set DestinationDir=viaduct'
+    '.Set DestinationDir=pattie'
 )
 $lines += Get-ChildItem $stage | ForEach-Object { '"' + $_.FullName + '"' }
 Set-Content -Path $ddf -Value $lines -Encoding Ascii

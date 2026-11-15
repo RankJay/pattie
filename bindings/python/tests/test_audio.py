@@ -9,8 +9,8 @@ import time
 
 import pytest
 
-import viaduct
-from viaduct import _testing
+import pattie
+from pattie import _testing
 
 
 def floats(values: list[float]) -> bytes:
@@ -43,7 +43,7 @@ def pull_in_background(
 def test_written_audio_reaches_the_system_unchanged(backend: _testing.TestBackend) -> None:
     samples = [i / 1000 for i in range(480)]
 
-    with viaduct.Microphone("Agent Mic", _backend=backend) as mic:
+    with pattie.Microphone("Agent Mic", _backend=backend) as mic:
         assert mic.write(floats(samples)) == 480
         taken = backend.driver_read(mic.id, 480)
 
@@ -54,14 +54,14 @@ def test_written_audio_reaches_the_system_unchanged(backend: _testing.TestBacken
 def test_write_takes_any_bytes_like_object(backend: _testing.TestBackend) -> None:
     samples = array.array("f", [0.25] * 100)
 
-    with viaduct.Microphone("Agent Mic", _backend=backend) as mic:
+    with pattie.Microphone("Agent Mic", _backend=backend) as mic:
         assert mic.write(samples) == 100  # an array of floats, not bytes
         assert mic.write(memoryview(bytearray(floats([0.5] * 100)))) == 100
 
 
 def test_write_refuses_text(backend: _testing.TestBackend) -> None:
     with (
-        viaduct.Microphone("Agent Mic", _backend=backend) as mic,
+        pattie.Microphone("Agent Mic", _backend=backend) as mic,
         pytest.raises(TypeError, match="bytes-like"),
     ):
         mic.write("hello")  # ty: ignore[invalid-argument-type]
@@ -71,7 +71,7 @@ def test_write_waits_for_the_system_and_drops_nothing(backend: _testing.TestBack
     second = [((i % 100) - 50) / 100 for i in range(48_000)]
     done = threading.Event()
 
-    with viaduct.Microphone("Agent Mic", _backend=backend) as mic:
+    with pattie.Microphone("Agent Mic", _backend=backend) as mic:
         taken = pull_in_background(backend, mic.id, done)
         # A whole second at once: far more than the Ring holds, so this only
         # finishes if write() waits for the system and lets the puller run.
@@ -89,14 +89,14 @@ def test_write_waits_for_the_system_and_drops_nothing(backend: _testing.TestBack
 def test_write_stops_at_its_timeout_with_only_the_lead_written(
     backend: _testing.TestBackend,
 ) -> None:
-    with viaduct.Microphone("Agent Mic", _backend=backend) as mic:
+    with pattie.Microphone("Agent Mic", _backend=backend) as mic:
         written = mic.write(floats([0.1] * 48_000), timeout=0.05)
 
     assert written == backend.lead_frames
 
 
 def test_played_ms_counts_what_the_system_took(backend: _testing.TestBackend) -> None:
-    with viaduct.Microphone("Agent Mic", _backend=backend) as mic:
+    with pattie.Microphone("Agent Mic", _backend=backend) as mic:
         assert mic.played_ms == 0
         mic.write(floats([0.1] * 480))
         backend.driver_read(mic.id, 480)
@@ -107,10 +107,10 @@ def test_played_ms_counts_what_the_system_took(backend: _testing.TestBackend) ->
 
 
 def test_the_format_argument_converts_what_write_takes(backend: _testing.TestBackend) -> None:
-    pcm16 = viaduct.Format(48_000, "pcm16")
+    pcm16 = pattie.Format(48_000, "pcm16")
     half = array.array("h", [16_384] * 480).tobytes()
 
-    with viaduct.Microphone("Agent Mic", format=pcm16, _backend=backend) as mic:
+    with pattie.Microphone("Agent Mic", format=pcm16, _backend=backend) as mic:
         assert mic.format == pcm16
         mic.write(half)
         taken = backend.driver_read(mic.id, 480)
@@ -122,8 +122,8 @@ def test_the_format_argument_converts_what_write_takes(backend: _testing.TestBac
 def test_write_nowait_drops_what_does_not_fit_and_logs_it(
     backend: _testing.TestBackend, caplog: pytest.LogCaptureFixture
 ) -> None:
-    with viaduct.Microphone("Agent Mic", _backend=backend) as mic:
-        with caplog.at_level(logging.WARNING, logger="viaduct"):
+    with pattie.Microphone("Agent Mic", _backend=backend) as mic:
+        with caplog.at_level(logging.WARNING, logger="pattie"):
             written = mic.write_nowait(floats([0.1] * 10_000))
 
         assert written < 10_000
@@ -133,8 +133,8 @@ def test_write_nowait_drops_what_does_not_fit_and_logs_it(
 
 def test_strict_raises_audio_lost_instead_of_logging(backend: _testing.TestBackend) -> None:
     with (
-        viaduct.Microphone("Agent Mic", strict=True, _backend=backend) as mic,
-        pytest.raises(viaduct.AudioLost, match="Overflow"),
+        pattie.Microphone("Agent Mic", strict=True, _backend=backend) as mic,
+        pytest.raises(pattie.AudioLost, match="Overflow"),
     ):
         mic.write_nowait(floats([0.1] * 10_000))
 
@@ -142,7 +142,7 @@ def test_strict_raises_audio_lost_instead_of_logging(backend: _testing.TestBacke
 def test_the_speaker_reads_what_the_system_played(backend: _testing.TestBackend) -> None:
     samples = [i / 1000 for i in range(480)]
 
-    with viaduct.Speaker("Agent Speaker", _backend=backend) as speaker:
+    with pattie.Speaker("Agent Speaker", _backend=backend) as speaker:
         assert speaker.read() == b""  # nothing played yet
         assert backend.driver_write(speaker.id, floats(samples))
         heard = speaker.read()
@@ -151,7 +151,7 @@ def test_the_speaker_reads_what_the_system_played(backend: _testing.TestBackend)
 
 
 def test_speaker_read_waits_for_audio_up_to_its_timeout(backend: _testing.TestBackend) -> None:
-    with viaduct.Speaker("Agent Speaker", _backend=backend) as speaker:
+    with pattie.Speaker("Agent Speaker", _backend=backend) as speaker:
         timer = threading.Timer(0.05, backend.driver_write, (speaker.id, floats([0.5] * 480)))
         timer.start()
         heard = speaker.read(timeout=5)
@@ -161,9 +161,9 @@ def test_speaker_read_waits_for_audio_up_to_its_timeout(backend: _testing.TestBa
 
 
 def test_the_speakers_format_converts_what_read_returns(backend: _testing.TestBackend) -> None:
-    pcm16 = viaduct.Format(48_000, "pcm16")
+    pcm16 = pattie.Format(48_000, "pcm16")
 
-    with viaduct.Speaker("Agent Speaker", format=pcm16, _backend=backend) as speaker:
+    with pattie.Speaker("Agent Speaker", format=pcm16, _backend=backend) as speaker:
         backend.driver_write(speaker.id, floats([0.5] * 480))
         heard = array.array("h", speaker.read()).tolist()
 
@@ -171,7 +171,7 @@ def test_the_speakers_format_converts_what_read_returns(backend: _testing.TestBa
 
 
 def test_iterating_a_speaker_yields_what_was_played(backend: _testing.TestBackend) -> None:
-    with viaduct.Speaker("Agent Speaker", _backend=backend) as speaker:
+    with pattie.Speaker("Agent Speaker", _backend=backend) as speaker:
         backend.driver_write(speaker.id, floats([0.25] * 480))
         first = next(iter(speaker))
 
@@ -181,7 +181,7 @@ def test_iterating_a_speaker_yields_what_was_played(backend: _testing.TestBacken
 def test_a_playout_plays_what_was_pushed_and_interrupt_cuts_it(
     backend: _testing.TestBackend,
 ) -> None:
-    with viaduct.Microphone("Agent Mic", _backend=backend) as mic, mic.playout() as playout:
+    with pattie.Microphone("Agent Mic", _backend=backend) as mic, mic.playout() as playout:
         assert playout.push(floats([0.5] * 48_000)) == 48_000  # returns at once
 
         deadline = time.monotonic() + 5
@@ -200,9 +200,9 @@ def test_a_playout_plays_what_was_pushed_and_interrupt_cuts_it(
 
 
 def test_a_microphone_has_one_writer(backend: _testing.TestBackend) -> None:
-    with viaduct.Microphone("Agent Mic", _backend=backend) as mic:
+    with pattie.Microphone("Agent Mic", _backend=backend) as mic:
         mic.write(floats([0.1] * 10))
-        with pytest.raises(viaduct.AlreadyTaken, match="one writer"):
+        with pytest.raises(pattie.AlreadyTaken, match="one writer"):
             mic.playout()
 
 
@@ -210,7 +210,7 @@ def test_wait_idle_is_true_once_everything_pushed_was_heard(
     backend: _testing.TestBackend,
 ) -> None:
     done = threading.Event()
-    with viaduct.Microphone("Agent Mic", _backend=backend) as mic, mic.playout() as playout:
+    with pattie.Microphone("Agent Mic", _backend=backend) as mic, mic.playout() as playout:
         pull_in_background(backend, mic.id, done)
         playout.push(floats([0.5] * 4_800))
         assert playout.wait_idle(timeout=10)
@@ -221,7 +221,7 @@ def test_wait_idle_is_true_once_everything_pushed_was_heard(
 def test_closing_from_another_thread_during_a_write_does_not_hang(
     backend: _testing.TestBackend,
 ) -> None:
-    mic = viaduct.Microphone("Agent Mic", _backend=backend)
+    mic = pattie.Microphone("Agent Mic", _backend=backend)
     # Nobody pulls, so this write waits until its timeout.
     writer = threading.Thread(target=mic.write, args=(floats([0.1] * 48_000), 0.3))
     writer.start()
@@ -235,7 +235,7 @@ def test_closing_from_another_thread_during_a_write_does_not_hang(
 
 
 def test_stats_can_be_read_while_a_write_waits(backend: _testing.TestBackend) -> None:
-    with viaduct.Microphone("Agent Mic", _backend=backend) as mic:
+    with pattie.Microphone("Agent Mic", _backend=backend) as mic:
         # Nobody pulls, so this write waits until its timeout (2 s).
         writer = threading.Thread(target=mic.write, args=(floats([0.1] * 48_000), 2.0))
         writer.start()
@@ -254,7 +254,7 @@ def test_stats_can_be_read_while_a_write_waits(backend: _testing.TestBackend) ->
 def test_closing_a_microphone_removes_it_even_with_a_playout_open(
     backend: _testing.TestBackend,
 ) -> None:
-    mic = viaduct.Microphone("Agent Mic", _backend=backend)
+    mic = pattie.Microphone("Agent Mic", _backend=backend)
     playout = mic.playout()
     playout.push(floats([0.5] * 480))
 
@@ -271,7 +271,7 @@ def test_a_write_cut_mid_sample_carries_the_rest_to_the_next(
     samples = [i / 100 for i in range(10)]
     data = floats(samples)
 
-    with viaduct.Microphone("Agent Mic", _backend=backend) as mic:
+    with pattie.Microphone("Agent Mic", _backend=backend) as mic:
         # 5 bytes is one sample and a quarter: the quarter waits for the rest.
         first = mic.write_nowait(data[:5])
         second = mic.write_nowait(data[5:])
@@ -283,8 +283,8 @@ def test_a_write_cut_mid_sample_carries_the_rest_to_the_next(
 
 
 def test_a_speaker_in_another_format_still_converts(backend: _testing.TestBackend) -> None:
-    with viaduct.Speaker(
-        "Agent Speaker", format=viaduct.Format(48_000, "pcm16"), _backend=backend
+    with pattie.Speaker(
+        "Agent Speaker", format=pattie.Format(48_000, "pcm16"), _backend=backend
     ) as speaker:
         backend.driver_write(speaker.id, floats([0.5] * 480))
         data = speaker.read()

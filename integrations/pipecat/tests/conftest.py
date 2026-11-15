@@ -1,4 +1,4 @@
-"""Shared setup: Viaduct's test backend plays the system's side of each Device
+"""Shared setup: Pattie's test backend plays the system's side of each Device
 (Windows' audio engine, or PipeWire), so the transport runs without a driver."""
 
 import array
@@ -6,7 +6,7 @@ import threading
 import time
 
 import pytest
-from viaduct import _testing
+from pattie import _testing
 
 
 @pytest.fixture

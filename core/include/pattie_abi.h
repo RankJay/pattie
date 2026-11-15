@@ -1,0 +1,219 @@
+/*
+ * Pattie ABI: the contract between the Windows driver and the SDK.
+ *
+ * Included by the C driver and, through bindgen, by the Rust SDK. Within a major
+ * version this header only grows: never change or remove what a minor version
+ * shipped (ADR 0003). Spare bytes keep the slots ADR 0017 reserves for later
+ * minors. No Windows or WDK headers may be included here.
+ */
+#ifndef PATTIE_ABI_H
+#define PATTIE_ABI_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+#define PATTIE_ABI_MAJOR 1u
+#define PATTIE_ABI_MINOR 0u
+
+/* Result of every command. */
+typedef uint32_t pattie_status;
+#define PATTIE_OK 0u
+#define PATTIE_ERR_HELLO_REQUIRED 1u    /* Hello must be the Owner's first command */
+#define PATTIE_ERR_BUFFER_TOO_SMALL 2u  /* reply buffer can't hold the reply */
+#define PATTIE_ERR_BAD_RING 3u          /* Ring memory or header is invalid */
+#define PATTIE_ERR_BAD_REQUEST 4u       /* unknown command, or input of the wrong size */
+#define PATTIE_ERR_VERSION 5u           /* SDK's ABI major version not served (ADR 0003) */
+#define PATTIE_ERR_BAD_KIND 6u          /* not a known Device kind */
+#define PATTIE_ERR_BAD_NAME 7u          /* empty, too long, or has control characters */
+#define PATTIE_ERR_DUPLICATE_NAME 8u    /* a live Device of this kind has that name */
+#define PATTIE_ERR_TOO_MANY_DEVICES 9u  /* PATTIE_MAX_DEVICES are already live */
+#define PATTIE_ERR_NO_SUCH_DEVICE 10u   /* no live Device with that ID for this Owner */
+#define PATTIE_ERR_SYSTEM 11u           /* Windows refused to create the Device's endpoint */
+
+/* Most Devices alive at once, across all Owners (ADR 0005): this version's limit,
+ * which a later minor may raise (ADR 0017). */
+#define PATTIE_MAX_DEVICES 8u
+
+/* Commands an Owner can send. */
+#define PATTIE_CMD_HELLO 1u
+#define PATTIE_CMD_CREATE_DEVICE 2u
+#define PATTIE_CMD_REMOVE_DEVICE 3u
+
+/*
+ * How an Owner reaches the driver (ADR 0010): open this path, one handle per
+ * Owner, then send each command as a buffered IOCTL.
+ */
+#define PATTIE_DEVICE_PATH "\\\\.\\Pattie"
+
+/*
+ * IOCTL code for a command: CTL_CODE(FILE_DEVICE_UNKNOWN, 0x800 + command,
+ * METHOD_BUFFERED, FILE_READ_ACCESS | FILE_WRITE_ACCESS), spelled out so this
+ * header needs no Windows headers.
+ */
+#define PATTIE_IOCTL(command) ((0x22u << 16) | (3u << 14) | ((0x800u + (command)) << 2) | 0u)
+
+/*
+ * Every reply starts with this envelope, followed by the command's own reply
+ * (if any). The IOCTL itself succeeds whenever the command ran; the outcome is
+ * `status`. The output buffer must hold at least the envelope.
+ */
+typedef struct pattie_reply_envelope {
+    pattie_status status;
+} pattie_reply_envelope;
+
+/*
+ * Hello negotiates the version (ADR 0003): the driver accepts any SDK of its own
+ * major, whatever its minor, and replies with its own version. The connection
+ * then speaks the lower of the two minors: the driver sizes and reads every later
+ * request and reply by it, and the SDK uses only what that minor offers.
+ */
+typedef struct pattie_hello_request {
+    uint16_t major;
+    uint16_t minor;
+} pattie_hello_request;
+
+typedef struct pattie_hello_reply {
+    uint16_t major;
+    uint16_t minor;
+} pattie_hello_reply;
+
+/* Device kinds. */
+#define PATTIE_KIND_MICROPHONE 1u
+#define PATTIE_KIND_SPEAKER 2u
+
+/* Longest Device name, in UTF-16 code units. */
+#define PATTIE_DEVICE_NAME_MAX 63u
+
+typedef struct pattie_create_device_request {
+    uint32_t kind;
+    uint32_t name_len;                  /* UTF-16 code units used in name */
+    uint16_t name[PATTIE_DEVICE_NAME_MAX];
+    uint16_t reserved;                  /* must be zero */
+    uint64_t ring_address;              /* the app's Ring memory (ADR 0006) */
+    uint64_t ring_bytes;                /* its size; the driver pins exactly this */
+    /*
+     * The Device's doorbell (ADR 0021): an OS wait object of the app's that the
+     * system's side sets after each pass over the Ring. Windows: an event handle
+     * (the shell references it, with modify access, in the caller's context);
+     * Linux: an eventfd. Opaque to the core.
+     */
+    uint64_t wake_event;
+} pattie_create_device_request;
+
+/* Device IDs start at 1; 0 never names a Device. */
+typedef struct pattie_create_device_reply {
+    uint32_t device_id;
+} pattie_create_device_reply;
+
+typedef struct pattie_remove_device_request {
+    uint32_t device_id;
+} pattie_remove_device_request;
+
+/*
+ * Ring layout (ADR 0007). Lives in app-allocated memory the driver pins
+ * (ADR 0006). Counters only grow and never wrap; each side stores only to its
+ * own cache line. Audio frames (`channels` interleaved 32-bit floats, ADR 0023)
+ * follow the header immediately; frame n lives at index n % capacity_frames.
+ */
+/* Ring capacity: a power of two within these bounds (about 5 ms to 1.4 s at 48 kHz);
+ * this version's limits, which a later minor may widen (ADR 0017). */
+#define PATTIE_RING_MIN_FRAMES 256u
+#define PATTIE_RING_MAX_FRAMES 65536u
+
+/* Channels a frame may hold (interleaved, one 32-bit float each): mono to 7.1.
+ * This version's limit, which a later minor may raise (ADR 0017): `channels` is
+ * a u16, and a channel layout fits in `config_pad`. */
+#define PATTIE_RING_MAX_CHANNELS 8u
+
+/* Largest Ring the driver will pin: the header plus PATTIE_RING_MAX_FRAMES frames of
+ * PATTIE_RING_MAX_CHANNELS. */
+#define PATTIE_RING_MAX_BYTES (192u + PATTIE_RING_MAX_FRAMES * PATTIE_RING_MAX_CHANNELS * 4u)
+
+/* The sample rates a Ring may run at. 0 in the header means 48 kHz. */
+#define PATTIE_RATE_44100 44100u
+#define PATTIE_RATE_48000 48000u
+#define PATTIE_RATE_96000 96000u
+
+/*
+ * A side's clock (ADR 0022): after each pass the system's side (the driver,
+ * PipeWire's callback) publishes "my counter was `frames` at `ns`", `ns` being
+ * nanoseconds of the OS clock apps measure time with (Windows: the performance
+ * counter; Linux: CLOCK_MONOTONIC). A seqlock: `seq` is odd while the pair is
+ * being written; a reader retries if it saw an odd or changed `seq`. The app's
+ * side never publishes one and leaves its own all zero.
+ */
+typedef struct pattie_ring_clock {
+    uint64_t seq;
+    uint64_t frames;
+    uint64_t ns;
+} pattie_ring_clock;
+
+typedef struct pattie_ring_header {
+    /* Writer's line: only the writing side stores here. */
+    uint64_t write_frames;
+    uint64_t overflow_frames;
+    pattie_ring_clock writer_clock; /* a Speaker's: the driver writes */
+    uint8_t writer_pad[24];   /* reserved; zero */
+    /* Reader's line: only the reading side stores here. */
+    uint64_t read_frames;
+    uint64_t gap_frames;
+    pattie_ring_clock reader_clock; /* a Microphone's: the driver reads */
+    uint8_t reader_pad[24];   /* reserved; zero */
+    /* Fixed by the SDK before Create Device. */
+    uint32_t capacity_frames;
+    uint32_t sample_rate;     /* PATTIE_RATE_*; 0 means 48 kHz */
+    uint16_t channels;        /* 1 to PATTIE_RING_MAX_CHANNELS; 0 means mono */
+    uint8_t config_pad[54];   /* reserved; zero */
+} pattie_ring_header;
+
+/*
+ * ABI 1.0 is frozen (ADR 0017, amendment 2026-11-14): every size and offset
+ * below is part of it, for 32- and 64-bit callers alike. Any compiler that
+ * includes this header refuses to build if one changes. A later minor only adds
+ * (ADR 0003): new commands, kinds and statuses, the spare bytes, or new request
+ * shapes for its own connections.
+ */
+#define PATTIE_ABI_SIZE(type, bytes) _Static_assert(sizeof(type) == (bytes), #type " is frozen")
+#define PATTIE_ABI_AT(type, field, at) \
+    _Static_assert(offsetof(type, field) == (at), #type "." #field " is frozen")
+
+PATTIE_ABI_SIZE(pattie_reply_envelope, 4);
+PATTIE_ABI_SIZE(pattie_hello_request, 4);
+PATTIE_ABI_AT(pattie_hello_request, minor, 2);
+PATTIE_ABI_SIZE(pattie_hello_reply, 4);
+PATTIE_ABI_AT(pattie_hello_reply, minor, 2);
+
+PATTIE_ABI_SIZE(pattie_create_device_request, 160);
+PATTIE_ABI_AT(pattie_create_device_request, kind, 0);
+PATTIE_ABI_AT(pattie_create_device_request, name_len, 4);
+PATTIE_ABI_AT(pattie_create_device_request, name, 8);
+PATTIE_ABI_AT(pattie_create_device_request, reserved, 134);
+PATTIE_ABI_AT(pattie_create_device_request, ring_address, 136);
+PATTIE_ABI_AT(pattie_create_device_request, ring_bytes, 144);
+PATTIE_ABI_AT(pattie_create_device_request, wake_event, 152);
+PATTIE_ABI_SIZE(pattie_create_device_reply, 4);
+PATTIE_ABI_SIZE(pattie_remove_device_request, 4);
+
+PATTIE_ABI_SIZE(pattie_ring_clock, 24);
+PATTIE_ABI_AT(pattie_ring_clock, frames, 8);
+PATTIE_ABI_AT(pattie_ring_clock, ns, 16);
+
+/* Three 64-byte lines: the writer's, the reader's, the settings. */
+PATTIE_ABI_SIZE(pattie_ring_header, 192);
+PATTIE_ABI_AT(pattie_ring_header, write_frames, 0);
+PATTIE_ABI_AT(pattie_ring_header, overflow_frames, 8);
+PATTIE_ABI_AT(pattie_ring_header, writer_clock, 16);
+PATTIE_ABI_AT(pattie_ring_header, writer_pad, 40);
+PATTIE_ABI_AT(pattie_ring_header, read_frames, 64);
+PATTIE_ABI_AT(pattie_ring_header, gap_frames, 72);
+PATTIE_ABI_AT(pattie_ring_header, reader_clock, 80);
+PATTIE_ABI_AT(pattie_ring_header, reader_pad, 104);
+PATTIE_ABI_AT(pattie_ring_header, capacity_frames, 128);
+PATTIE_ABI_AT(pattie_ring_header, sample_rate, 132);
+PATTIE_ABI_AT(pattie_ring_header, channels, 136);
+PATTIE_ABI_AT(pattie_ring_header, config_pad, 138);
+
+#undef PATTIE_ABI_SIZE
+#undef PATTIE_ABI_AT
+
+#endif /* PATTIE_ABI_H */

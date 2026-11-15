@@ -1,19 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   Every identity string of the installer, in one place (ADR 0024, Versions and
-  identity). The product isn't named yet (status/post-v0.md, the crate rename):
-  these are visible placeholders, renamed here and only here.
+  identity). The publisher isn't chosen yet: it and the winget ID
+  (Publisher.Product) are visible placeholders, and make-msi.ps1 refuses a
+  release build while any placeholder is left.
 
-  ReleaseUpgradeCode is empty on purpose. An MSI's UpgradeCode must never change
-  once shipped, so it is created only when the name is final; until then
-  make-msi.ps1 refuses a release build. TestUpgradeCode marks the test-flavoured
-  MSI (VM-STEPS R3), never shipped; a release must not reuse it.
+  An MSI's UpgradeCode must never change once shipped: never edit
+  ReleaseUpgradeCode. TestUpgradeCode marks the test-flavoured MSI (VM-STEPS
+  R3), never shipped; a release must not reuse it.
 -->
 <Include>
-  <?define ProductName = "Viaduct (placeholder name)" ?>
-  <?define Manufacturer = "Viaduct (placeholder publisher)" ?>
-  <?define InstallFolder = "Viaduct" ?>
-  <?define WingetId = "Placeholder.Viaduct" ?>
-  <?define ReleaseUpgradeCode = "" ?>
+  <?define ProductName = "Pattie" ?>
+  <?define Manufacturer = "Pattie (placeholder publisher)" ?>
+  <?define InstallFolder = "Pattie" ?>
+  <?define WingetId = "Placeholder.Pattie" ?>
+  <?define ReleaseUpgradeCode = "6B433289-F573-4856-B179-86FC20493147" ?>
   <?define TestUpgradeCode = "6D0C6E1A-7B53-4C0E-9A55-7E57C0DE0001" ?>
 </Include>

@@ -1,0 +1,5 @@
+# actionlint's built-in list predates this GitHub-hosted label: Windows Server
+# 2025 with Visual Studio 2026 (github.com/actions/runner-images, Available Images).
+self-hosted-runner:
+  labels:
+    - windows-2025-vs2026

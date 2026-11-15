@@ -10,21 +10,21 @@
  */
 #include "shell.h"
 
-static EVT_WDF_DEVICE_FILE_CREATE VdEvtFileCreate;
-static EVT_WDF_FILE_CLEANUP VdEvtFileCleanup;
-static EVT_WDF_IO_IN_CALLER_CONTEXT VdEvtIoInCallerContext;
-static EVT_WDF_IO_QUEUE_IO_DEVICE_CONTROL VdEvtIoDeviceControl;
-static EVT_WDF_OBJECT_CONTEXT_CLEANUP VdEvtRequestCleanup;
+static EVT_WDF_DEVICE_FILE_CREATE PattieEvtFileCreate;
+static EVT_WDF_FILE_CLEANUP PattieEvtFileCleanup;
+static EVT_WDF_IO_IN_CALLER_CONTEXT PattieEvtIoInCallerContext;
+static EVT_WDF_IO_QUEUE_IO_DEVICE_CONTROL PattieEvtIoDeviceControl;
+static EVT_WDF_OBJECT_CONTEXT_CLEANUP PattieEvtRequestCleanup;
 
 /* SYSTEM and Administrators: full access. Interactive users: read/write. Nothing else. */
-DECLARE_CONST_UNICODE_STRING(VdControlSddl, L"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;IU)");
-DECLARE_CONST_UNICODE_STRING(VdControlName, L"\\Device\\Viaduct");
-DECLARE_CONST_UNICODE_STRING(VdControlLink, L"\\DosDevices\\Viaduct");
+DECLARE_CONST_UNICODE_STRING(PattieControlSddl, L"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;IU)");
+DECLARE_CONST_UNICODE_STRING(PattieControlName, L"\\Device\\Pattie");
+DECLARE_CONST_UNICODE_STRING(PattieControlLink, L"\\DosDevices\\Pattie");
 
 _Use_decl_annotations_
-NTSTATUS VdControlDeviceCreate(WDFDRIVER Driver)
+NTSTATUS PattieControlDeviceCreate(WDFDRIVER Driver)
 {
-    VD_DRIVER_CONTEXT *ctx = VdDriverContext(Driver);
+    PATTIE_DRIVER_CONTEXT *ctx = PattieDriverContext(Driver);
     PWDFDEVICE_INIT init;
     WDF_FILEOBJECT_CONFIG fileConfig;
     WDF_OBJECT_ATTRIBUTES fileAttributes;
@@ -34,26 +34,26 @@ NTSTATUS VdControlDeviceCreate(WDFDRIVER Driver)
     WDFDEVICE control;
     NTSTATUS status;
 
-    init = WdfControlDeviceInitAllocate(Driver, &VdControlSddl);
+    init = WdfControlDeviceInitAllocate(Driver, &PattieControlSddl);
     if (init == NULL) {
         return STATUS_INSUFFICIENT_RESOURCES;
     }
     WdfDeviceInitSetExclusive(init, FALSE);
     WdfDeviceInitSetIoType(init, WdfDeviceIoBuffered);
-    status = WdfDeviceInitAssignName(init, &VdControlName);
+    status = WdfDeviceInitAssignName(init, &PattieControlName);
     if (!NT_SUCCESS(status)) {
         WdfDeviceInitFree(init);
         return status;
     }
 
-    WDF_FILEOBJECT_CONFIG_INIT(&fileConfig, VdEvtFileCreate, WDF_NO_EVENT_CALLBACK, VdEvtFileCleanup);
-    WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&fileAttributes, VD_FILE_CONTEXT);
+    WDF_FILEOBJECT_CONFIG_INIT(&fileConfig, PattieEvtFileCreate, WDF_NO_EVENT_CALLBACK, PattieEvtFileCleanup);
+    WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&fileAttributes, PATTIE_FILE_CONTEXT);
     WdfDeviceInitSetFileObjectConfig(init, &fileConfig, &fileAttributes);
 
-    WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&requestAttributes, VD_REQUEST_CONTEXT);
-    requestAttributes.EvtCleanupCallback = VdEvtRequestCleanup;
+    WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&requestAttributes, PATTIE_REQUEST_CONTEXT);
+    requestAttributes.EvtCleanupCallback = PattieEvtRequestCleanup;
     WdfDeviceInitSetRequestAttributes(init, &requestAttributes);
-    WdfDeviceInitSetIoInCallerContextCallback(init, VdEvtIoInCallerContext);
+    WdfDeviceInitSetIoInCallerContextCallback(init, PattieEvtIoInCallerContext);
 
     WDF_OBJECT_ATTRIBUTES_INIT(&deviceAttributes);
     deviceAttributes.ExecutionLevel = WdfExecutionLevelPassive; /* waitlock, MDL work */
@@ -63,7 +63,7 @@ NTSTATUS VdControlDeviceCreate(WDFDRIVER Driver)
         return status;
     }
 
-    status = WdfDeviceCreateSymbolicLink(control, &VdControlLink);
+    status = WdfDeviceCreateSymbolicLink(control, &PattieControlLink);
     if (!NT_SUCCESS(status)) {
         WdfObjectDelete(control);
         return status;
@@ -71,7 +71,7 @@ NTSTATUS VdControlDeviceCreate(WDFDRIVER Driver)
 
     /* Sequential: one command at a time reaches the core (ADR 0002). */
     WDF_IO_QUEUE_CONFIG_INIT_DEFAULT_QUEUE(&queueConfig, WdfIoQueueDispatchSequential);
-    queueConfig.EvtIoDeviceControl = VdEvtIoDeviceControl;
+    queueConfig.EvtIoDeviceControl = PattieEvtIoDeviceControl;
     status = WdfIoQueueCreate(control, &queueConfig, WDF_NO_OBJECT_ATTRIBUTES, WDF_NO_HANDLE);
     if (!NT_SUCCESS(status)) {
         WdfObjectDelete(control);
@@ -84,19 +84,19 @@ NTSTATUS VdControlDeviceCreate(WDFDRIVER Driver)
 }
 
 _Use_decl_annotations_
-VOID VdUnpinRing(PMDL Mdl)
+VOID PattieUnpinRing(PMDL Mdl)
 {
     MmUnlockPages(Mdl);
     IoFreeMdl(Mdl);
 }
 
 /*
- * One open is one Owner. Only the device itself may be opened: `\\.\Viaduct`,
- * never `\\.\Viaduct\anything`. KMDF sets FILE_DEVICE_SECURE_OPEN, so the ACL
+ * One open is one Owner. Only the device itself may be opened: `\\.\Pattie`,
+ * never `\\.\Pattie\anything`. KMDF sets FILE_DEVICE_SECURE_OPEN, so the ACL
  * applies to such opens anyway; refusing them keeps that from resting on a
  * framework default (security review 2026-11-14, finding 5).
  */
-static VOID VdEvtFileCreate(WDFDEVICE Device, WDFREQUEST Request, WDFFILEOBJECT FileObject)
+static VOID PattieEvtFileCreate(WDFDEVICE Device, WDFREQUEST Request, WDFFILEOBJECT FileObject)
 {
     PUNICODE_STRING name = WdfFileObjectGetFileName(FileObject);
 
@@ -105,27 +105,27 @@ static VOID VdEvtFileCreate(WDFDEVICE Device, WDFREQUEST Request, WDFFILEOBJECT 
         WdfRequestComplete(Request, STATUS_OBJECT_NAME_NOT_FOUND);
         return;
     }
-    vd_owner_init(&VdFileContext(FileObject)->Owner);
-    InterlockedIncrement(&VdDriverContext(WdfGetDriver())->OpenOwners); /* until cleanup */
+    pattie_owner_init(&PattieFileContext(FileObject)->Owner);
+    InterlockedIncrement(&PattieDriverContext(WdfGetDriver())->OpenOwners); /* until cleanup */
     WdfRequestComplete(Request, STATUS_SUCCESS);
 }
 
 /* The Owner's last handle closed, crash included: remove all its Devices (ADR 0005). */
-static VOID VdEvtFileCleanup(WDFFILEOBJECT FileObject)
+static VOID PattieEvtFileCleanup(WDFFILEOBJECT FileObject)
 {
-    VD_DRIVER_CONTEXT *ctx = VdDriverContext(WdfGetDriver());
+    PATTIE_DRIVER_CONTEXT *ctx = PattieDriverContext(WdfGetDriver());
 
     WdfWaitLockAcquire(ctx->Lock, NULL);
-    VdOwnerDevicesRemove(ctx, &VdFileContext(FileObject)->Owner);
+    PattieOwnerDevicesRemove(ctx, &PattieFileContext(FileObject)->Owner);
     WdfWaitLockRelease(ctx->Lock);
-    InterlockedDecrement(&ctx->OpenOwners); /* counted in VdEvtFileCreate */
+    InterlockedDecrement(&ctx->OpenOwners); /* counted in PattieEvtFileCreate */
 }
 
 /* Pins the Ring of a Create Device request; anything that can't be pinned reaches
  * the core as "no Ring", which the core rejects (ADR 0009). */
-static PMDL VdTryPinRing(WDFREQUEST Request)
+static PMDL PattieTryPinRing(WDFREQUEST Request)
 {
-    vd_create_device_request *request;
+    pattie_create_device_request *request;
     size_t length;
     PMDL mdl;
 
@@ -133,7 +133,7 @@ static PMDL VdTryPinRing(WDFREQUEST Request)
         return NULL;
     }
     if (request->ring_address == 0 || request->ring_bytes == 0 ||
-        request->ring_bytes > VD_RING_MAX_BYTES) {
+        request->ring_bytes > PATTIE_RING_MAX_BYTES) {
         return NULL;
     }
     mdl = IoAllocateMdl((PVOID)(ULONG_PTR)request->ring_address, (ULONG)request->ring_bytes,
@@ -156,9 +156,9 @@ static PMDL VdTryPinRing(WDFREQUEST Request)
  * checked against the caller's own handle table. NULL if it isn't one; Create
  * Device then fails with "bad request".
  */
-static PKEVENT VdTryReferenceWake(WDFREQUEST Request)
+static PKEVENT PattieTryReferenceWake(WDFREQUEST Request)
 {
-    vd_create_device_request *request;
+    pattie_create_device_request *request;
     size_t length;
     PKEVENT event;
 
@@ -175,25 +175,25 @@ static PKEVENT VdTryReferenceWake(WDFREQUEST Request)
     return event;
 }
 
-static VOID VdEvtIoInCallerContext(WDFDEVICE Device, WDFREQUEST Request)
+static VOID PattieEvtIoInCallerContext(WDFDEVICE Device, WDFREQUEST Request)
 {
-    VD_DRIVER_CONTEXT *ctx = VdDriverContext(WdfGetDriver());
+    PATTIE_DRIVER_CONTEXT *ctx = PattieDriverContext(WdfGetDriver());
     WDF_REQUEST_PARAMETERS params;
     NTSTATUS status;
 
     WDF_REQUEST_PARAMETERS_INIT(&params);
     WdfRequestGetParameters(Request, &params);
     if (params.Type == WdfRequestTypeDeviceControl &&
-        params.Parameters.DeviceIoControl.IoControlCode == VD_IOCTL(VD_CMD_CREATE_DEVICE)) {
+        params.Parameters.DeviceIoControl.IoControlCode == PATTIE_IOCTL(PATTIE_CMD_CREATE_DEVICE)) {
         /* Bounded: no app may hold more than a few pinned Rings in flight. */
-        if ((ULONG)InterlockedIncrement(&ctx->PinnedRequests) > VD_MAX_PINNED_REQUESTS) {
+        if ((ULONG)InterlockedIncrement(&ctx->PinnedRequests) > PATTIE_MAX_PINNED_REQUESTS) {
             InterlockedDecrement(&ctx->PinnedRequests);
             WdfRequestComplete(Request, STATUS_DEVICE_BUSY);
             return;
         }
-        VdRequestContext(Request)->CountedPinned = TRUE; /* released in request cleanup */
-        VdRequestContext(Request)->Mdl = VdTryPinRing(Request);
-        VdRequestContext(Request)->WakeEvent = VdTryReferenceWake(Request);
+        PattieRequestContext(Request)->CountedPinned = TRUE; /* released in request cleanup */
+        PattieRequestContext(Request)->Mdl = PattieTryPinRing(Request);
+        PattieRequestContext(Request)->WakeEvent = PattieTryReferenceWake(Request);
     }
 
     status = WdfDeviceEnqueueRequest(Device, Request);
@@ -202,12 +202,12 @@ static VOID VdEvtIoInCallerContext(WDFDEVICE Device, WDFREQUEST Request)
     }
 }
 
-static VOID VdEvtRequestCleanup(WDFOBJECT Object)
+static VOID PattieEvtRequestCleanup(WDFOBJECT Object)
 {
-    VD_REQUEST_CONTEXT *requestCtx = VdRequestContext((WDFREQUEST)Object);
+    PATTIE_REQUEST_CONTEXT *requestCtx = PattieRequestContext((WDFREQUEST)Object);
 
     if (requestCtx->Mdl != NULL) {
-        VdUnpinRing(requestCtx->Mdl);
+        PattieUnpinRing(requestCtx->Mdl);
         requestCtx->Mdl = NULL;
     }
     if (requestCtx->WakeEvent != NULL) {
@@ -215,19 +215,19 @@ static VOID VdEvtRequestCleanup(WDFOBJECT Object)
         requestCtx->WakeEvent = NULL;
     }
     if (requestCtx->CountedPinned) {
-        InterlockedDecrement(&VdDriverContext(WdfGetDriver())->PinnedRequests);
+        InterlockedDecrement(&PattieDriverContext(WdfGetDriver())->PinnedRequests);
         requestCtx->CountedPinned = FALSE;
     }
 }
 
-static BOOLEAN VdCommandFromIoctl(ULONG IoControlCode, uint32_t *Command)
+static BOOLEAN PattieCommandFromIoctl(ULONG IoControlCode, uint32_t *Command)
 {
     static const uint32_t commands[] = {
-        VD_CMD_HELLO, VD_CMD_CREATE_DEVICE, VD_CMD_REMOVE_DEVICE,
+        PATTIE_CMD_HELLO, PATTIE_CMD_CREATE_DEVICE, PATTIE_CMD_REMOVE_DEVICE,
     };
 
     for (ULONG i = 0; i < ARRAYSIZE(commands); i++) {
-        if (IoControlCode == VD_IOCTL(commands[i])) {
+        if (IoControlCode == PATTIE_IOCTL(commands[i])) {
             *Command = commands[i];
             return TRUE;
         }
@@ -235,14 +235,14 @@ static BOOLEAN VdCommandFromIoctl(ULONG IoControlCode, uint32_t *Command)
     return FALSE;
 }
 
-static VOID VdEvtIoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request, size_t OutputBufferLength,
+static VOID PattieEvtIoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request, size_t OutputBufferLength,
                                  size_t InputBufferLength, ULONG IoControlCode)
 {
-    VD_DRIVER_CONTEXT *ctx = VdDriverContext(WdfGetDriver());
-    vd_owner *owner = &VdFileContext(WdfRequestGetFileObject(Request))->Owner;
-    VD_REQUEST_CONTEXT *requestCtx = VdRequestContext(Request);
-    UCHAR input[sizeof(vd_create_device_request)]; /* the largest request */
-    vd_reply_envelope envelope;
+    PATTIE_DRIVER_CONTEXT *ctx = PattieDriverContext(WdfGetDriver());
+    pattie_owner *owner = &PattieFileContext(WdfRequestGetFileObject(Request))->Owner;
+    PATTIE_REQUEST_CONTEXT *requestCtx = PattieRequestContext(Request);
+    UCHAR input[sizeof(pattie_create_device_request)]; /* the largest request */
+    pattie_reply_envelope envelope;
     UCHAR *output;
     PVOID buffer;
     size_t length;
@@ -252,7 +252,7 @@ static VOID VdEvtIoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request, size_t Outp
     UNREFERENCED_PARAMETER(Queue);
     UNREFERENCED_PARAMETER(OutputBufferLength);
 
-    if (!VdCommandFromIoctl(IoControlCode, &command)) {
+    if (!PattieCommandFromIoctl(IoControlCode, &command)) {
         WdfRequestComplete(Request, STATUS_INVALID_DEVICE_REQUEST);
         return;
     }
@@ -282,15 +282,15 @@ static VOID VdEvtIoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request, size_t Outp
         WdfRequestComplete(Request, STATUS_DEVICE_REMOVED);
         return;
     }
-    if (command == VD_CMD_CREATE_DEVICE) {
-        envelope.status = VdDeviceCreate(ctx, owner, input, InputBufferLength, &requestCtx->Mdl,
+    if (command == PATTIE_CMD_CREATE_DEVICE) {
+        envelope.status = PattieDeviceCreate(ctx, owner, input, InputBufferLength, &requestCtx->Mdl,
                                          &requestCtx->WakeEvent, output + sizeof envelope,
                                          length - sizeof envelope, &replyLength);
-    } else if (command == VD_CMD_REMOVE_DEVICE) {
-        envelope.status = VdDeviceRemove(ctx, owner, input, InputBufferLength, output + sizeof envelope,
+    } else if (command == PATTIE_CMD_REMOVE_DEVICE) {
+        envelope.status = PattieDeviceRemove(ctx, owner, input, InputBufferLength, output + sizeof envelope,
                                          length - sizeof envelope, &replyLength);
     } else {
-        envelope.status = vd_core_command(&ctx->Core, owner, command, input, InputBufferLength,
+        envelope.status = pattie_core_command(&ctx->Core, owner, command, input, InputBufferLength,
                                           NULL, 0, output + sizeof envelope,
                                           length - sizeof envelope, &replyLength);
     }

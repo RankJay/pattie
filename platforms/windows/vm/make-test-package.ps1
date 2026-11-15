@@ -1,13 +1,13 @@
 <#
 .SYNOPSIS
-    Builds a test-signed Viaduct driver package for the test VM. Runs on the host.
+    Builds a test-signed Pattie driver package for the test VM. Runs on the host.
 
 .DESCRIPTION
-    1. Builds the Release driver (x64) and viaduct-cli.
+    1. Builds the Release driver (x64) and pattie-cli.
     2. Creates the driver catalog with Inf2Cat.
-    3. Signs viaduct.sys and viaduct.cat with a throwaway test certificate that
+    3. Signs pattie.sys and pattie.cat with a throwaway test certificate that
        exists only in memory: no certificate store, key container or key file on
-       this machine is touched. Only its public part (viaduct-test.cer) is saved,
+       this machine is touched. Only its public part (pattie-test.cer) is saved,
        for the VM to trust.
     4. Collects everything the VM needs into target\<PackageName>\ (vm-package).
 
@@ -53,16 +53,28 @@ foreach ($tool in $msbuild, $inf2cat) {
     if (-not (Test-Path $tool)) { throw "Missing tool: $tool" }
 }
 
+# The trace scripts find the driver's events by the provider name in
+# trace-provider.ps1; the driver registers the name and GUID in src/trace.c. A
+# mismatch records nothing, silently, so check before building.
+. (Join-Path $PSScriptRoot 'trace-provider.ps1')
+$traceC = Get-Content -Raw (Join-Path $repo 'platforms\windows\driver\src\trace.c')
+$declared = [regex]::Match($traceC, 'TRACELOGGING_DEFINE_PROVIDER\(\s*\w+\s*,\s*"([^"]+)"\s*,\s*\(([^)]*)\)')
+$guidInC = ($declared.Groups[2].Value -replace '\s', '').ToLowerInvariant()
+$guidOfName = ([guid]$PattieProvider).ToString('X') -replace '[{}]', ''
+if (-not $declared.Success -or $declared.Groups[1].Value -ne $PattieProviderName -or $guidInC -ne $guidOfName) {
+    throw "src/trace.c's provider ($($declared.Groups[1].Value), $guidInC) isn't $PattieProviderName with its name hash ($guidOfName): see trace-provider.ps1"
+}
+
 Write-Host '== Building the driver'
 $driverArgs = @(
-    (Join-Path $repo 'platforms\windows\driver\viaduct.vcxproj'), '-t:Rebuild',
+    (Join-Path $repo 'platforms\windows\driver\pattie.vcxproj'), '-t:Rebuild',
     "-p:Configuration=$Configuration", '-p:Platform=x64', '-nologo', '-v:minimal')
 if ($DriverVersion) {
-    $driverArgs += "-p:ViaductDriverVersion=$DriverVersion"
+    $driverArgs += "-p:PattieDriverVersion=$DriverVersion"
 }
 Invoke-Tool 'Driver build' $msbuild $driverArgs
 if ($DriverVersion) {
-    $stamped = Select-String -Path (Join-Path $driverOut 'viaduct.inf') -Pattern '^\s*DriverVer\s*=\s*(.+)$'
+    $stamped = Select-String -Path (Join-Path $driverOut 'pattie.inf') -Pattern '^\s*DriverVer\s*=\s*(.+)$'
     if ($null -eq $stamped -or $stamped.Matches[0].Groups[1].Value -notmatch ",\s*$([regex]::Escape($DriverVersion))\s*$") {
         throw "The built INF doesn't carry version $DriverVersion ($($stamped.Line))"
     }
@@ -71,12 +83,12 @@ if ($DriverVersion) {
 
 # Static C runtime: a clean Windows VM may lack VCRUNTIME140.dll (the Visual C++
 # Redistributable). Its own target folder keeps normal builds from recompiling.
-Write-Host '== Building viaduct-cli (static C runtime)'
+Write-Host '== Building pattie-cli (static C runtime)'
 $cliTarget = Join-Path $repo 'target\vm-build'
 $env:RUSTFLAGS = '-C target-feature=+crt-static'
 try {
-    Invoke-Tool 'viaduct-cli build' 'cargo' @(
-        'build', '--release', '-p', 'viaduct-cli', '--manifest-path', (Join-Path $repo 'Cargo.toml'),
+    Invoke-Tool 'pattie-cli build' 'cargo' @(
+        'build', '--release', '-p', 'pattie-cli', '--manifest-path', (Join-Path $repo 'Cargo.toml'),
         '--target-dir', $cliTarget)
 } finally {
     Remove-Item Env:\RUSTFLAGS
@@ -85,12 +97,12 @@ try {
 Write-Host '== Collecting the package'
 if (Test-Path $package) { Remove-Item -Recurse -Force $package }
 New-Item -ItemType Directory -Force $package | Out-Null
-Copy-Item (Join-Path $driverOut 'viaduct.sys'), (Join-Path $driverOut 'viaduct.inf') $package
-Copy-Item (Join-Path $cliTarget 'release\viaduct-cli.exe') $package
+Copy-Item (Join-Path $driverOut 'pattie.sys'), (Join-Path $driverOut 'pattie.inf') $package
+Copy-Item (Join-Path $cliTarget 'release\pattie-cli.exe') $package
 Copy-Item (Join-Path $PSScriptRoot 'prepare-vm.ps1'), (Join-Path $PSScriptRoot 'install-in-vm.ps1'),
     (Join-Path $PSScriptRoot 'probe-endpoint.ps1'), (Join-Path $PSScriptRoot 'cpu-load.ps1'),
     (Join-Path $PSScriptRoot 'trace-run.ps1'), (Join-Path $PSScriptRoot 'many-mics.ps1'),
-    (Join-Path $PSScriptRoot 'race-close.ps1') $package
+    (Join-Path $PSScriptRoot 'race-close.ps1'), (Join-Path $PSScriptRoot 'trace-provider.ps1') $package
 
 Write-Host '== Creating the catalog'
 Invoke-Tool 'Inf2Cat' $inf2cat @("/driver:$package", '/os:10_CO_X64', '/uselocaltime')
@@ -98,7 +110,7 @@ Invoke-Tool 'Inf2Cat' $inf2cat @("/driver:$package", '/os:10_CO_X64', '/uselocal
 Write-Host '== Creating a throwaway test certificate (files only, no certificate store)'
 $rsa = [System.Security.Cryptography.RSA]::Create(3072)
 $request = New-Object System.Security.Cryptography.X509Certificates.CertificateRequest(
-    'CN=Viaduct Test Signing (VM only)', $rsa,
+    'CN=Pattie Test Signing (VM only)', $rsa,
     [System.Security.Cryptography.HashAlgorithmName]::SHA256,
     [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
 $codeSigning = New-Object System.Security.Cryptography.OidCollection
@@ -108,13 +120,13 @@ $request.CertificateExtensions.Add(
 $request.CertificateExtensions.Add(
     (New-Object System.Security.Cryptography.X509Certificates.X509BasicConstraintsExtension($false, $false, 0, $false)))
 $certificate = $request.CreateSelfSigned([DateTimeOffset]::Now.AddDays(-1), [DateTimeOffset]::Now.AddDays(90))
-[IO.File]::WriteAllBytes((Join-Path $package 'viaduct-test.cer'), $certificate.Export(
+[IO.File]::WriteAllBytes((Join-Path $package 'pattie-test.cer'), $certificate.Export(
     [System.Security.Cryptography.X509Certificates.X509ContentType]::Cert))
 
 # Signs with the in-memory key. (signtool /f would import a .pfx, and Windows then
 # keeps a copy of the key in this user's profile; this way nothing is persisted.)
 Write-Host '== Signing the driver and catalog'
-foreach ($file in 'viaduct.sys', 'viaduct.cat') {
+foreach ($file in 'pattie.sys', 'pattie.cat') {
     $path = Join-Path $package $file
     $result = Set-AuthenticodeSignature -FilePath $path -Certificate $certificate -HashAlgorithm SHA256
     $signer = (Get-AuthenticodeSignature $path).SignerCertificate

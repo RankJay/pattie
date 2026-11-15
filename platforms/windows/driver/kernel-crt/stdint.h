@@ -7,8 +7,8 @@
  * header (which include <stdint.h>) build unchanged in the driver. Host builds
  * never see this file.
  */
-#ifndef VIADUCT_KERNEL_STDINT_H
-#define VIADUCT_KERNEL_STDINT_H
+#ifndef PATTIE_KERNEL_STDINT_H
+#define PATTIE_KERNEL_STDINT_H
 
 #ifndef _KERNEL_MODE
 #error "kernel-crt/stdint.h is for kernel-mode builds only"
@@ -49,4 +49,4 @@ typedef unsigned __int64 uint64_t;
 #define UINT64_MAX 0xffffffffffffffffui64
 #endif
 
-#endif /* VIADUCT_KERNEL_STDINT_H */
+#endif /* PATTIE_KERNEL_STDINT_H */

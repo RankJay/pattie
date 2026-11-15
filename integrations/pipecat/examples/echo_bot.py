@@ -1,6 +1,6 @@
 """An echo bot: it hears the meeting through its own speaker and says it back
 through its own microphone a second later. No API keys, no services: a check
-that a meeting app and a Pipecat pipeline reach each other through Viaduct.
+that a meeting app and a Pipecat pipeline reach each other through Pattie.
 
     uv run examples/echo_bot.py
 
@@ -21,9 +21,9 @@ from pipecat.pipeline.runner import WorkerRunner
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
-from pipecat_viaduct import ViaductTransport, ViaductTransportParams
+from pipecat_pattie import PattieTransport, PattieTransportParams
 
-RATE = 16_000  # the pipeline's rate both ways; Viaduct converts to the Devices'
+RATE = 16_000  # the pipeline's rate both ways; Pattie converts to the Devices'
 
 
 class Echo(FrameProcessor):
@@ -53,8 +53,8 @@ class Echo(FrameProcessor):
 
 
 async def main() -> None:
-    transport = ViaductTransport(
-        ViaductTransportParams(
+    transport = PattieTransport(
+        PattieTransportParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
             audio_in_sample_rate=RATE,

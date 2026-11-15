@@ -38,13 +38,13 @@ fn main() {
             }
         }
     }
-    build.compile("viaduct_core");
+    build.compile("pattie_core");
 
     bindgen::Builder::default()
-        .header(core.join("viaduct_core.h").to_string_lossy())
+        .header(core.join("pattie_core.h").to_string_lossy())
         .header(probe.join("abi_probe.h").to_string_lossy())
         .clang_arg(format!("-I{}", include.display()))
-        .allowlist_item("(vd|VD|VIADUCT)_.*")
+        .allowlist_item("(pattie|PATTIE)_.*")
         .rust_edition(bindgen::RustEdition::Edition2024)
         .generate()
         .expect("generate bindings for the driver core")

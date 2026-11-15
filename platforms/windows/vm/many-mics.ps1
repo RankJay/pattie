@@ -1,10 +1,10 @@
 <#
 .SYNOPSIS
-    Runs several `viaduct-cli mic` instances at once from one window. For the
+    Runs several `pattie-cli mic` instances at once from one window. For the
     test VM's run (c), 8 Devices at once (.ai/status/measurements.md).
 
 .DESCRIPTION
-    Starts -Count separate viaduct-cli processes (separate Owners, as separate
+    Starts -Count separate pattie-cli processes (separate Owners, as separate
     apps would be), each creating a Microphone named "<Prefix> 1", "<Prefix> 2",
     ... and streaming its tone. Each one's output goes to a log next to this
     script. Press Enter here to stop them all cleanly (each gets its own Enter),
@@ -24,7 +24,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $here = $PSScriptRoot
-$cli = Join-Path $here 'viaduct-cli.exe'
+$cli = Join-Path $here 'pattie-cli.exe'
 if (-not (Test-Path $cli)) { throw "Missing $cli" }
 
 $mics = @()

@@ -1,7 +1,7 @@
 //! Seam B: the Ring (ADR 0007, ADR 0008).
 
-use viaduct_core_tests::Ring;
-use viaduct_core_tests::ffi::*;
+use pattie_core_tests::Ring;
+use pattie_core_tests::ffi::*;
 
 #[test]
 fn memory_too_small_for_the_claimed_capacity_is_rejected() {
@@ -9,14 +9,14 @@ fn memory_too_small_for_the_claimed_capacity_is_rejected() {
 
     let attached = Ring::attach(256, one_frame_short);
 
-    assert_eq!(attached.err(), Some(VD_ERR_BAD_RING));
+    assert_eq!(attached.err(), Some(PATTIE_ERR_BAD_RING));
 }
 
 #[test]
 fn memory_too_small_for_the_header_is_rejected() {
     let attached = Ring::attach(256, 100);
 
-    assert_eq!(attached.err(), Some(VD_ERR_BAD_RING));
+    assert_eq!(attached.err(), Some(PATTIE_ERR_BAD_RING));
 }
 
 #[test]
@@ -28,7 +28,7 @@ fn capacity_outside_the_allowed_powers_of_two_is_rejected() {
         .map(|&capacity| Ring::attach(capacity, Ring::bytes_for(capacity)).err())
         .collect();
 
-    assert_eq!(results, vec![Some(VD_ERR_BAD_RING); bad.len()]);
+    assert_eq!(results, vec![Some(PATTIE_ERR_BAD_RING); bad.len()]);
 }
 
 #[test]
@@ -296,13 +296,13 @@ fn each_publish_moves_the_sequence_on_by_two_whatever_the_app_wrote_there() {
     assert_eq!(ring.header().reader_clock.seq, first + 2);
 }
 
-/// The SDK's seqlock reader (`viaduct::abi::read_clock`) on what the C core
+/// The SDK's seqlock reader (`pattie::abi::read_clock`) on what the C core
 /// published: the two sides of ADR 0022's protocol agree.
-fn sdk_reads(clock: &vd_ring_clock) -> Option<(u64, u64)> {
-    let clock = (clock as *const vd_ring_clock).cast::<viaduct::abi::RingClock>();
+fn sdk_reads(clock: &pattie_ring_clock) -> Option<(u64, u64)> {
+    let clock = (clock as *const pattie_ring_clock).cast::<pattie::abi::RingClock>();
     // SAFETY: a live, aligned clock pair with the same layout (abi_mirror.rs),
     // stored to by nobody else while this test reads it.
-    unsafe { viaduct::abi::read_clock(clock) }
+    unsafe { pattie::abi::read_clock(clock) }
 }
 
 #[test]
@@ -470,21 +470,21 @@ fn other_rates_and_channel_counts_are_rejected() {
     })
     .collect();
 
-    assert_eq!(refused, [Some(VD_ERR_BAD_RING); 5]);
+    assert_eq!(refused, [Some(PATTIE_ERR_BAD_RING); 5]);
 }
 
 #[test]
 fn memory_sized_for_mono_is_too_small_for_stereo() {
     let attached = Ring::attach_format(256, 48_000, 2, Ring::bytes_for(256));
 
-    assert_eq!(attached.err(), Some(VD_ERR_BAD_RING));
+    assert_eq!(attached.err(), Some(PATTIE_ERR_BAD_RING));
 }
 
 #[test]
 fn the_largest_ring_is_eight_channels_at_the_most_frames() {
     assert_eq!(
-        VD_RING_MAX_BYTES as usize,
-        Ring::bytes_for_format(VD_RING_MAX_FRAMES, VD_RING_MAX_CHANNELS as u16)
+        PATTIE_RING_MAX_BYTES as usize,
+        Ring::bytes_for_format(PATTIE_RING_MAX_FRAMES, PATTIE_RING_MAX_CHANNELS as u16)
     );
 }
 

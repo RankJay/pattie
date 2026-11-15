@@ -1,0 +1,72 @@
+;
+; Pattie virtual audio driver: installs the root device (ADR 0010).
+;
+; The root device has no circuits of its own. Each Device an app creates becomes
+; a raw child circuit device at runtime, so nothing per-Device lives here.
+; Validated by InfVerif on every build; never installed by building.
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = MEDIA
+ClassGuid   = {4d36e96c-e325-11ce-bfc1-08002be10318}
+Provider    = %ProviderName%
+DriverVer   = 01/01/2026,0.1.0.0
+CatalogFile = pattie.cat
+PnpLockDown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+pattie.sys = 1,,
+
+[Manufacturer]
+%ManufacturerName% = Pattie,NT$ARCH$.10.0...22000
+
+[Pattie.NT$ARCH$.10.0...22000]
+%Pattie.DeviceDesc%   = Pattie_Device, Root\Pattie
+%Pattie.EndpointDesc% = Pattie_Endpoint, Pattie\Endpoint
+
+; Each runtime circuit device (hardware ID Pattie\Endpoint) gets a null driver:
+; it stays raw, served by the root's pattie.sys, but is installed as a MEDIA
+; device with a driver key, which Windows' audio endpoint builder needs before it
+; builds an endpoint (VM, 2026-11-06). Its interface values are written by the
+; driver at runtime, since they depend on the Device's kind and name (ADR 0010).
+[Pattie_Endpoint.NT]
+
+[Pattie_Endpoint.NT.Services]
+AddService = , 0x00000002       ; null service: no function driver, runs raw
+
+[Pattie_Device.NT]
+CopyFiles = Pattie_Device.NT.Copy
+
+[Pattie_Device.NT.Copy]
+pattie.sys
+
+[Pattie_Device.NT.Services]
+AddService = Pattie, 0x00000002, Pattie_Service
+
+[Pattie_Service]
+DisplayName   = %Pattie.ServiceDesc%
+ServiceType   = 1               ; SERVICE_KERNEL_DRIVER
+StartType     = 3               ; SERVICE_DEMAND_START
+ErrorControl  = 1               ; SERVICE_ERROR_NORMAL
+ServiceBinary = %13%\pattie.sys
+
+[Pattie_Device.NT.Wdf]
+KmdfService = Pattie, Pattie_Wdf
+
+[Pattie_Wdf]
+KmdfLibraryVersion = $KMDFVERSION$
+
+[Strings]
+ProviderName        = "Pattie"
+ManufacturerName    = "Pattie"
+DiskName            = "Pattie Installation Disk"
+Pattie.DeviceDesc  = "Pattie Virtual Audio"
+Pattie.EndpointDesc = "Pattie Audio Endpoint"
+Pattie.ServiceDesc = "Pattie Virtual Audio Driver"

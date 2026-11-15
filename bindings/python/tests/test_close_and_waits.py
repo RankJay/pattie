@@ -7,8 +7,8 @@ import threading
 import time
 from collections.abc import Callable
 
-import viaduct
-from viaduct import _testing
+import pattie
+from pattie import _testing
 
 # close() should end a waiting call within about one 100 ms piece.
 PROMPT = 0.5
@@ -40,7 +40,7 @@ def close_promptly(close: Callable[[], None], thread: threading.Thread) -> float
 
 
 def test_close_ends_a_write_that_waits_forever(backend: _testing.TestBackend) -> None:
-    mic = viaduct.Microphone("Agent Mic", _backend=backend)
+    mic = pattie.Microphone("Agent Mic", _backend=backend)
     # Nobody records, so without close() this would never finish.
     thread, result = run_in_thread(lambda: mic.write(floats([0.1] * 48_000)))
 
@@ -53,7 +53,7 @@ def test_close_ends_a_write_that_waits_forever(backend: _testing.TestBackend) ->
 def test_close_ends_a_wait_for_playout_that_waits_forever(
     backend: _testing.TestBackend,
 ) -> None:
-    mic = viaduct.Microphone("Agent Mic", _backend=backend)
+    mic = pattie.Microphone("Agent Mic", _backend=backend)
     mic.write_nowait(floats([0.1] * 480))
     thread, result = run_in_thread(mic.wait_for_playout)
 
@@ -64,7 +64,7 @@ def test_close_ends_a_wait_for_playout_that_waits_forever(
 
 
 def test_close_ends_a_read_that_waits_forever(backend: _testing.TestBackend) -> None:
-    speaker = viaduct.Speaker("Agent Speaker", _backend=backend)
+    speaker = pattie.Speaker("Agent Speaker", _backend=backend)
     thread, result = run_in_thread(lambda: speaker.read(timeout=None))
 
     took = close_promptly(speaker.close, thread)
@@ -75,7 +75,7 @@ def test_close_ends_a_read_that_waits_forever(backend: _testing.TestBackend) -> 
 
 
 def test_close_ends_a_read_timed_that_waits_forever(backend: _testing.TestBackend) -> None:
-    speaker = viaduct.Speaker("Agent Speaker", _backend=backend)
+    speaker = pattie.Speaker("Agent Speaker", _backend=backend)
     thread, result = run_in_thread(lambda: speaker.read_timed(timeout=None))
 
     took = close_promptly(speaker.close, thread)
@@ -87,7 +87,7 @@ def test_close_ends_a_read_timed_that_waits_forever(backend: _testing.TestBacken
 def test_a_speakers_stats_and_clock_never_wait_for_a_read(
     backend: _testing.TestBackend,
 ) -> None:
-    with viaduct.Speaker("Agent Speaker", _backend=backend) as speaker:
+    with pattie.Speaker("Agent Speaker", _backend=backend) as speaker:
         backend.driver_write(speaker.id, floats([0.1] * 480))
         speaker.read()
         thread, _ = run_in_thread(lambda: speaker.read(timeout=2))
@@ -106,7 +106,7 @@ def test_a_speakers_stats_and_clock_never_wait_for_a_read(
 
 def test_a_write_still_finishes_when_listeners_take_it(backend: _testing.TestBackend) -> None:
     """Waiting in pieces mustn't cut a write short: with a listener, it all goes in."""
-    with viaduct.Microphone("Agent Mic", _backend=backend) as mic:
+    with pattie.Microphone("Agent Mic", _backend=backend) as mic:
         done = threading.Event()
 
         def listen() -> None:

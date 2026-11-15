@@ -1,26 +1,26 @@
 <#
 .SYNOPSIS
     Builds the installer (ADR 0024): one per-machine MSI that puts the driver
-    and viaduct-cli on a machine. Runs on the host; it installs nothing.
+    and pattie-cli on a machine. Runs on the host; it installs nothing.
 
 .DESCRIPTION
-    1. Reads the payload folder (viaduct.inf, viaduct.sys, viaduct.cat): the MSI
+    1. Reads the payload folder (pattie.inf, pattie.sys, pattie.cat): the MSI
        carries it byte for byte. The product version X.Y.Z is its DriverVer's
        first three numbers (DriverVer is X.Y.Z.B; Windows Installer compares only
        three, so each MSI needs its own X.Y.Z).
     2. -Release refuses, listing every reason:
        - a catalog that isn't signed by Microsoft (Partner Center's output is),
-         or that doesn't cover the payload's own viaduct.inf and viaduct.sys;
-       - a viaduct.sys that isn't signed by Microsoft;
-       - no release UpgradeCode in identity.wxi: it is created only when the
-         product is named, and must never change after;
-       - a viaduct-cli.exe (-Cli) without a valid Authenticode signature.
+         or that doesn't cover the payload's own pattie.inf and pattie.sys;
+       - a pattie.sys that isn't signed by Microsoft;
+       - no release UpgradeCode in identity.wxi (it must never change);
+       - an identity string still a placeholder (the publisher, the winget ID);
+       - a pattie-cli.exe (-Cli) without a valid Authenticode signature.
        Without -Release it builds a test MSI (identity.wxi's test UpgradeCode,
        "-test" in its name) from any payload, e.g. a VM test package.
-    3. Builds the custom actions (crates/viaduct-msi) and, for a test MSI,
-       viaduct-cli, with the C runtime linked in (+crt-static): a fresh machine
+    3. Builds the custom actions (crates/pattie-msi) and, for a test MSI,
+       pattie-cli, with the C runtime linked in (+crt-static): a fresh machine
        may lack VCRUNTIME140.dll. Into target\msi\build.
-    4. Runs WiX v6 (`wix build`) on viaduct.wxs into target\msi.
+    4. Runs WiX v6 (`wix build`) on pattie.wxs into target\msi.
 
     The release MSI is then Authenticode-signed by hand with the EV certificate
     (the script prints the command), as the attestation cab is.
@@ -38,7 +38,7 @@ param(
     # A release MSI: Microsoft-signed payload, the real UpgradeCode, a signed CLI.
     [switch]$Release,
 
-    # The viaduct-cli.exe to ship. Required with -Release (built, then signed by
+    # The pattie-cli.exe to ship. Required with -Release (built, then signed by
     # hand); a test MSI builds its own when it's left out.
     [string]$Cli
 )
@@ -51,11 +51,11 @@ $build = Join-Path $out 'build'
 
 # --- 1. The payload and its version.
 $Payload = (Resolve-Path $Payload).Path
-foreach ($file in 'viaduct.inf', 'viaduct.sys', 'viaduct.cat') {
+foreach ($file in 'pattie.inf', 'pattie.sys', 'pattie.cat') {
     if (-not (Test-Path (Join-Path $Payload $file))) { throw "The payload has no $file ($Payload)" }
 }
-$stamped = Select-String -Path (Join-Path $Payload 'viaduct.inf') -Pattern '^\s*DriverVer\s*=\s*[^,]+,\s*(\d+)\.(\d+)\.(\d+)\.(\d+)\s*$'
-if ($null -eq $stamped) { throw "No DriverVer with four numbers in $Payload\viaduct.inf" }
+$stamped = Select-String -Path (Join-Path $Payload 'pattie.inf') -Pattern '^\s*DriverVer\s*=\s*[^,]+,\s*(\d+)\.(\d+)\.(\d+)\.(\d+)\s*$'
+if ($null -eq $stamped) { throw "No DriverVer with four numbers in $Payload\pattie.inf" }
 $g = $stamped.Matches[0].Groups
 $productVersion = "$($g[1].Value).$($g[2].Value).$($g[3].Value)"
 Write-Host "== Payload $Payload, DriverVer $($g[1].Value).$($g[2].Value).$($g[3].Value).$($g[4].Value), product $productVersion"
@@ -73,7 +73,7 @@ $releaseCode = Get-Define 'ReleaseUpgradeCode'
 
 if ($Release) {
     $refusals = @()
-    $catalog = Get-AuthenticodeSignature (Join-Path $Payload 'viaduct.cat')
+    $catalog = Get-AuthenticodeSignature (Join-Path $Payload 'pattie.cat')
     $signer = if ($catalog.SignerCertificate) { $catalog.SignerCertificate.Subject } else { '(unsigned)' }
     if ($catalog.Status -ne 'Valid' -or $signer -notmatch 'CN=Microsoft Windows Hardware Compatibility Publisher') {
         $refusals += "the catalog isn't signed by Microsoft (status $($catalog.Status), signer $signer): use Partner Center's output, byte for byte"
@@ -86,12 +86,12 @@ if ($Release) {
         if (-not $signtool) {
             $refusals += "signtool.exe not found (Windows SDK): can't check the catalog covers the payload"
         } else {
-            foreach ($file in 'viaduct.inf', 'viaduct.sys') {
+            foreach ($file in 'pattie.inf', 'pattie.sys') {
                 # signtool writes to stderr on a mismatch: not an error for this
                 # script, only its exit code counts.
                 $saved = $ErrorActionPreference
                 $ErrorActionPreference = 'Continue'
-                & $signtool.FullName verify /q /pa /c (Join-Path $Payload 'viaduct.cat') (Join-Path $Payload $file) 2>&1 | Out-Null
+                & $signtool.FullName verify /q /pa /c (Join-Path $Payload 'pattie.cat') (Join-Path $Payload $file) 2>&1 | Out-Null
                 $covered = $LASTEXITCODE -eq 0
                 $ErrorActionPreference = $saved
                 if (-not $covered) {
@@ -101,18 +101,26 @@ if ($Release) {
         }
     }
     # Partner Center signs the driver binary itself too.
-    $driver = Get-AuthenticodeSignature (Join-Path $Payload 'viaduct.sys')
+    $driver = Get-AuthenticodeSignature (Join-Path $Payload 'pattie.sys')
     $driverSigner = if ($driver.SignerCertificate) { $driver.SignerCertificate.Subject } else { '(unsigned)' }
     if ($driver.Status -ne 'Valid' -or $driverSigner -notmatch 'CN=Microsoft Windows Hardware Compatibility Publisher') {
-        $refusals += "viaduct.sys isn't signed by Microsoft (status $($driver.Status), signer $driverSigner)"
+        $refusals += "pattie.sys isn't signed by Microsoft (status $($driver.Status), signer $driverSigner)"
+    }
+    # A placeholder (the publisher, the winget ID) must not ship.
+    # Every identity string, so a define added later is checked too.
+    foreach ($define in [regex]::Matches($identity, '<\?define\s+(\w+)\s*=\s*"([^"]*)"\s*\?>')) {
+        $name = $define.Groups[1].Value
+        if ($name -notlike '*UpgradeCode' -and $define.Groups[2].Value -match 'placeholder') {
+            $refusals += "identity.wxi's $name is still a placeholder: name it first"
+        }
     }
     if ($releaseCode -notmatch $guid) {
-        $refusals += "identity.wxi has no release UpgradeCode: it is created only once the product is named (ADR 0024)"
+        $refusals += "identity.wxi has no release UpgradeCode (ADR 0024)"
     } elseif ($releaseCode -eq $testCode) {
         $refusals += "the release UpgradeCode is the test one"
     }
     if (-not $Cli) {
-        $refusals += "-Cli is required: the signed viaduct-cli.exe to ship"
+        $refusals += "-Cli is required: the signed pattie-cli.exe to ship"
     } elseif ((Get-AuthenticodeSignature $Cli).Status -ne 'Valid') {
         $refusals += "$Cli has no valid Authenticode signature: sign it first"
     }
@@ -120,19 +128,19 @@ if ($Release) {
         throw ("Refusing a release MSI:`n  - " + ($refusals -join "`n  - "))
     }
     $upgradeCode = $releaseCode
-    $msiName = "viaduct-$productVersion.msi"
+    $msiName = "pattie-$productVersion.msi"
 } else {
     if ($testCode -notmatch $guid) { throw "identity.wxi's TestUpgradeCode isn't a GUID" }
     $upgradeCode = $testCode
-    $msiName = "viaduct-$productVersion-test.msi"
+    $msiName = "pattie-$productVersion-test.msi"
 }
 
 # --- 3. The custom actions (and a test CLI), C runtime linked in.
 $wix = Get-Command wix -ErrorAction SilentlyContinue
 if (-not $wix) { throw 'WiX v6 not found: dotnet tool install --global wix (vm-host-changes.md, change 24)' }
 Write-Host '== Building the custom actions (crt-static)'
-$packages = @('-p', 'viaduct-msi')
-if (-not $Cli) { $packages += @('-p', 'viaduct-cli') }
+$packages = @('-p', 'pattie-msi')
+if (-not $Cli) { $packages += @('-p', 'pattie-cli') }
 $savedFlags = $env:RUSTFLAGS
 $env:RUSTFLAGS = '-C target-feature=+crt-static'
 try {
@@ -141,15 +149,15 @@ try {
 } finally {
     $env:RUSTFLAGS = $savedFlags
 }
-$actions = Join-Path $build 'release\viaduct_msi.dll'
-if (-not $Cli) { $Cli = Join-Path $build 'release\viaduct-cli.exe' }
+$actions = Join-Path $build 'release\pattie_msi.dll'
+if (-not $Cli) { $Cli = Join-Path $build 'release\pattie-cli.exe' }
 $Cli = (Resolve-Path $Cli).Path
 
 # --- 4. WiX.
 New-Item -ItemType Directory -Force $out | Out-Null
 $msi = Join-Path $out $msiName
 Write-Host "== wix build -> $msi"
-& wix build (Join-Path $here 'viaduct.wxs') -arch x64 -i $here `
+& wix build (Join-Path $here 'pattie.wxs') -arch x64 -i $here `
     -d "ProductVersion=$productVersion" -d "UpgradeCode=$upgradeCode" `
     -d "Payload=$Payload" -d "Cli=$Cli" -d "ActionsDll=$actions" `
     -o $msi

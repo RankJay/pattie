@@ -1,30 +1,30 @@
-# viaduct-audio
+# pattie (Python)
 
 Virtual microphones and speakers that every app sees as real audio devices,
 from Python. Your code writes to a microphone, and Zoom, Teams, Discord or a
 browser records it. Other apps play to a speaker, and your code reads it.
 
 ```bash
-pip install viaduct-audio
+pip install pattie
 ```
 
-It needs Python 3.14 or newer and has no dependencies. On Windows, the Viaduct
-driver must be installed once, as administrator, with `viaduct-cli install`. On
+It needs Python 3.14 or newer and has no dependencies. On Windows, the Pattie
+driver must be installed once, as administrator, with `pattie-cli install`. On
 Linux it uses PipeWire, which most desktops already run.
 
 ## Quickstart
 
 ```python
-import viaduct
+import pattie
 
 # 24 kHz 16-bit PCM in, the way most speech models send it.
-with viaduct.Microphone("Agent Mic", format=viaduct.Format(24_000, "pcm16")) as mic:
+with pattie.Microphone("Agent Mic", format=pattie.Format(24_000, "pcm16")) as mic:
     mic.write(pcm_audio)  # waits as the audio plays; nothing is dropped
     mic.wait_for_playout()
 ```
 
 ```python
-with viaduct.Speaker("Agent Speaker", format=viaduct.Format(16_000, "pcm16")) as speaker:
+with pattie.Speaker("Agent Speaker", format=pattie.Format(16_000, "pcm16")) as speaker:
     for chunk in speaker:  # what other apps play, as it plays
         transcriber.feed(chunk)
 ```
@@ -34,13 +34,13 @@ process ending, removes them.
 A `close()` from another thread ends a call that's waiting (it returns what it
 managed within about 100 ms), and Ctrl+C interrupts one.
 
-With asyncio, use `viaduct.aio`. Waiting happens in a worker thread, so the
+With asyncio, use `pattie.aio`. Waiting happens in a worker thread, so the
 event loop keeps running, and a call can be cancelled:
 
 ```python
-from viaduct.aio import AsyncMicrophone
+from pattie.aio import AsyncMicrophone
 
-async with AsyncMicrophone("Agent Mic", format=viaduct.Format(24_000, "pcm16")) as mic:
+async with AsyncMicrophone("Agent Mic", format=pattie.Format(24_000, "pcm16")) as mic:
     await mic.write(pcm_audio)
     async with asyncio.timeout(5):
         await mic.wait_for_playout()
@@ -70,7 +70,7 @@ it. Over hours that adds up to seconds of delay, or gaps. A `LiveWriter` holds
 it at about 40 ms and keeps it there by resampling a few parts per million:
 
 ```python
-relay = mic.live_writer(viaduct.Format(16_000, "pcm16"))
+relay = mic.live_writer(pattie.Format(16_000, "pcm16"))
 relay.push(chunk)  # as each chunk arrives; never waits
 relay.stats.correction_ppm  # how far off the source's clock is
 ```
@@ -90,20 +90,20 @@ in step with video.
 
 ## What it takes care of
 
-| The usual problem | What Viaduct does |
+| The usual problem | What Pattie does |
 | --- | --- |
 | Playing audio needs an external player (mpv, ffplay) or a sound library | The devices are built in, with no dependencies |
 | The model's format isn't the device's | Pass `format=`; it converts (8 to 96 kHz, f32, pcm16, μ-law; 1 to 8 channels, to or from mono) and keeps state between writes, so chunk edges don't click |
 | The device should be stereo, 44.1 or 96 kHz | `Microphone(name, rate=44_100, channels=2)`: the device itself runs in that format (1 to 8 channels; 44.1, 48 or 96 kHz), and other apps' audio is converted by the system |
-| A blocking `write` freezes async code | `viaduct.aio`; the sync calls also release the GIL while they wait |
+| A blocking `write` freezes async code | `pattie.aio`; the sync calls also release the GIL while they wait |
 | Picking a device by list index breaks when devices change | You create the device and give it its name, and `stable_id()` gives the same ID every time for the same name and format |
 | Interrupting means killing the player | `Playout.interrupt()` stops within about 20 ms and says how much was heard |
 | A relayed stream drifts: seconds of delay after a few hours | `live_writer()` holds its latency with drift compensation |
-| Audio goes missing without a word | Lost audio is logged on the `viaduct` logger; `strict=True` raises `AudioLost`; `stats` has the counts |
+| Audio goes missing without a word | Lost audio is logged on the `pattie` logger; `strict=True` raises `AudioLost`; `stats` has the counts |
 
 ## Errors
 
-Every error is a `viaduct.Error`, with one subclass per cause: `DuplicateName`,
+Every error is a `pattie.Error`, with one subclass per cause: `DuplicateName`,
 `DriverNotInstalled`, `UnsupportedFormat`, and so on. Where there's a fix, the
 message says what it is. `DriverRemoved` means the driver was removed or is
 being updated while the Device was live (Windows): create the Device again.

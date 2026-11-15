@@ -4,7 +4,7 @@ OpenAI's realtime model, reached through Vercel's AI Gateway, speaks through
 "Agent Mic" and listens through "Agent Speaker". Talk over it and it stops
 mid-sentence, then answers what you said, knowing which of its words you heard.
 
-    pip install viaduct-audio websockets
+    pip install pattie websockets
     AI_GATEWAY_API_KEY=vck_... python barge_in.py
 
 Then, in Zoom (or Teams, Meet, ...), pick microphone "Agent Mic" and speaker
@@ -28,12 +28,12 @@ import os
 import websockets
 from websockets.typing import Subprotocol
 
-import viaduct
-from viaduct.aio import AsyncMicrophone, AsyncSpeaker
+import pattie
+from pattie.aio import AsyncMicrophone, AsyncSpeaker
 
 URL = "wss://ai-gateway.vercel.sh/v4/ai/realtime-model?ai-model-id=openai/gpt-realtime-2"
 # The model's audio, both ways: 16-bit PCM, 24 kHz, mono.
-MODEL_AUDIO = viaduct.Format(24_000, "pcm16")
+MODEL_AUDIO = pattie.Format(24_000, "pcm16")
 
 
 async def main() -> None:

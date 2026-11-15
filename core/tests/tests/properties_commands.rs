@@ -6,10 +6,10 @@
 //! two of one kind with the same name, each owned by the app that created it. And
 //! each connection speaks the minor version Hello agreed (ADR 0003).
 
+use pattie_core_tests::ffi::*;
+use pattie_core_tests::{Driver, LiveDevice, OwnerRef, RingMemory, create_device_request};
 use proptest::prelude::*;
 use std::mem::size_of;
-use viaduct_core_tests::ffi::*;
-use viaduct_core_tests::{Driver, LiveDevice, OwnerRef, RingMemory, create_device_request};
 
 /// Names offered to Create Device: valid, case variants, Unicode, and invalid ones.
 const NAMES: &[&str] = &[
@@ -64,23 +64,23 @@ enum Op {
 }
 
 fn op() -> impl Strategy<Value = Op> {
-    let create_len = size_of::<vd_create_device_request>();
-    let remove_len = size_of::<vd_remove_device_request>();
+    let create_len = size_of::<pattie_create_device_request>();
+    let remove_len = size_of::<pattie_remove_device_request>();
     prop_oneof![
         1 => Just(Op::Connect),
         2 => (any::<u8>(), prop_oneof![
                 // The served version, and the values just past each boundary.
-                6 => Just((VIADUCT_ABI_MAJOR as u16, VIADUCT_ABI_MINOR as u16)),
-                1 => Just((VIADUCT_ABI_MAJOR as u16, 0)),
-                1 => Just((VIADUCT_ABI_MAJOR as u16, VIADUCT_ABI_MINOR as u16 + 1)),
-                1 => Just((VIADUCT_ABI_MAJOR as u16 + 1, VIADUCT_ABI_MINOR as u16)),
-                1 => Just((VIADUCT_ABI_MAJOR as u16 - 1, VIADUCT_ABI_MINOR as u16)),
+                6 => Just((PATTIE_ABI_MAJOR as u16, PATTIE_ABI_MINOR as u16)),
+                1 => Just((PATTIE_ABI_MAJOR as u16, 0)),
+                1 => Just((PATTIE_ABI_MAJOR as u16, PATTIE_ABI_MINOR as u16 + 1)),
+                1 => Just((PATTIE_ABI_MAJOR as u16 + 1, PATTIE_ABI_MINOR as u16)),
+                1 => Just((PATTIE_ABI_MAJOR as u16 - 1, PATTIE_ABI_MINOR as u16)),
                 1 => any::<(u16, u16)>(),
             ])
             .prop_map(|(owner, (major, minor))| Op::Hello { owner, major, minor }),
         6 => (
                 any::<u8>(),
-                prop_oneof![4 => Just(VD_KIND_MICROPHONE), 4 => Just(VD_KIND_SPEAKER), 1 => 0..=4u32],
+                prop_oneof![4 => Just(PATTIE_KIND_MICROPHONE), 4 => Just(PATTIE_KIND_SPEAKER), 1 => 0..=4u32],
                 0..=LONGEST,
                 prop_oneof![
                     8 => Just(RingChoice::Valid),
@@ -93,14 +93,14 @@ fn op() -> impl Strategy<Value = Op> {
         1 => any::<u8>().prop_map(|owner| Op::Close { owner }),
         2 => (
                 any::<u8>(),
-                prop_oneof![Just(VD_CMD_HELLO), Just(VD_CMD_CREATE_DEVICE), Just(VD_CMD_REMOVE_DEVICE), any::<u32>()],
+                prop_oneof![Just(PATTIE_CMD_HELLO), Just(PATTIE_CMD_CREATE_DEVICE), Just(PATTIE_CMD_REMOVE_DEVICE), any::<u32>()],
                 prop::collection::vec(any::<u8>(), 0..200),
             )
             // A random request of exactly the right size can't be modelled simply;
             // those are what the Create and Remove ops are for.
             .prop_filter("well-sized create/remove", move |(_, command, bytes)| {
-                !(*command == VD_CMD_CREATE_DEVICE && bytes.len() == create_len)
-                    && !(*command == VD_CMD_REMOVE_DEVICE && bytes.len() == remove_len)
+                !(*command == PATTIE_CMD_CREATE_DEVICE && bytes.len() == create_len)
+                    && !(*command == PATTIE_CMD_REMOVE_DEVICE && bytes.len() == remove_len)
             })
             .prop_map(|(owner, command, bytes)| Op::Raw { owner, command, bytes }),
     ]
@@ -124,13 +124,13 @@ impl Model {
         (!open.is_empty()).then(|| open[pick as usize % open.len()])
     }
 
-    fn hello(&mut self, owner: usize, major: u16, minor: u16) -> vd_status {
-        if u32::from(major) != VIADUCT_ABI_MAJOR {
-            return VD_ERR_VERSION;
+    fn hello(&mut self, owner: usize, major: u16, minor: u16) -> pattie_status {
+        if u32::from(major) != PATTIE_ABI_MAJOR {
+            return PATTIE_ERR_VERSION;
         }
         self.greeted[owner] = true;
-        self.minor[owner] = minor.min(VIADUCT_ABI_MINOR as u16);
-        VD_OK
+        self.minor[owner] = minor.min(PATTIE_ABI_MINOR as u16);
+        PATTIE_OK
     }
 
     fn create(
@@ -140,32 +140,32 @@ impl Model {
         name: &[u16],
         name_len: u32,
         ring: RingChoice,
-    ) -> vd_status {
+    ) -> pattie_status {
         if !self.greeted[owner] {
-            return VD_ERR_HELLO_REQUIRED;
+            return PATTIE_ERR_HELLO_REQUIRED;
         }
-        if kind != VD_KIND_MICROPHONE && kind != VD_KIND_SPEAKER {
-            return VD_ERR_BAD_KIND;
+        if kind != PATTIE_KIND_MICROPHONE && kind != PATTIE_KIND_SPEAKER {
+            return PATTIE_ERR_BAD_KIND;
         }
-        let valid_name = (1..=VD_DEVICE_NAME_MAX).contains(&name_len)
+        let valid_name = (1..=PATTIE_DEVICE_NAME_MAX).contains(&name_len)
             && name
                 .iter()
                 .all(|&unit| !(unit < 0x20 || (0x7F..=0x9F).contains(&unit)));
         if !valid_name {
-            return VD_ERR_BAD_NAME;
+            return PATTIE_ERR_BAD_NAME;
         }
         if self
             .devices
             .iter()
             .any(|d| d.kind == kind && d.name == name)
         {
-            return VD_ERR_DUPLICATE_NAME;
+            return PATTIE_ERR_DUPLICATE_NAME;
         }
-        if self.devices.len() == VD_MAX_DEVICES as usize {
-            return VD_ERR_TOO_MANY_DEVICES;
+        if self.devices.len() == PATTIE_MAX_DEVICES as usize {
+            return PATTIE_ERR_TOO_MANY_DEVICES;
         }
         if !matches!(ring, RingChoice::Valid) {
-            return VD_ERR_BAD_RING;
+            return PATTIE_ERR_BAD_RING;
         }
         self.devices.push(LiveDevice {
             id: self.next_id,
@@ -174,12 +174,12 @@ impl Model {
             name: name.to_vec(),
         });
         self.next_id += 1;
-        VD_OK
+        PATTIE_OK
     }
 
-    fn remove(&mut self, owner: usize, id: u32) -> vd_status {
+    fn remove(&mut self, owner: usize, id: u32) -> pattie_status {
         if !self.greeted[owner] {
-            return VD_ERR_HELLO_REQUIRED;
+            return PATTIE_ERR_HELLO_REQUIRED;
         }
         let me = Some(self.owners[owner]);
         match self
@@ -189,9 +189,9 @@ impl Model {
         {
             Some(i) => {
                 self.devices.remove(i);
-                VD_OK
+                PATTIE_OK
             }
-            None => VD_ERR_NO_SUCH_DEVICE,
+            None => PATTIE_ERR_NO_SUCH_DEVICE,
         }
     }
 
@@ -209,26 +209,26 @@ impl Model {
         removed
     }
 
-    fn raw(&mut self, owner: usize, command: u32, bytes: &[u8]) -> vd_status {
-        if command == VD_CMD_HELLO {
+    fn raw(&mut self, owner: usize, command: u32, bytes: &[u8]) -> pattie_status {
+        if command == PATTIE_CMD_HELLO {
             return match bytes {
                 [a, b, c, d] => self.hello(
                     owner,
                     u16::from_le_bytes([*a, *b]),
                     u16::from_le_bytes([*c, *d]),
                 ),
-                _ => VD_ERR_BAD_REQUEST,
+                _ => PATTIE_ERR_BAD_REQUEST,
             };
         }
         if !self.greeted[owner] {
-            return VD_ERR_HELLO_REQUIRED;
+            return PATTIE_ERR_HELLO_REQUIRED;
         }
-        VD_ERR_BAD_REQUEST // wrong size, or not a command at all
+        PATTIE_ERR_BAD_REQUEST // wrong size, or not a command at all
     }
 }
 
 /// The request and the name the model sees for a `NAMES` index (or the specials).
-fn request_for(kind: u32, name: usize) -> (vd_create_device_request, Vec<u16>, u32) {
+fn request_for(kind: u32, name: usize) -> (pattie_create_device_request, Vec<u16>, u32) {
     if name == TOO_LONG || name == LONGEST {
         let mut request = create_device_request(kind, &"x".repeat(63));
         let units = vec![u16::from(b'x'); 63];
@@ -244,11 +244,11 @@ fn request_for(kind: u32, name: usize) -> (vd_create_device_request, Vec<u16>, u
 }
 
 /// A successful Hello replies with the driver's version; nothing else here replies.
-fn expected_reply(command: u32, status: vd_status) -> Vec<u8> {
-    if command != VD_CMD_HELLO || status != VD_OK {
+fn expected_reply(command: u32, status: pattie_status) -> Vec<u8> {
+    if command != PATTIE_CMD_HELLO || status != PATTIE_OK {
         return vec![];
     }
-    [VIADUCT_ABI_MAJOR as u16, VIADUCT_ABI_MINOR as u16]
+    [PATTIE_ABI_MAJOR as u16, PATTIE_ABI_MINOR as u16]
         .iter()
         .flat_map(|v| v.to_le_bytes())
         .collect()
@@ -283,7 +283,7 @@ proptest! {
                     let (status, reply) = driver.hello_with(model.owners[i], major, minor, 256);
                     let expected = model.hello(i, major, minor);
                     prop_assert_eq!(status, expected, "Hello {}.{}", major, minor);
-                    prop_assert_eq!(reply, expected_reply(VD_CMD_HELLO, status));
+                    prop_assert_eq!(reply, expected_reply(PATTIE_CMD_HELLO, status));
                 }
                 Op::Create { owner, kind, name, ring } => {
                     let Some(i) = model.open_owner(owner) else { continue };
@@ -292,7 +292,7 @@ proptest! {
                     let got = driver.create_device_with(model.owners[i], request, ring_for(ring), 256);
                     match got {
                         Ok(id) => {
-                            prop_assert_eq!(expected, VD_OK);
+                            prop_assert_eq!(expected, PATTIE_OK);
                             prop_assert_eq!(Some(id), model.devices.last().map(|d| d.id));
                         }
                         Err(status) => prop_assert_eq!(status, expected),

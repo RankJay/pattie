@@ -1,0 +1,207 @@
+# Once a day (and on demand): the checks too slow for every push. CodeQL with
+# Microsoft's driver queries, mutation testing, coverage, and a long fuzz run.
+name: Nightly
+
+on:
+  schedule:
+    - cron: "17 3 * * *" # 03:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  codeql-driver:
+    name: CodeQL (Microsoft's driver queries)
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      security-events: write # upload the results to the Security tab
+    env:
+      CODEQL_VERSION: 2.25.5 # Microsoft's table for general use (README, CodeQL on the driver)
+      DRIVERS_PACK: microsoft/windows-drivers@1.10.0
+      CPP_PACK: microsoft/cpp-queries@0.0.5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore the WDK and SDK from NuGet
+        run: nuget restore platforms/windows/driver/packages.config -PackagesDirectory target/nuget -NonInteractive
+      - name: Cache the CodeQL CLI
+        id: codeql-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/codeql
+          key: codeql-cli-${{ env.CODEQL_VERSION }}
+      - name: Download the CodeQL CLI
+        if: steps.codeql-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $zip = Join-Path $env:RUNNER_TEMP 'codeql.zip'
+          Invoke-WebRequest "https://github.com/github/codeql-cli-binaries/releases/download/v$env:CODEQL_VERSION/codeql-win64.zip" -OutFile $zip
+          Expand-Archive $zip -DestinationPath $env:RUNNER_TEMP
+      - name: Build the database from a full driver build, then analyze it
+        shell: pwsh
+        run: |
+          $codeql = Join-Path $env:RUNNER_TEMP 'codeql\codeql.exe'
+          & $codeql pack download $env:DRIVERS_PACK $env:CPP_PACK
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -prerelease -property installationPath
+          $msbuild = Join-Path $vs 'MSBuild\Current\Bin\amd64\MSBuild.exe'
+          # The build command goes in a .cmd file: MSBuild's path has spaces, and
+          # quotes inside --command don't survive every PowerShell's argument
+          # passing (Windows PowerShell 5.1 drops them; checked 2026-11-14).
+          New-Item -ItemType Directory -Force target/codeql | Out-Null
+          "@`"$msbuild`" platforms\windows\driver\pattie.vcxproj -t:Rebuild -p:Configuration=Release -p:Platform=x64 -p:PattieWdkNuGet=true" |
+            Set-Content -Encoding ascii target/codeql/build.cmd
+          & $codeql database create target/codeql/db --language=cpp --source-root=. --overwrite `
+            --command=target\codeql\build.cmd
+          if ($LASTEXITCODE -ne 0) { throw "database create failed ($LASTEXITCODE)" }
+          & $codeql database analyze target/codeql/db `
+            microsoft/windows-drivers:windows-driver-suites/recommended.qls microsoft/cpp-queries:AlertSuppression.ql `
+            --format=sarifv2.1.0 --output=target/codeql/pattie.sarif
+          if ($LASTEXITCODE -ne 0) { throw "analyze failed ($LASTEXITCODE)" }
+      - name: Fail on any result in our code without a suppression
+        shell: pwsh
+        run: |
+          $sarif = Get-Content target/codeql/pattie.sarif -Raw | ConvertFrom-Json
+          $open = @($sarif.runs.results | Where-Object { -not $_.suppressions })
+          # The NuGet WDK is restored under target/, inside the source root, so its
+          # own headers are analysed too (11 results on 2026-11-14: deprecated-API
+          # notes and Microsoft's 128-bit multiply helpers). Listed, not failed on.
+          $kit = @($open | Where-Object { $_.locations[0].physicalLocation.artifactLocation.uri -like 'target/*' })
+          $ours = @($open | Where-Object { $_.locations[0].physicalLocation.artifactLocation.uri -notlike 'target/*' })
+          "In the WDK's own headers (not ours): $($kit.Count)"
+          $ours | ForEach-Object {
+            $location = $_.locations[0].physicalLocation
+            "$($_.ruleId) $($location.artifactLocation.uri):$($location.region.startLine) $($_.message.text)"
+          }
+          if ($ours.Count -gt 0) { throw "$($ours.Count) CodeQL result(s) in our code without a suppression" }
+          'No open CodeQL results in our code.'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: codeql-sarif
+          path: target/codeql/pattie.sarif
+      - name: Upload to the Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        continue-on-error: true # private repositories need GitHub Advanced Security for this
+        with:
+          sarif_file: target/codeql/pattie.sarif
+          category: driver
+
+  mutants:
+    name: Mutation testing (cargo-mutants, slice ${{ matrix.slice }})
+    # Windows, as configured: .cargo/mutants.toml excludes the Linux-only code,
+    # which ci.yml tests on Linux.
+    #
+    # All ~870 mutants take ~3 hours on a 20-core machine, far past one job. So
+    # they're split round-robin into 14 shards, two a night (the slices), one
+    # full pass a week: Monday runs shards 0 and 1, Sunday 12 and 13. Each job is
+    # ~62 mutants. The shard numbers are in the log, to rerun one locally:
+    # cargo mutants --shard K/14 --sharding round-robin
+    strategy:
+      fail-fast: false
+      matrix:
+        slice: [0, 1]
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
+      - name: Point bindgen at Visual Studio's libclang
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -prerelease -property installationPath
+          $dir = Join-Path $vs 'VC\Tools\Llvm\x64\bin'
+          if (-not (Test-Path (Join-Path $dir 'libclang.dll'))) { $dir = 'C:\Program Files\LLVM\bin' }
+          "LIBCLANG_PATH=$dir" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+      - name: Run tonight's shard
+        shell: pwsh
+        run: |
+          $shard = ([int](Get-Date).ToUniversalTime().DayOfWeek + 6) % 7 * 2 + ${{ matrix.slice }}
+          "Shard $shard of 14"
+          cargo mutants -j 2 --shard "$shard/14" --sharding round-robin --output target
+          $code = $LASTEXITCODE
+          # Fail on missed mutants only. A timeout (a mutant that made the tests
+          # hang) is a failure the tests saw, so it isn't a gap. Decided from
+          # missed.txt, not the exit code: cargo-mutants exits 3 (timeouts) even
+          # when mutants were missed too (seen 2026-11-14).
+          $missed = @(Get-Content target/mutants.out/missed.txt -ErrorAction SilentlyContinue)
+          if ($missed.Count -gt 0) { $missed; throw "$($missed.Count) missed mutant(s)" }
+          if ($code -notin 0, 2, 3) { exit $code } # 1: usage, 4: the baseline failed
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mutants-out-${{ matrix.slice }}
+          path: target/mutants.out
+
+  coverage:
+    name: Coverage (summary)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      - name: Install the Clang whose LLVM matches rustc's (needed by --include-ffi)
+        run: |
+          major=$(rustc -vV | sed -n 's/^LLVM version: \([0-9]*\).*/\1/p')
+          # apt.llvm.org can stall mid-download (seen 2026-11-14: 30 minutes on one
+          # package), and apt waits forever by default: give up on a silent
+          # connection after 30 s and retry.
+          printf 'Acquire::Retries "5";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' \
+            | sudo tee /etc/apt/apt.conf.d/80-retries > /dev/null
+          wget -q --tries=5 --timeout=30 https://apt.llvm.org/llvm.sh && chmod +x llvm.sh && sudo ./llvm.sh "$major"
+          sudo apt-get install -y -qq "libclang-$major-dev"
+          echo "CC=clang-$major" >> "$GITHUB_ENV"
+          echo "LIBCLANG_PATH=/usr/lib/llvm-$major/lib" >> "$GITHUB_ENV"
+      - name: Coverage summary
+        # Excluded as on Windows (README, Coverage), plus the Linux backend's
+        # PipeWire code, which only the opt-in real-PipeWire tests reach.
+        run: |
+          cargo llvm-cov --workspace --include-ffi --summary-only \
+            --ignore-filename-regex 'pattie[\\/]src[\\/]windows\.rs|pattie-cli[\\/]src[\\/](main|measure)\.rs|pattie-install[\\/]src[\\/]setup\.rs|pattie-msi[\\/]src[\\/]msi\.rs|core_host[\\/]test_backend|linux[\\/]pipewire' \
+            | tee coverage.txt
+          { echo '```'; cat coverage.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+  fuzz-long:
+    name: Fuzz the core (10 min)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Keep the corpus between runs
+        uses: actions/cache@v4
+        with:
+          path: target/fuzz/corpus
+          key: fuzz-corpus-${{ github.run_id }}
+          restore-keys: fuzz-corpus-
+      - name: Build the fuzzer (libFuzzer + AddressSanitizer)
+        # clang is on GitHub's image; installing it keeps the job portable (act's
+        # images have none).
+        run: |
+          command -v clang >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq clang; }
+          mkdir -p target/fuzz/corpus
+          clang -fsanitize=fuzzer,address -g -O1 -std=c17 -Wall -Wextra -Werror -Wconversion -Wsign-conversion \
+            -Icore/include -Icore/src core/src/pattie_core.c core/src/pattie_ring.c core/src/pattie_clock.c \
+            core/src/pattie_pcm16.c core/fuzz/fuzz_core.c -o target/fuzz/fuzz_core
+      - name: Run it
+        run: target/fuzz/fuzz_core -max_total_time=600 -max_len=4096 -rss_limit_mb=2048 target/fuzz/corpus
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: fuzz-crash
+          path: crash-*

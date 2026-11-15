@@ -1,27 +1,27 @@
 <#
 .SYNOPSIS
-    Installs the Viaduct driver. Runs INSIDE THE TEST VM ONLY.
+    Installs the Pattie driver. Runs INSIDE THE TEST VM ONLY.
 
 .DESCRIPTION
     Refuses to run outside a VMware virtual machine. Two modes:
 
     Test-signed (default): needs test signing on (prepare-vm.ps1). Trusts the
-    package's test certificate (in this VM only) and installs viaduct.inf from
+    package's test certificate (in this VM only) and installs pattie.inf from
     this folder.
 
     -Signed <folder>, the gate run: needs Secure Boot on and test signing off
     (the "clean" snapshot). Trusts nothing; checks that the folder's catalog is
-    signed by Microsoft (attestation signing) and installs its viaduct.inf.
+    signed by Microsoft (attestation signing) and installs its pattie.inf.
 
-    Then, in both: installs with `viaduct-cli install` (creates the root device
-    Root\Viaduct if there is none, installs the package on it), and with
-    -Verifier turns on Driver Verifier for viaduct.sys (reboot needed).
+    Then, in both: installs with `pattie-cli install` (creates the root device
+    Root\Pattie if there is none, installs the package on it), and with
+    -Verifier turns on Driver Verifier for pattie.sys (reboot needed).
 
     To undo, revert the VM to the snapshot it was installed on.
 #>
 [CmdletBinding()]
 param(
-    # The folder holding Microsoft's signed package (viaduct.inf, .sys, .cat).
+    # The folder holding Microsoft's signed package (pattie.inf, .sys, .cat).
     [string]$Signed,
     [switch]$Verifier
 )
@@ -44,9 +44,9 @@ if ($Signed) {
     if ($testSigning) { throw 'Test signing is on: the gate run needs the "clean" snapshot (see .ai/ops/vm-steps.md, section H).' }
     if (-not (Confirm-SecureBootUEFI)) { throw 'Secure Boot is off: the gate run needs it on (the "clean" snapshot).' }
     $package = (Resolve-Path $Signed).Path
-    $catalog = Get-AuthenticodeSignature (Join-Path $package 'viaduct.cat')
+    $catalog = Get-AuthenticodeSignature (Join-Path $package 'pattie.cat')
     if ($catalog.Status -ne 'Valid' -or $catalog.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') {
-        throw "viaduct.cat is not Microsoft-signed ($($catalog.Status), $($catalog.SignerCertificate.Subject))."
+        throw "pattie.cat is not Microsoft-signed ($($catalog.Status), $($catalog.SignerCertificate.Subject))."
     }
     Write-Host "== Microsoft-signed package: $($catalog.SignerCertificate.Subject)"
 } else {
@@ -55,7 +55,7 @@ if ($Signed) {
     }
     $package = $here
     Write-Host '== Trusting the test certificate (this VM only)'
-    $cer = Join-Path $here 'viaduct-test.cer'
+    $cer = Join-Path $here 'pattie-test.cer'
     # certutil rather than Import-Certificate: the latter is refused with
     # E_ACCESSDENIED for the machine Root store on recent Windows 11, even elevated.
     foreach ($store in 'Root', 'TrustedPublisher') {
@@ -64,18 +64,18 @@ if ($Signed) {
     }
 }
 
-Write-Host '== Installing the driver (viaduct-cli install, ADR 0016)'
-& (Join-Path $here 'viaduct-cli.exe') install $package
+Write-Host '== Installing the driver (pattie-cli install, ADR 0016)'
+& (Join-Path $here 'pattie-cli.exe') install $package
 $installExit = $LASTEXITCODE
 # 3010: installed, finished at the next restart (an app holds a Device; ADR 0024).
-if ($installExit -notin 0, 3010) { throw "viaduct-cli install failed ($installExit)" }
+if ($installExit -notin 0, 3010) { throw "pattie-cli install failed ($installExit)" }
 if ($installExit -eq 3010) { Write-Host '== Exit 3010: Windows finishes the update at the next restart' }
 
 if ($Verifier) {
-    Write-Host '== Turning on Driver Verifier for viaduct.sys'
-    & verifier /standard /driver viaduct.sys
+    Write-Host '== Turning on Driver Verifier for pattie.sys'
+    & verifier /standard /driver pattie.sys
     Write-Host 'Reboot the VM for Driver Verifier to take effect.'
 }
 
 Write-Host ''
-Write-Host 'Installed. Next: .\viaduct-cli.exe mic "Agent Mic"   (checks in platforms/windows/driver/README.md)'
+Write-Host 'Installed. Next: .\pattie-cli.exe mic "Agent Mic"   (checks in platforms/windows/driver/README.md)'

@@ -5,7 +5,7 @@
 .DESCRIPTION
     Prints, using the Windows Performance Toolkit's xperf.exe (installed with the
     Driver Kit):
-      1. the driver's own events ("Viaduct.Driver"): stream format, packet size,
+      1. the driver's own events ("Pattie.Driver"): stream format, packet size,
          and per stream the timer's late passes, stalls skipped and lateness plus the Ring's Gap
          and Overflow totals (src/trace.h);
       2. for a -cpu.etl recording, the DPC/ISR summary, with the lines for
@@ -28,7 +28,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $xperf = 'C:\Program Files (x86)\Windows Kits\10\Windows Performance Toolkit\xperf.exe'
-$provider = '{a97790c8-3349-54e2-c7f3-9ad24f60a4ce}' # "Viaduct.Driver" (src/trace.c)
+. (Join-Path $PSScriptRoot 'trace-provider.ps1')
+$provider = $PattieProvider
 
 if (-not (Test-Path $xperf)) { throw "Missing xperf.exe: $xperf (installed with the Driver Kit)" }
 if (-not (Test-Path $Path)) { throw "No such trace: $Path" }
@@ -55,9 +56,9 @@ function Invoke-Xperf([string[]]$Arguments) {
     }
 }
 
-Write-Host '== Viaduct driver events'
+Write-Host '== Pattie driver events'
 $events = Invoke-Xperf @('-i', "`"$Path`"", '-a', 'dumper', '-provider', $provider, '-add_fieldnames')
-$ours = $events | Where-Object { $_ -match 'Viaduct\.Driver|a97790c8' }
+$ours = $events | Where-Object { $_ -match "$([regex]::Escape($PattieProviderName))|$($provider.Trim('{}'))" }
 if (-not $ours) {
     Write-Host '   (none: was the driver loaded and a stream started while recording?)'
 } else {
@@ -69,12 +70,12 @@ if ($dpc -match 'DPC') {
     Write-Host '== DPC/ISR summary'
     $dpc | Where-Object { $_.Trim() } | Select-Object -First 60 | ForEach-Object { '   ' + $_ }
     # The stream timer is a WDF high-resolution timer, which runs on the kernel's
-    # own timers: its DPCs are counted under ntoskrnl.exe, not viaduct.sys or
+    # own timers: its DPCs are counted under ntoskrnl.exe, not pattie.sys or
     # Wdf01000.sys (seen 2026-11-07). Estimate the driver's share against a
     # recording with no stream running: extra DPCs (about 100/s per stream, one
     # per 10 ms packet) and the rise in ntoskrnl's DPC time.
-    Write-Host '== DPC lines for ntoskrnl.exe (the stream timer), viaduct.sys and Wdf01000.sys'
-    $dpc | Select-String -Pattern 'ntoskrnl|viaduct|Wdf01000' | ForEach-Object { '   ' + $_.Line.Trim() }
+    Write-Host '== DPC lines for ntoskrnl.exe (the stream timer), pattie.sys and Wdf01000.sys'
+    $dpc | Select-String -Pattern 'ntoskrnl|pattie|Wdf01000' | ForEach-Object { '   ' + $_.Line.Trim() }
     $dpc | Select-String -Pattern '^Total = \d+$' | Select-Object -First 1 | ForEach-Object { '   DPCs in the whole trace: ' + $_.Line.Trim() }
 } else {
     Write-Host '== No DPC/ISR data (only -cpu.etl recordings have it).'

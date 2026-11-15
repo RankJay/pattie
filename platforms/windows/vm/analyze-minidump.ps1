@@ -3,7 +3,7 @@
     Reads a guest crash minidump on the host, cheaply. Runs on the host.
 
 .DESCRIPTION
-    Prints the bug check, which viaduct.sys build was loaded, and the driver frames
+    Prints the bug check, which pattie.sys build was loaded, and the driver frames
     (with source lines) on the crashing thread's stack, using only the WDK's kd and
     the driver's own symbols from target\driver\x64\<Configuration>.
 
@@ -66,7 +66,7 @@ function Invoke-Kd([string]$Commands) {
     }
 }
 
-$first = Invoke-Kd '.bugcheck; .echo ===LM; lmvm viaduct'
+$first = Invoke-Kd '.bugcheck; .echo ===LM; lmvm pattie'
 $bugcheck = $first | Select-String -Pattern '^Bugcheck code\s+([0-9A-Fa-f]+)' | Select-Object -First 1
 $arguments = $first | Select-String -Pattern '^Arguments\s+(.+)$' | Select-Object -First 1
 if (-not $bugcheck) { $first; throw 'kd did not report a bug check; is this a kernel minidump?' }
@@ -84,12 +84,12 @@ $context = switch ($code) {
     0x3B { ".cxr 0x$($args4[2])" }   # SYSTEM_SERVICE_EXCEPTION: context record
     default { '' }
 }
-$second = Invoke-Kd "$context; .lines -e; .reload /f viaduct.sys; .echo ===REGS; r; .echo ===STACK; dps @rsp L200"
+$second = Invoke-Kd "$context; .lines -e; .reload /f pattie.sys; .echo ===REGS; r; .echo ===STACK; dps @rsp L200"
 
 Write-Host '== Faulting instruction'
 $second | Select-String -Pattern '^[A-Za-z0-9_]+(!\w+)?\+0x[0-9a-f]+:$|^[A-Za-z0-9_]+!\S+:$|^fffff[0-9a-f`]+\s+[0-9a-f]+\s+\w+' |
     Select-Object -First 2 | ForEach-Object { '   ' + $_.Line.Trim() }
 
 Write-Host '== Driver frames on the stack (newest first; values below the crash frame can be stale)'
-$second | Select-String -Pattern '^[0-9a-f`]+\s+[0-9a-f`]+\s+(viaduct|Acx01000|Wdf01000)' |
+$second | Select-String -Pattern '^[0-9a-f`]+\s+[0-9a-f`]+\s+(pattie|Acx01000|Wdf01000)' |
     Select-Object -First 25 | ForEach-Object { '   ' + $_.Line.Trim() }

@@ -1,0 +1,163 @@
+# On a version tag (v<a.b.c.d>, the driver's DriverVer): build the driver package,
+# the attestation cab, pattie-cli for Windows and Linux, and the Python wheels,
+# and attach them to a draft GitHub Release. Nothing goes to PyPI from here. Nothing is signed here: the cab still goes through EV
+# signing and Partner Center by hand (.ai/ops/vm-steps.md, section H).
+name: Release
+
+on:
+  push:
+    tags: ["v[0-9]*.[0-9]*.[0-9]*.[0-9]*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Driver version, four numbers (e.g. 0.1.0.0)"
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - id: version
+        env:
+          INPUT: ${{ inputs.version }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="${INPUT:-${TAG#v}}"
+          [[ "$version" =~ ^[0-9]{1,5}(\.[0-9]{1,5}){3}$ ]] || { echo "Not a.b.c.d: $version"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  driver:
+    name: Driver package and attestation cab
+    needs: version
+    runs-on: windows-2025-vs2026
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore the WDK and SDK from NuGet
+        run: nuget restore platforms/windows/driver/packages.config -PackagesDirectory target/nuget -NonInteractive
+      - name: Build the driver and the cab
+        shell: pwsh
+        run: ./platforms/windows/release/make-attestation-cab.ps1 -Version '${{ needs.version.outputs.version }}' -WdkNuGet
+      - name: Collect the unsigned driver package
+        shell: pwsh
+        run: |
+          $package = 'target/release-files/pattie-driver-${{ needs.version.outputs.version }}-x64-unsigned'
+          New-Item -ItemType Directory -Force $package | Out-Null
+          Copy-Item target/driver/x64/Release/pattie.inf, target/driver/x64/Release/pattie.sys, target/driver/x64/Release/pattie.pdb $package
+          Compress-Archive "$package/*" "$package.zip"
+          Copy-Item target/attestation/*.cab target/release-files/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: driver
+          path: |
+            target/release-files/*.zip
+            target/release-files/*.cab
+
+  cli:
+    name: pattie-cli (${{ matrix.os }})
+    needs: version
+    strategy:
+      matrix:
+        include:
+          - os: windows
+            runner: windows-2025-vs2026
+            binary: pattie-cli.exe
+          - os: linux
+            runner: ubuntu-24.04
+            binary: pattie-cli
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Point bindgen at libclang (Windows)
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -prerelease -property installationPath
+          $dir = Join-Path $vs 'VC\Tools\Llvm\x64\bin'
+          if (-not (Test-Path (Join-Path $dir 'libclang.dll'))) { $dir = 'C:\Program Files\LLVM\bin' }
+          "LIBCLANG_PATH=$dir" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+      - name: Build
+        run: cargo build --release -p pattie-cli
+      - name: Name it for the release
+        shell: bash
+        run: |
+          mkdir -p target/release-files
+          cp "target/release/${{ matrix.binary }}" \
+            "target/release-files/${{ matrix.os }}-${{ matrix.binary }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.os }}
+          path: target/release-files/*
+
+  wheels:
+    name: Python wheel (${{ matrix.os }} ${{ matrix.arch }})
+    needs: version
+    strategy:
+      matrix:
+        include:
+          - os: windows
+            arch: x64
+            runner: windows-2025-vs2026
+            target: x86_64-pc-windows-msvc
+          - os: linux
+            arch: x64
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - os: linux
+            arch: arm64
+            runner: ubuntu-24.04-arm # built natively: no cross compiler for the C core
+            target: aarch64-unknown-linux-gnu
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      # One abi3 wheel per platform serves every CPython from 3.14 on. The
+      # test backend stays out: plain features only.
+      - uses: PyO3/maturin-action@v1
+        with:
+          working-directory: bindings/python
+          target: ${{ matrix.target }}
+          manylinux: "2_28"
+          args: --release --out ../../target/release-files
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.os }}-${{ matrix.arch }}
+          path: target/release-files/*.whl
+
+  release:
+    name: Draft release
+    needs: [version, driver, cli, wheels]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # create the release
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: files
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.version.outputs.version }}
+          name: Pattie ${{ needs.version.outputs.version }}
+          draft: true
+          files: files/*
+          body: |
+            Built by release.yml. Draft until checked:
+
+            - `pattie-driver-*-x64-unsigned.zip`: the driver package (inf, sys, pdb), unsigned.
+            - `pattie-*.cab`: the attestation cab. Sign it with the EV certificate, submit it
+              in Partner Center, then run the gate (.ai/ops/vm-steps.md, section H).
+            - `windows-pattie-cli.exe`, `linux-pattie-cli`: the test tool.
+            - `pattie-*.whl`: the Python package (CPython 3.14+), for
+              Windows x64 and Linux x64/arm64. Not on PyPI yet.
