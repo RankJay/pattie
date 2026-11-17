@@ -68,7 +68,7 @@ void pattie_core_init(pattie_core *core);
 void pattie_owner_init(pattie_owner *owner);
 
 /*
- * Seam A: the control path. Runs one command exactly as the SDK sent it.
+ * Commands. Runs one command exactly as the SDK sent it.
  *
  * For Create Device, the shell first pins the memory named by the request's
  * ring_address and ring_bytes (ADR 0006) and passes it as ring_memory and
@@ -83,7 +83,7 @@ pattie_status pattie_core_command(pattie_core *core, pattie_owner *owner, uint32
                           void *output, size_t output_cap, size_t *output_len);
 
 /*
- * Seam A, continued: the Owner's handle closed (crash included). Removes every
+ * Commands, continued: the Owner's handle closed (crash included). Removes every
  * Device it owned, writes their IDs to `removed` and returns how many, so the
  * shell can tear the Devices down and unpin their Rings. The Owner is marked
  * closed: a command of its still queued or in flight when the handle closed is
@@ -122,7 +122,7 @@ uint64_t pattie_stable_id(uint32_t kind, const uint16_t *name, uint32_t name_len
                       uint32_t sample_rate, uint32_t channels);
 
 /*
- * Seam B: the Ring, driver side. Attaches to a Ring the SDK laid out at `memory`,
+ * The Ring, driver side. Attaches to a Ring the SDK laid out at `memory`,
  * reading its capacity, sample rate and channels once: one of the PATTIE_RATE_*
  * rates, 1 to PATTIE_RING_MAX_CHANNELS channels (zeros mean 48 kHz mono), and memory
  * for the whole capacity of frames. Counts everywhere below are in frames.
@@ -150,7 +150,7 @@ void pattie_ring_publish_read_clock(pattie_ring *ring, uint64_t now_ns);
 void pattie_ring_publish_write_clock(pattie_ring *ring, uint64_t now_ns);
 
 /*
- * Seam B, Windows-facing format (ADR 0005): Windows' audio endpoint builder needs a
+ * The Ring in Windows' format (ADR 0005): Windows' audio endpoint builder needs a
  * PCM device format, while the Ring and the app stay 32-bit float. Samples are
  * converted with integer arithmetic on their IEEE-754 bit patterns, so the driver
  * still has no floating-point code; samples cross this interface as bits.
@@ -181,26 +181,26 @@ uint64_t pattie_ring_skip_stale(pattie_ring *ring, uint32_t keep_frames);
 void pattie_ring_losses(const pattie_ring *ring, uint64_t *gap_frames, uint64_t *overflow_frames);
 
 /*
- * Seam C: the clock. Frames a Device has played between two tick readings
+ * The clock. Frames a Device has played between two tick readings
  * the shell took (ticks at `tick_hz`), at `sample_rate` frames per second.
  */
 uint64_t pattie_clock_frames(uint64_t start_ticks, uint64_t now_ticks,
                          uint64_t tick_hz, uint32_t sample_rate);
 
 /*
- * Seam C: a tick reading at `tick_hz` in nanoseconds, rounded down: the unit a
+ * The clock: a tick reading at `tick_hz` in nanoseconds, rounded down: the unit a
  * Ring's clock pair is published in (ADR 0022).
  */
 uint64_t pattie_clock_ns(uint64_t ticks, uint64_t tick_hz);
 
 /*
- * Seam C, inverse: the fewest ticks after the start at which pattie_clock_frames
+ * The clock, inverse: the fewest ticks after the start at which pattie_clock_frames
  * reaches `frames`. The shell schedules packet completions with it.
  */
 uint64_t pattie_clock_ticks_for(uint64_t frames, uint64_t tick_hz, uint32_t sample_rate);
 
 /*
- * Seam C, scheduling: when the pass completing packet `packets_done + 1` is due
+ * The clock, scheduling: when the pass completing packet `packets_done + 1` is due
  * (*due_ticks), counted from the stream's start (*start_ticks), for packets of
  * `packet_frames`. A stream a few passes behind catches up on its schedule. One
  * with more than `max_behind` passes already due was stalled (a sleep, a

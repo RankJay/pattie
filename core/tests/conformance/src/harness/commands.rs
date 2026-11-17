@@ -91,7 +91,8 @@ impl Harness {
     /// The Owner's handle closes; returns the removed Device IDs, sorted.
     pub fn close(&mut self, owner: OwnerRef) -> Vec<u32> {
         let mut removed = [0u32; PATTIE_MAX_DEVICES as usize];
-        // SAFETY: core and owner are live; `removed` holds PATTIE_MAX_DEVICES IDs, the most the core reports.
+        // SAFETY: core and owner are live; `removed` holds PATTIE_MAX_DEVICES IDs, the most the
+        // core reports.
         let count = unsafe {
             pattie_core_owner_closed(
                 &mut *self.core,

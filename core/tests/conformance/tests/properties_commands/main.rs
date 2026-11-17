@@ -1,4 +1,4 @@
-//! Seam A, by property (ADR 0008): random sequences of commands from several apps,
+//! The Commands, by property (ADR 0008): random sequences of commands from several apps,
 //! well-formed or not, checked step by step against a model of the rules.
 //!
 //! After every step the core's status must be the model's, and its live Device
@@ -87,7 +87,8 @@ fn op() -> impl Strategy<Value = Op> {
             .prop_map(|(owner, (major, minor))| Op::Hello { owner, major, minor }),
         6 => (
                 any::<u8>(),
-                prop_oneof![4 => Just(PATTIE_KIND_MICROPHONE), 4 => Just(PATTIE_KIND_SPEAKER), 1 => 0..=4u32],
+                prop_oneof![4 => Just(PATTIE_KIND_MICROPHONE), 4 => Just(PATTIE_KIND_SPEAKER), 1
+                    => 0..=4u32],
                 0..=LONGEST,
                 prop_oneof![
                     8 => Just(RingChoice::Valid),
@@ -100,7 +101,8 @@ fn op() -> impl Strategy<Value = Op> {
         1 => any::<u8>().prop_map(|owner| Op::Close { owner }),
         2 => (
                 any::<u8>(),
-                prop_oneof![Just(PATTIE_CMD_HELLO), Just(PATTIE_CMD_CREATE_DEVICE), Just(PATTIE_CMD_REMOVE_DEVICE), any::<u32>()],
+                prop_oneof![Just(PATTIE_CMD_HELLO), Just(PATTIE_CMD_CREATE_DEVICE),
+                    Just(PATTIE_CMD_REMOVE_DEVICE), any::<u32>()],
                 prop::collection::vec(any::<u8>(), 0..200),
             )
             // A random request of exactly the right size can't be modelled simply;

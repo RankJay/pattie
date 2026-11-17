@@ -22,6 +22,7 @@ use std::mem::size_of;
 
 /// The bytes of a plain C struct from the ABI, as the SDK would send them.
 pub fn as_bytes<T: Copy>(value: &T) -> &[u8] {
-    // SAFETY: callers pass ABI structs, which are plain integers without padding (the abi_mirror tests check their layout); the slice borrows `value`.
+    // SAFETY: callers pass ABI structs, which are plain integers without padding (the abi_mirror
+    // tests check their layout); the slice borrows `value`.
     unsafe { std::slice::from_raw_parts((value as *const T).cast(), size_of::<T>()) }
 }

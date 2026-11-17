@@ -1,5 +1,5 @@
 /*
- * Test-only probes for the ABI mirror check (Seam S2, ADR 0012): exposes header
+ * Test-only probes for the ABI mirror check (ADR 0012): exposes header
  * macros bindgen can't see, so the SDK's Rust mirror is compared with the real
  * C expansion rather than with a copy of the formula.
  */

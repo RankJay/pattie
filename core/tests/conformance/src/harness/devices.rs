@@ -20,7 +20,8 @@ impl Harness {
             return None;
         }
         let mut out = vec![0.0f32; count];
-        // SAFETY: `ring` is non-null and attached to memory in `self.rings`; `out` holds `count` frames.
+        // SAFETY: `ring` is non-null and attached to memory in `self.rings`; `out` holds `count`
+        // frames.
         unsafe { pattie_ring_read(ring, out.as_mut_ptr(), count as u32) };
         Some(out)
     }

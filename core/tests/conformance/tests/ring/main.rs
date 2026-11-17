@@ -1,4 +1,4 @@
-//! Seam B: the Ring (ADR 0007, ADR 0008).
+//! The Ring (ADR 0007, ADR 0008).
 
 use pattie_conformance::Ring;
 

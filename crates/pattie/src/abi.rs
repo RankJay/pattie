@@ -2,7 +2,7 @@
 //!
 //! Hand-written so apps don't need libclang to build. The core tests (core/tests) check
 //! every size, offset and constant here against bindgen's reading of the header,
-//! so the two can't drift silently (Seam S2). Within a major version the header
+//! so the two can't drift silently. Within a major version the header
 //! only grows (ADR 0003): mirror additions, never change what's here.
 
 #![allow(dead_code)] // the mirror is complete on purpose; not every item is used yet

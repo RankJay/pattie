@@ -95,7 +95,8 @@ impl RingMemory {
     }
 
     pub fn header(&self) -> &pattie_ring_header {
-        // SAFETY: `words` always backs a whole header, 8-byte aligned (`with_claim`); the header is plain integers.
+        // SAFETY: `words` always backs a whole header, 8-byte aligned (`with_claim`); the header is
+        // plain integers.
         unsafe { &*self.words.as_ptr().cast::<pattie_ring_header>() }
     }
 
@@ -125,7 +126,8 @@ impl RingMemory {
     }
 
     fn frames(&mut self) -> *mut f32 {
-        // SAFETY: `words` backs at least the header, so the result is in bounds or one past the end.
+        // SAFETY: `words` backs at least the header, so the result is in bounds or one past the
+        // end.
         unsafe {
             self.words
                 .as_mut_ptr()

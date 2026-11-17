@@ -1,4 +1,4 @@
-//! Seam S2 (ADR 0012): the SDK's hand-written ABI mirror matches the C header,
+//! The SDK's hand-written ABI mirror matches the C header (ADR 0012),
 //! as bindgen reads it. Any drift between driver and SDK fails here.
 
 use pattie::abi as rust;

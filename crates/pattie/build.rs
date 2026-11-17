@@ -40,5 +40,5 @@ fn main() {
             }
         }
     }
-    build.compile("pattie_core_host");
+    build.compile("pattie_in_process_core");
 }

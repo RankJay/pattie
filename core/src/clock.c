@@ -43,7 +43,8 @@ bool pattie_clock_next_pass(uint64_t *start_ticks, uint64_t packets_done, uint32
     /* The pass `max_behind` packets after this one: if even it is due, more than
      * `max_behind` passes are, and the stream was stalled. */
     uint64_t last_catchable_ticks =
-        pattie_clock_ticks_for(next_frames + (uint64_t)max_behind * packet_frames, tick_hz, sample_rate);
+        pattie_clock_ticks_for(next_frames + (uint64_t)max_behind * packet_frames, tick_hz,
+            sample_rate);
     uint64_t elapsed = now_ticks - *start_ticks; /* unsigned: survives tick wrap */
     bool slipped = elapsed >= last_catchable_ticks;
 

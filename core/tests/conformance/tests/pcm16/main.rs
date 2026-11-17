@@ -1,4 +1,4 @@
-//! Seam B, Windows-facing format: float samples to and from 16-bit PCM with
+//! The Ring in Windows' format: float samples to and from 16-bit PCM with
 //! integer-only arithmetic (ADR 0005, ADR 0008).
 
 use pattie_conformance::ffi::*;
@@ -18,7 +18,7 @@ fn from_pcm16(pcm: i16) -> u32 {
 
 /// The SDK converts 16-bit PCM in user space (`pattie::Converter`, ADR 0019) and
 /// the driver in the kernel (`core/src/pcm16.c`): one rule, so audio converted on
-/// either side comes out the same (architecture review 2026-11-09, candidate 6).
+/// either side comes out the same.
 mod the_sdk_converter_agrees_with_the_core {
     use super::*;
     use pattie::{Converter, Encoding, Format};

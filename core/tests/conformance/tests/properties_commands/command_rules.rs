@@ -162,7 +162,8 @@ proptest! {
                     let Some(i) = model.open_owner(owner) else { continue };
                     let (request, units, name_len) = request_for(kind, name);
                     let expected = model.create(i, kind, &units, name_len, ring);
-                    let got = driver.create_device_with(model.owners[i], request, ring_for(ring), 256);
+                    let got = driver.create_device_with(model.owners[i], request, ring_for(ring),
+                        256);
                     match got {
                         Ok(id) => {
                             prop_assert_eq!(expected, PATTIE_OK);

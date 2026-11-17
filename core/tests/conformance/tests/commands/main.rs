@@ -1,4 +1,4 @@
-//! Seam A: the control path (ADR 0008).
+//! The Commands an app sends, and what the Core answers (ADR 0008).
 
 use pattie_conformance::ffi::*;
 

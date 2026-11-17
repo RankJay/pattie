@@ -1,4 +1,4 @@
-//! Seam B, by property (ADR 0007, ADR 0008): random sequences on one Ring.
+//! The Ring, by property (ADR 0007, ADR 0008): random sequences on one Ring.
 //!
 //! - Microphone: an app that writes as much as it likes (overrunning the Ring)
 //!   while the driver reads, in float or PCM16, and skips stale audio at
@@ -113,4 +113,37 @@ fn hostile_op() -> impl Strategy<Value = HostileOp> {
         1 => (0..1100usize).prop_map(HostileOp::DriverWritePcm16),
         1 => (0..1100u32).prop_map(HostileOp::SkipStale),
     ]
+}
+
+/// The driver's side of a Microphone Ring, as ADR 0007 describes it.
+struct MicModel {
+    capacity: u64,
+    written: u64,
+    read: u64,
+    gap: u64,
+}
+
+impl MicModel {
+    /// Frames `read(count)` delivers (`None` is silence), updating the counters.
+    fn read(&mut self, count: usize) -> Vec<Option<u64>> {
+        let mut available = self.written - self.read;
+        if available > self.capacity {
+            self.read = self.written - self.capacity; // overrun: oldest intact frame
+            available = self.capacity;
+        }
+        let taken = available.min(count as u64);
+        let out = (0..count as u64)
+            .map(|i| (i < taken).then_some(self.read + i))
+            .collect();
+        self.read += taken;
+        self.gap += count as u64 - taken;
+        out
+    }
+
+    fn skip_stale(&mut self, keep: u32) {
+        let keep = u64::from(keep).min(self.capacity);
+        if self.written - self.read > keep {
+            self.read = self.written - keep;
+        }
+    }
 }

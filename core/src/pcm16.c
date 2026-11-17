@@ -8,8 +8,8 @@
  */
 #include "pattie_core.h"
 
-#define PATTIE_PCM16_MAX 32767
-#define PATTIE_PCM16_MIN (-32767 - 1)
+#define PCM16_MAX 32767
+#define PCM16_MIN (-32767 - 1)
 
 int16_t pattie_pcm16_from_sample(uint32_t sample_bits)
 {
@@ -39,9 +39,9 @@ int16_t pattie_pcm16_from_sample(uint32_t sample_bits)
     }
 
     if (negative) {
-        return magnitude >= 32768u ? (int16_t)PATTIE_PCM16_MIN : (int16_t)-(int32_t)magnitude;
+        return magnitude >= 32768u ? (int16_t)PCM16_MIN : (int16_t)-(int32_t)magnitude;
     }
-    return magnitude >= (uint32_t)PATTIE_PCM16_MAX ? (int16_t)PATTIE_PCM16_MAX : (int16_t)magnitude;
+    return magnitude >= (uint32_t)PCM16_MAX ? (int16_t)PCM16_MAX : (int16_t)magnitude;
 }
 
 uint32_t pattie_sample_from_pcm16(int16_t pcm)

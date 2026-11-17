@@ -1,6 +1,7 @@
-//! Seam S2 for the Linux backend's calls (ADR 0012, ADR 0018): the SDK declares
-//! the C core's functions by hand (crates/pattie/src/sys/core_functions.rs), so apps build without libclang. This includes that same file
-//! next to bindgen's reading of pattie_core.h and checks every declaration
+//! The In-process core's calls (ADR 0012, ADR 0018): the SDK declares the C core's
+//! functions by hand (crates/pattie/src/sys/core_functions.rs), so apps build without
+//! libclang. This includes that same file next to bindgen's reading of pattie_core.h
+//! and checks every declaration
 //! against it. A mismatch doesn't compile: the types below differ, and rustc's
 //! `clashing_extern_declarations` lint, denied here, names the function.
 

@@ -14,7 +14,7 @@ pub struct RingCounters {
     pub overflow: u64,
 }
 
-/// A standalone Ring for Seam B tests: app memory with the core attached.
+/// A standalone Ring for the Ring tests: app memory with the core attached.
 /// `app_*` methods do what the SDK does; `driver_*` methods call the core.
 pub struct Ring {
     memory: RingMemory,
@@ -69,9 +69,11 @@ impl Ring {
 
     fn attach_memory(mut memory: RingMemory) -> Result<Self, pattie_status> {
         let memory_len = memory.len();
-        // SAFETY: a plain C struct of integers and pointers: all zeros is a valid value, set up by the init call next.
+        // SAFETY: a plain C struct of integers and pointers: all zeros is a valid value, set up by
+        // the init call next.
         let mut view = Box::new(unsafe { MaybeUninit::<pattie_ring>::zeroed().assume_init() });
-        // SAFETY: `view` is borrowed exclusively; the pointer and length describe `memory`, whose heap buffer `Ring` keeps alive with the view.
+        // SAFETY: `view` is borrowed exclusively; the pointer and length describe `memory`, whose
+        // heap buffer `Ring` keeps alive with the view.
         let status = unsafe { pattie_ring_attach(&mut *view, memory.as_mut_ptr(), memory_len) };
         if status != PATTIE_OK {
             return Err(status);
@@ -114,7 +116,8 @@ impl Ring {
     /// The driver puts frames in, as Windows plays audio to a Speaker.
     pub fn system_write(&mut self, src: &[f32]) {
         let frames = self.whole_frames(src.len());
-        // SAFETY: `view` was attached to `self.memory`, which lives as long as it; the slice holds `frames` whole frames.
+        // SAFETY: `view` was attached to `self.memory`, which lives as long as it; the slice holds
+        // `frames` whole frames.
         unsafe { pattie_ring_write(&mut *self.view, src.as_ptr(), frames) };
     }
 
@@ -139,7 +142,8 @@ impl Ring {
     /// The driver takes frames out, as Windows pulls audio from a Microphone.
     pub fn system_read(&mut self, dst: &mut [f32]) {
         let frames = self.whole_frames(dst.len());
-        // SAFETY: `view` was attached to `self.memory`, which lives as long as it; the slice holds `frames` whole frames.
+        // SAFETY: `view` was attached to `self.memory`, which lives as long as it; the slice holds
+        // `frames` whole frames.
         unsafe { pattie_ring_read(&mut *self.view, dst.as_mut_ptr(), frames) };
     }
 

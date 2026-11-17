@@ -51,7 +51,8 @@ fn conversion_matches_a_float_reference_across_the_whole_bit_space() {
         .chain(near_full_scale)
         .filter(
             // SAFETY: a pure C function of plain integers: no pointers, no state.
-            |&bits| unsafe { pattie_pcm16_from_sample(bits) } != reference_pcm16(f32::from_bits(bits)),
+            |&bits| unsafe { pattie_pcm16_from_sample(bits) }
+                != reference_pcm16(f32::from_bits(bits)),
         )
         .collect();
 

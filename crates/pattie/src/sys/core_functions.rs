@@ -16,9 +16,17 @@ unsafe extern "C" {
         output_cap: usize,
         output_len: *mut usize,
     ) -> u32;
-    pub(crate) fn pattie_core_owner_closed(core: *mut RawCore, owner: *mut RawOwner, removed: *mut u32) -> usize;
+    pub(crate) fn pattie_core_owner_closed(
+        core: *mut RawCore,
+        owner: *mut RawOwner,
+        removed: *mut u32,
+    ) -> usize;
     pub(crate) fn pattie_core_device_ring(core: *mut RawCore, device_id: u32) -> *mut RawRing;
-    pub(crate) fn pattie_core_device_info(core: *const RawCore, device_id: u32, info: *mut DeviceInfo) -> bool;
+    pub(crate) fn pattie_core_device_info(
+        core: *const RawCore,
+        device_id: u32,
+        info: *mut DeviceInfo,
+    ) -> bool;
     pub(crate) fn pattie_ring_channels(ring: *const RawRing) -> u32;
     #[cfg_attr(
         not(target_os = "linux"),

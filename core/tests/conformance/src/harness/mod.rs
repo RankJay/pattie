@@ -32,7 +32,8 @@ pub struct Harness {
 
 impl Harness {
     pub fn new() -> Self {
-        // SAFETY: a plain C struct of integers and pointers: all zeros is a valid value, set up by the init call next.
+        // SAFETY: a plain C struct of integers and pointers: all zeros is a valid value, set up by
+        // the init call next.
         let mut core = Box::new(unsafe { MaybeUninit::<pattie_core>::zeroed().assume_init() });
         // SAFETY: `core` is a live pattie_core, borrowed exclusively.
         unsafe { pattie_core_init(&mut *core) };
@@ -45,7 +46,8 @@ impl Harness {
 
     /// Opens a new Owner connection.
     pub fn connect(&mut self) -> OwnerRef {
-        // SAFETY: a plain C struct of integers and pointers: all zeros is a valid value, set up by the init call next.
+        // SAFETY: a plain C struct of integers and pointers: all zeros is a valid value, set up by
+        // the init call next.
         let mut owner = Box::new(unsafe { MaybeUninit::<pattie_owner>::zeroed().assume_init() });
         // SAFETY: `owner` is a live pattie_owner, borrowed exclusively.
         unsafe { pattie_owner_init(&mut *owner) };
@@ -78,7 +80,9 @@ impl Harness {
         };
         let mut output = vec![0u8; reply_capacity];
         let mut output_len = 0usize;
-        // SAFETY: core and owner are live and borrowed exclusively; each buffer goes with its own length. A Ring's heap buffer doesn't move when `create_device_with` stores it in `self.rings`, where it stays alive like pinned memory.
+        // SAFETY: core and owner are live and borrowed exclusively; each buffer goes with its own
+        // length. A Ring's heap buffer doesn't move when `create_device_with` stores it in
+        // `self.rings`, where it stays alive like pinned memory.
         let status = unsafe {
             pattie_core_command(
                 &mut *self.core,
