@@ -1,7 +1,6 @@
 /*
- * A Device's whole lifecycle in the shell (ADR 0010; architecture review
- * 2026-11-09, candidate 5): the slot beside the core's table, the core's create
- * and remove, the stable ID's claim, the circuit device (one raw child of the
+ * A Device's whole lifecycle in the shell (ADR 0010): the slot beside the core's
+ * table, the core's create and remove, the stable ID's claim, the circuit device (one raw child of the
  * root per live Device), and the undo when a step fails. control.c is only the
  * transport that calls in here; the circuit is built in circuit.c and its audio
  * interface values are written in interfaces.c. Every entry point runs under
@@ -19,15 +18,15 @@
  */
 #include "shell.h"
 
-static EVT_WDF_DEVICE_PREPARE_HARDWARE PattieEvtCircuitDevicePrepareHardware;
-static EVT_WDF_OBJECT_CONTEXT_CLEANUP PattieEvtCircuitDeviceCleanup;
+static EVT_WDF_DEVICE_PREPARE_HARDWARE EvtCircuitDevicePrepareHardware;
+static EVT_WDF_OBJECT_CONTEXT_CLEANUP EvtCircuitDeviceCleanup;
 
 /* Hardware ID; the INF matches it to install the child's null driver. */
-DECLARE_CONST_UNICODE_STRING(PattieCircuitDeviceId, L"Pattie\\Endpoint");
+DECLARE_CONST_UNICODE_STRING(CircuitDeviceId, L"Pattie\\Endpoint");
 
 /* How long Create waits for an earlier child with the same stable ID to go. */
-#define PATTIE_CHILD_ID_WAIT_MS 2000u
-#define PATTIE_CHILD_ID_POLL_MS 10u
+#define CHILD_ID_WAIT_MS 2000u
+#define CHILD_ID_POLL_MS 10u
 
 /*
  * A child's stable ID is the core's (pattie_stable_id, ADR 0015): the same Device
@@ -39,7 +38,7 @@ DECLARE_CONST_UNICODE_STRING(PattieCircuitDeviceId, L"Pattie\\Endpoint");
  * with that ID still exists, however far its removal has got: two siblings with
  * one instance ID would bugcheck PnP. Called under the driver lock.
  */
-static BOOLEAN PattieChildIdTryClaim(PATTIE_DRIVER_CONTEXT *Ctx, ULONG64 Id)
+static BOOLEAN ChildIdTryClaim(DRIVER_CONTEXT *Ctx, ULONG64 Id)
 {
     volatile LONG64 *free = NULL;
 
@@ -58,7 +57,7 @@ static BOOLEAN PattieChildIdTryClaim(PATTIE_DRIVER_CONTEXT *Ctx, ULONG64 Id)
 }
 
 /* Releases Id once its child is gone (or was never created). Lock-free. */
-static VOID PattieChildIdRelease(PATTIE_DRIVER_CONTEXT *Ctx, ULONG64 Id)
+static VOID ChildIdRelease(DRIVER_CONTEXT *Ctx, ULONG64 Id)
 {
     for (ULONG i = 0; i < ARRAYSIZE(Ctx->ChildIds); i++) {
         if (InterlockedCompareExchange64(&Ctx->ChildIds[i], 0, (LONG64)Id) == (LONG64)Id) {
@@ -72,13 +71,13 @@ static VOID PattieChildIdRelease(PATTIE_DRIVER_CONTEXT *Ctx, ULONG64 Id)
  * being removed: an app that drops "Agent Mic" and creates it again at once gets
  * the same endpoint back a moment later instead of a failure.
  */
-static NTSTATUS PattieChildIdClaim(PATTIE_DRIVER_CONTEXT *Ctx, ULONG64 Id)
+static NTSTATUS ChildIdClaim(DRIVER_CONTEXT *Ctx, ULONG64 Id)
 {
     LARGE_INTEGER poll;
 
-    poll.QuadPart = -(LONGLONG)PATTIE_CHILD_ID_POLL_MS * 10000; /* relative, 100 ns units */
-    for (ULONG waited = 0; !PattieChildIdTryClaim(Ctx, Id); waited += PATTIE_CHILD_ID_POLL_MS) {
-        if (waited >= PATTIE_CHILD_ID_WAIT_MS) {
+    poll.QuadPart = -(LONGLONG)CHILD_ID_POLL_MS * 10000; /* relative, 100 ns units */
+    for (ULONG waited = 0; !ChildIdTryClaim(Ctx, Id); waited += CHILD_ID_POLL_MS) {
+        if (waited >= CHILD_ID_WAIT_MS) {
             return STATUS_DEVICE_BUSY;
         }
         (void)KeDelayExecutionThread(KernelMode, FALSE, &poll);
@@ -90,7 +89,7 @@ static NTSTATUS PattieChildIdClaim(PATTIE_DRIVER_CONTEXT *Ctx, ULONG64 Id)
  * Gives a Device the core just accepted its circuit device. On success the child
  * holds the stable ID until Windows deletes it; on failure nothing is left.
  */
-static NTSTATUS PattieCircuitDeviceAdd(PATTIE_DRIVER_CONTEXT *Ctx, UINT32 DeviceId, const pattie_device_info *Info,
+static NTSTATUS CircuitDeviceAdd(DRIVER_CONTEXT *Ctx, UINT32 DeviceId, const pattie_device_info *Info,
                                    PKEVENT WakeEvent, WDFDEVICE *CircuitDevice)
 {
     PWDFDEVICE_INIT init;
@@ -98,7 +97,7 @@ static NTSTATUS PattieCircuitDeviceAdd(PATTIE_DRIVER_CONTEXT *Ctx, UINT32 Device
     ACX_DEVICE_CONFIG acxConfig;
     WDF_PNPPOWER_EVENT_CALLBACKS pnpCallbacks;
     WDF_OBJECT_ATTRIBUTES attributes;
-    PATTIE_CIRCUIT_DEVICE_CONTEXT *deviceCtx;
+    CIRCUIT_DEVICE_CONTEXT *deviceCtx;
     DECLARE_UNICODE_STRING_SIZE(instanceId, 24); /* kind letter + 16 hex digits */
     UNICODE_STRING name;
     ULONG64 childId;
@@ -113,24 +112,24 @@ static NTSTATUS PattieCircuitDeviceAdd(PATTIE_DRIVER_CONTEXT *Ctx, UINT32 Device
 
     /* Claimed before the child exists; released by its cleanup, or below on failure. */
     childId = Info->stable_id;
-    status = PattieChildIdClaim(Ctx, childId);
+    status = ChildIdClaim(Ctx, childId);
     if (!NT_SUCCESS(status)) {
         return status;
     }
 
     init = WdfPdoInitAllocate(Ctx->Root);
     if (init == NULL) {
-        PattieChildIdRelease(Ctx, childId);
+        ChildIdRelease(Ctx, childId);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
     status = RtlUnicodeStringPrintf(&instanceId, L"%c%016I64x",
                                     Info->kind == PATTIE_KIND_MICROPHONE ? L'M' : L'S', childId);
     if (NT_SUCCESS(status)) {
-        status = WdfPdoInitAssignDeviceID(init, &PattieCircuitDeviceId);
+        status = WdfPdoInitAssignDeviceID(init, &CircuitDeviceId);
     }
     if (NT_SUCCESS(status)) {
-        status = WdfPdoInitAddHardwareID(init, &PattieCircuitDeviceId);
+        status = WdfPdoInitAddHardwareID(init, &CircuitDeviceId);
     }
     if (NT_SUCCESS(status)) {
         status = WdfPdoInitAssignInstanceID(init, &instanceId);
@@ -149,16 +148,16 @@ static NTSTATUS PattieCircuitDeviceAdd(PATTIE_DRIVER_CONTEXT *Ctx, UINT32 Device
     }
     if (!NT_SUCCESS(status)) {
         WdfDeviceInitFree(init);
-        PattieChildIdRelease(Ctx, childId);
+        ChildIdRelease(Ctx, childId);
         return status;
     }
 
     WDF_PNPPOWER_EVENT_CALLBACKS_INIT(&pnpCallbacks);
-    pnpCallbacks.EvtDevicePrepareHardware = PattieEvtCircuitDevicePrepareHardware;
+    pnpCallbacks.EvtDevicePrepareHardware = EvtCircuitDevicePrepareHardware;
     WdfDeviceInitSetPnpPowerEventCallbacks(init, &pnpCallbacks);
 
-    WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&attributes, PATTIE_CIRCUIT_DEVICE_CONTEXT);
-    attributes.EvtCleanupCallback = PattieEvtCircuitDeviceCleanup;
+    WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&attributes, CIRCUIT_DEVICE_CONTEXT);
+    attributes.EvtCleanupCallback = EvtCircuitDeviceCleanup;
     /*
      * Default execution level, unlike the XU sample's passive one: our streams run
      * a DISPATCH-level, automatically serialized timer under this device, which
@@ -168,11 +167,11 @@ static NTSTATUS PattieCircuitDeviceAdd(PATTIE_DRIVER_CONTEXT *Ctx, UINT32 Device
     status = WdfDeviceCreate(&init, &attributes, &device);
     if (!NT_SUCCESS(status)) {
         WdfDeviceInitFree(init);
-        PattieChildIdRelease(Ctx, childId);
+        ChildIdRelease(Ctx, childId);
         return status;
     }
 
-    deviceCtx = PattieCircuitDeviceContext(device);
+    deviceCtx = CircuitDeviceContext(device);
     deviceCtx->ChildId = childId; /* from here on, the device's cleanup releases it */
     deviceCtx->DeviceId = DeviceId;
     deviceCtx->Kind = Info->kind;
@@ -191,7 +190,7 @@ static NTSTATUS PattieCircuitDeviceAdd(PATTIE_DRIVER_CONTEXT *Ctx, UINT32 Device
     status = AcxDeviceInitialize(device, &acxConfig);
     if (NT_SUCCESS(status)) {
         /* Created with the device, before ACX sees it (Microsoft's pattern). */
-        status = PattieCircuitCreate(device, deviceCtx);
+        status = CircuitCreate(device, deviceCtx);
     }
     if (NT_SUCCESS(status)) {
         status = AcxDeviceAddCircuitDevice(Ctx->Root, device);
@@ -202,8 +201,8 @@ static NTSTATUS PattieCircuitDeviceAdd(PATTIE_DRIVER_CONTEXT *Ctx, UINT32 Device
     }
 
     /* With CircuitPrepared, times how long Windows takes to start the child. */
-    TraceLoggingWrite(PattieTraceProvider, "CircuitDeviceAdded",
-                      TraceLoggingLevel(PATTIE_TRACE_LEVEL_INFO),
+    TraceLoggingWrite(TraceProvider, "CircuitDeviceAdded",
+                      TraceLoggingLevel(TRACE_LEVEL_INFO),
                       TraceLoggingUInt32(DeviceId, "DeviceId"),
                       TraceLoggingUInt32(Info->kind, "Kind"));
     *CircuitDevice = device;
@@ -214,22 +213,22 @@ static NTSTATUS PattieCircuitDeviceAdd(PATTIE_DRIVER_CONTEXT *Ctx, UINT32 Device
  * The core already dropped the Device. Called under the driver lock, so the core
  * can't reuse its slot until the Ring is safely unpinned (ADR 0010).
  */
-static VOID PattieDeviceTeardown(PATTIE_DRIVER_CONTEXT *Ctx, UINT32 DeviceId)
+static VOID DeviceTeardown(DRIVER_CONTEXT *Ctx, UINT32 DeviceId)
 {
     for (ULONG i = 0; i < PATTIE_MAX_DEVICES; i++) {
-        PATTIE_SLOT *slot = &Ctx->Slots[i];
+        SLOT *slot = &Ctx->Slots[i];
 
         if (slot->DeviceId != DeviceId) {
             continue;
         }
         if (slot->CircuitDevice != NULL) {
             /* 1. No new stream access; wait out any in-flight timer callback. */
-            ExWaitForRundownProtectionRelease(&PattieCircuitDeviceContext(slot->CircuitDevice)->Rundown);
+            ExWaitForRundownProtectionRelease(&CircuitDeviceContext(slot->CircuitDevice)->Rundown);
         }
         /* 2. Unpin before the app's process can finish exiting, and let go of its
          *    doorbell: no timer callback can set it any more. */
         if (slot->Mdl != NULL) {
-            PattieUnpinRing(slot->Mdl);
+            UnpinRing(slot->Mdl);
         }
         if (slot->WakeEvent != NULL) {
             ObDereferenceObject(slot->WakeEvent);
@@ -237,21 +236,21 @@ static VOID PattieDeviceTeardown(PATTIE_DRIVER_CONTEXT *Ctx, UINT32 DeviceId)
         /* 3. Ask Windows to remove the endpoint (asynchronous), unless it already did. */
         if (slot->CircuitDevice != NULL) {
             if (Ctx->Root != NULL &&
-                InterlockedCompareExchange(&PattieCircuitDeviceContext(slot->CircuitDevice)->Deleted, 0, 0) == 0) {
+                InterlockedCompareExchange(&CircuitDeviceContext(slot->CircuitDevice)->Deleted, 0, 0) == 0) {
                 (void)AcxDeviceRemoveCircuitDevice(Ctx->Root, slot->CircuitDevice);
             }
             WdfObjectDereference(slot->CircuitDevice); /* taken when the slot was filled */
         }
         RtlZeroMemory(slot, sizeof *slot);
-        TraceLoggingWrite(PattieTraceProvider, "CircuitDeviceRemoved",
-                          TraceLoggingLevel(PATTIE_TRACE_LEVEL_INFO),
+        TraceLoggingWrite(TraceProvider, "CircuitDeviceRemoved",
+                          TraceLoggingLevel(TRACE_LEVEL_INFO),
                           TraceLoggingUInt32(DeviceId, "DeviceId"));
         return;
     }
 }
 
 _Use_decl_annotations_
-pattie_status PattieDeviceCreate(PATTIE_DRIVER_CONTEXT *Ctx, pattie_owner *Owner, const UCHAR *Input, size_t InputLength,
+pattie_status DeviceCreate(DRIVER_CONTEXT *Ctx, pattie_owner *Owner, const UCHAR *Input, size_t InputLength,
                          PMDL *Mdl, PKEVENT *Wake, UCHAR *Reply, size_t ReplyCap, size_t *ReplyLength)
 {
     pattie_create_device_reply created;
@@ -259,7 +258,7 @@ pattie_status PattieDeviceCreate(PATTIE_DRIVER_CONTEXT *Ctx, pattie_owner *Owner
     void *ringMemory = NULL;
     size_t ringLength = 0;
     WDFDEVICE circuitDevice;
-    PATTIE_SLOT *slot = NULL;
+    SLOT *slot = NULL;
     pattie_status result;
 
     *ReplyLength = 0;
@@ -294,7 +293,7 @@ pattie_status PattieDeviceCreate(PATTIE_DRIVER_CONTEXT *Ctx, pattie_owner *Owner
     /* What the core accepted, kind, name and stable ID: the request isn't read again. */
     RtlCopyMemory(&created, Reply, sizeof created);
     if (!pattie_core_device_info(&Ctx->Core, created.device_id, &info) ||
-        !NT_SUCCESS(PattieCircuitDeviceAdd(Ctx, created.device_id, &info, *Wake, &circuitDevice))) {
+        !NT_SUCCESS(CircuitDeviceAdd(Ctx, created.device_id, &info, *Wake, &circuitDevice))) {
         /* Undo through the core's own Remove Device, then report the failure. */
         pattie_remove_device_request undo = { created.device_id };
         size_t ignored;
@@ -317,7 +316,7 @@ pattie_status PattieDeviceCreate(PATTIE_DRIVER_CONTEXT *Ctx, pattie_owner *Owner
 }
 
 _Use_decl_annotations_
-pattie_status PattieDeviceRemove(PATTIE_DRIVER_CONTEXT *Ctx, pattie_owner *Owner, const UCHAR *Input, size_t InputLength,
+pattie_status DeviceRemove(DRIVER_CONTEXT *Ctx, pattie_owner *Owner, const UCHAR *Input, size_t InputLength,
                          UCHAR *Reply, size_t ReplyCap, size_t *ReplyLength)
 {
     pattie_status result;
@@ -330,19 +329,19 @@ pattie_status PattieDeviceRemove(PATTIE_DRIVER_CONTEXT *Ctx, pattie_owner *Owner
         pattie_remove_device_request removed;
 
         RtlCopyMemory(&removed, Input, sizeof removed); /* the core validated it */
-        PattieDeviceTeardown(Ctx, removed.device_id);
+        DeviceTeardown(Ctx, removed.device_id);
     }
     return result;
 }
 
 _Use_decl_annotations_
-VOID PattieOwnerDevicesRemove(PATTIE_DRIVER_CONTEXT *Ctx, pattie_owner *Owner)
+VOID OwnerDevicesRemove(DRIVER_CONTEXT *Ctx, pattie_owner *Owner)
 {
     uint32_t removed[PATTIE_MAX_DEVICES];
     size_t count = pattie_core_owner_closed(&Ctx->Core, Owner, removed);
 
     for (size_t i = 0; i < count; i++) {
-        PattieDeviceTeardown(Ctx, removed[i]);
+        DeviceTeardown(Ctx, removed[i]);
     }
 }
 
@@ -352,13 +351,13 @@ VOID PattieOwnerDevicesRemove(PATTIE_DRIVER_CONTEXT *Ctx, pattie_owner *Owner)
  * frees the device's stable ID so a Device of the same name can be created again.
  * The slot's reference keeps this context valid until teardown releases it.
  */
-static VOID PattieEvtCircuitDeviceCleanup(WDFOBJECT Object)
+static VOID EvtCircuitDeviceCleanup(WDFOBJECT Object)
 {
-    PATTIE_CIRCUIT_DEVICE_CONTEXT *deviceCtx = PattieCircuitDeviceContext((WDFDEVICE)Object);
+    CIRCUIT_DEVICE_CONTEXT *deviceCtx = CircuitDeviceContext((WDFDEVICE)Object);
 
     InterlockedExchange(&deviceCtx->Deleted, 1);
     if (deviceCtx->ChildId != 0) {
-        PattieChildIdRelease(PattieDriverContext(WdfGetDriver()), deviceCtx->ChildId);
+        ChildIdRelease(DriverContext(WdfGetDriver()), deviceCtx->ChildId);
         deviceCtx->ChildId = 0;
     }
 }
@@ -370,7 +369,7 @@ static VOID PattieEvtCircuitDeviceCleanup(WDFOBJECT Object)
  * prefers the devnode's FriendlyName. Cosmetic, so a failure is ignored: it must
  * never keep the endpoint from starting.
  */
-static VOID PattieAssignFriendlyName(WDFDEVICE Device, const PATTIE_CIRCUIT_DEVICE_CONTEXT *DeviceCtx)
+static VOID AssignFriendlyName(WDFDEVICE Device, const CIRCUIT_DEVICE_CONTEXT *DeviceCtx)
 {
     WDF_DEVICE_PROPERTY_DATA property;
 
@@ -381,30 +380,30 @@ static VOID PattieAssignFriendlyName(WDFDEVICE Device, const PATTIE_CIRCUIT_DEVI
                                   DeviceCtx->Name.Length + sizeof(WCHAR), (PVOID)DeviceCtx->NameBuffer);
 }
 
-static NTSTATUS PattieEvtCircuitDevicePrepareHardware(WDFDEVICE Device, WDFCMRESLIST Resources,
+static NTSTATUS EvtCircuitDevicePrepareHardware(WDFDEVICE Device, WDFCMRESLIST Resources,
                                                   WDFCMRESLIST ResourcesTranslated)
 {
-    PATTIE_CIRCUIT_DEVICE_CONTEXT *deviceCtx = PattieCircuitDeviceContext(Device);
+    CIRCUIT_DEVICE_CONTEXT *deviceCtx = CircuitDeviceContext(Device);
     NTSTATUS status;
 
     UNREFERENCED_PARAMETER(Resources);
     UNREFERENCED_PARAMETER(ResourcesTranslated);
 
     /* Every prepare, so the name survives the restart that installing the child causes. */
-    PattieAssignFriendlyName(Device, deviceCtx);
+    AssignFriendlyName(Device, deviceCtx);
 
     if (deviceCtx->CircuitAdded) {
         return STATUS_SUCCESS; /* rebalance or restart: keep the circuit */
     }
-    status = PattieEndpointInterfacesPrepare(Device, deviceCtx);
+    status = EndpointInterfacesPrepare(Device, deviceCtx);
     if (!NT_SUCCESS(status)) {
         return status;
     }
     status = AcxDeviceAddCircuit(Device, deviceCtx->Circuit);
     if (NT_SUCCESS(status)) {
         deviceCtx->CircuitAdded = TRUE;
-        TraceLoggingWrite(PattieTraceProvider, "CircuitPrepared",
-                          TraceLoggingLevel(PATTIE_TRACE_LEVEL_INFO),
+        TraceLoggingWrite(TraceProvider, "CircuitPrepared",
+                          TraceLoggingLevel(TRACE_LEVEL_INFO),
                           TraceLoggingUInt32(deviceCtx->DeviceId, "DeviceId"));
     }
     return status;

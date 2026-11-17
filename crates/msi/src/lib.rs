@@ -1,5 +1,5 @@
 //! The MSI's custom actions (ADR 0024): `pattie-msi.dll`, which the installer
-//! (`platforms/windows/release/pattie.wxs`) calls to put the driver on the
+//! (`release/msi/pattie.wxs`) calls to put the driver on the
 //! machine or take it off. The work is `pattie-install`'s, the same engine as
 //! `pattie-cli install`; this crate only adapts it to Windows Installer.
 //!

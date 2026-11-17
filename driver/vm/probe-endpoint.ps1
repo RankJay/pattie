@@ -21,7 +21,7 @@ Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
 using Microsoft.Win32.SafeHandles;
-public static class PattieKs {
+public static class KsProperty {
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     public static extern SafeFileHandle CreateFile(string name, uint access, uint share, IntPtr security,
                                                    uint disposition, uint flags, IntPtr template);
@@ -54,7 +54,7 @@ foreach ($name in $categories.Keys) {
     foreach ($path in $paths) {
         $found = $true
         # GENERIC_READ | GENERIC_WRITE (PowerShell 5.1 reads 0xC0000000 as a negative Int32)
-        $handle = [PattieKs]::CreateFile($path, [uint32]3221225472, 3, [IntPtr]::Zero, 3, 0, [IntPtr]::Zero)
+        $handle = [KsProperty]::CreateFile($path, [uint32]3221225472, 3, [IntPtr]::Zero, 3, 0, [IntPtr]::Zero)
         if ($handle.IsInvalid) {
             $err = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
             "{0,-9} OPEN FAILED  win32 {1} ({2})  {3}" -f $name, $err, (New-Object ComponentModel.Win32Exception $err).Message, $path
@@ -62,7 +62,7 @@ foreach ($name in $categories.Keys) {
         }
         $out = New-Object byte[] 4
         $returned = 0
-        if ([PattieKs]::DeviceIoControl($handle, $IOCTL_KS_PROPERTY, $property, 24, $out, 4, [ref]$returned, [IntPtr]::Zero)) {
+        if ([KsProperty]::DeviceIoControl($handle, $IOCTL_KS_PROPERTY, $property, 24, $out, 4, [ref]$returned, [IntPtr]::Zero)) {
             "{0,-9} opened, pin types = {1}  {2}" -f $name, [BitConverter]::ToUInt32($out, 0), $path
         } else {
             $err = [Runtime.InteropServices.Marshal]::GetLastWin32Error()

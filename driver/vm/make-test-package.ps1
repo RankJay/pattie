@@ -28,7 +28,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
+$repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $kit = 'C:\Program Files (x86)\Windows Kits\10'
 $kitVersion = '10.0.28000.0'
 $msbuild = 'C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\amd64\MSBuild.exe'
@@ -57,17 +57,17 @@ foreach ($tool in $msbuild, $inf2cat) {
 # trace-provider.ps1; the driver registers the name and GUID in src/trace.c. A
 # mismatch records nothing, silently, so check before building.
 . (Join-Path $PSScriptRoot 'trace-provider.ps1')
-$traceC = Get-Content -Raw (Join-Path $repo 'platforms\windows\driver\src\trace.c')
+$traceC = Get-Content -Raw (Join-Path $repo 'driver\src\trace.c')
 $declared = [regex]::Match($traceC, 'TRACELOGGING_DEFINE_PROVIDER\(\s*\w+\s*,\s*"([^"]+)"\s*,\s*\(([^)]*)\)')
 $guidInC = ($declared.Groups[2].Value -replace '\s', '').ToLowerInvariant()
-$guidOfName = ([guid]$PattieProvider).ToString('X') -replace '[{}]', ''
-if (-not $declared.Success -or $declared.Groups[1].Value -ne $PattieProviderName -or $guidInC -ne $guidOfName) {
-    throw "src/trace.c's provider ($($declared.Groups[1].Value), $guidInC) isn't $PattieProviderName with its name hash ($guidOfName): see trace-provider.ps1"
+$guidOfName = ([guid]$TraceProviderGuid).ToString('X') -replace '[{}]', ''
+if (-not $declared.Success -or $declared.Groups[1].Value -ne $TraceProviderName -or $guidInC -ne $guidOfName) {
+    throw "src/trace.c's provider ($($declared.Groups[1].Value), $guidInC) isn't $TraceProviderName with its name hash ($guidOfName): see trace-provider.ps1"
 }
 
 Write-Host '== Building the driver'
 $driverArgs = @(
-    (Join-Path $repo 'platforms\windows\driver\pattie.vcxproj'), '-t:Rebuild',
+    (Join-Path $repo 'driver\pattie.vcxproj'), '-t:Rebuild',
     "-p:Configuration=$Configuration", '-p:Platform=x64', '-nologo', '-v:minimal')
 if ($DriverVersion) {
     $driverArgs += "-p:PattieDriverVersion=$DriverVersion"

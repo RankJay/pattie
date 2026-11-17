@@ -78,4 +78,4 @@ if ($Verifier) {
 }
 
 Write-Host ''
-Write-Host 'Installed. Next: .\pattie-cli.exe mic "Agent Mic"   (checks in platforms/windows/driver/README.md)'
+Write-Host 'Installed. Next: .\pattie-cli.exe mic "Agent Mic"   (checks in driver/README.md)'

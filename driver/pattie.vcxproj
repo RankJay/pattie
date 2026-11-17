@@ -55,8 +55,8 @@
 
   <PropertyGroup>
     <TargetName>pattie</TargetName>
-    <OutDir>$(MSBuildThisFileDirectory)..\..\..\target\driver\$(Platform)\$(Configuration)\</OutDir>
-    <IntDir>$(MSBuildThisFileDirectory)..\..\..\target\driver\obj\$(Platform)\$(Configuration)\</IntDir>
+    <OutDir>$(MSBuildThisFileDirectory)..\target\driver\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>$(MSBuildThisFileDirectory)..\target\driver\obj\$(Platform)\$(Configuration)\</IntDir>
     <EnableInf2cat>false</EnableInf2cat>
     <!-- DriverVer's version: a release build passes -p:PattieDriverVersion=a.b.c.d
          (make-attestation-cab.ps1); otherwise StampInf derives one from the build
@@ -74,8 +74,8 @@
            mismatch) are off by default; on, and errors, for code that parses
            what apps send. -->
       <AdditionalOptions>/std:c17 /w44242 /w44244 /w44365 %(AdditionalOptions)</AdditionalOptions>
-      <!-- kernel-crt first: kernel-safe stdint.h/stdbool.h shadow the user-mode MSVC ones. -->
-      <AdditionalIncludeDirectories>$(MSBuildThisFileDirectory)kernel-crt;$(MSBuildThisFileDirectory)..\..\..\core\include;$(MSBuildThisFileDirectory)..\..\..\core\src;$(DDK_INC_PATH)acx\km\1.1;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <!-- kernel_crt first: kernel-safe stdint.h/stdbool.h shadow the user-mode MSVC ones. -->
+      <AdditionalIncludeDirectories>$(MSBuildThisFileDirectory)kernel_crt;$(MSBuildThisFileDirectory)..\core\include;$(MSBuildThisFileDirectory)..\core\src;$(DDK_INC_PATH)acx\km\1.1;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>ACX_VERSION_MAJOR=1;ACX_VERSION_MINOR=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
@@ -85,14 +85,14 @@
   </ItemDefinitionGroup>
 
   <ItemGroup Label="Pure core (ADR 0002), compiled unchanged">
-    <ClCompile Include="..\..\..\core\src\commands.c" />
-    <ClCompile Include="..\..\..\core\src\ring.c" />
-    <ClCompile Include="..\..\..\core\src\clock.c" />
-    <ClCompile Include="..\..\..\core\src\pcm16.c" />
+    <ClCompile Include="..\core\src\commands.c" />
+    <ClCompile Include="..\core\src\ring.c" />
+    <ClCompile Include="..\core\src\clock.c" />
+    <ClCompile Include="..\core\src\pcm16.c" />
   </ItemGroup>
 
   <ItemGroup Label="Shell">
-    <ClCompile Include="src\driver.c" />
+    <ClCompile Include="src\entry.c" />
     <ClCompile Include="src\control.c" />
     <ClCompile Include="src\endpoint.c" />
     <ClCompile Include="src\circuit.c" />

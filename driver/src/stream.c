@@ -9,13 +9,13 @@
  */
 #include "shell.h"
 
-#define PATTIE_MAX_PACKETS 2
+#define MAX_PACKETS 2
 
-typedef struct _VD_STREAM_CONTEXT {
+typedef struct _STREAM_CONTEXT {
     ACXSTREAM Stream;
-    PATTIE_CIRCUIT_DEVICE_CONTEXT *Device;
+    CIRCUIT_DEVICE_CONTEXT *Device;
     WDFTIMER Timer;
-    PVOID Packets[PATTIE_MAX_PACKETS];
+    PVOID Packets[MAX_PACKETS];
     ULONG PacketCount;
     ULONG PacketSize;               /* bytes */
     ULONG BytesPerFrame;            /* from the stream's format */
@@ -42,34 +42,34 @@ typedef struct _VD_STREAM_CONTEXT {
     ULONGLONG Stalls;               /* so far behind the schedule skipped ahead (pattie_clock_next_pass) */
     ULONGLONG MaxLatenessTicks;     /* worst pass: fired this long after it was due */
     ULONGLONG TotalLatenessTicks;
-} PATTIE_STREAM_CONTEXT;
-WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(PATTIE_STREAM_CONTEXT, PattieStreamContext)
+} STREAM_CONTEXT;
+WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(STREAM_CONTEXT, StreamContext)
 
-typedef struct _VD_TIMER_CONTEXT {
-    PATTIE_STREAM_CONTEXT *StreamCtx;
-} PATTIE_TIMER_CONTEXT;
-WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(PATTIE_TIMER_CONTEXT, PattieTimerContext)
+typedef struct _TIMER_CONTEXT {
+    STREAM_CONTEXT *StreamCtx;
+} TIMER_CONTEXT;
+WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(TIMER_CONTEXT, TimerContext)
 
-static EVT_ACX_STREAM_PREPARE_HARDWARE PattieEvtStreamPrepareHardware;
-static EVT_ACX_STREAM_RELEASE_HARDWARE PattieEvtStreamReleaseHardware;
-static EVT_ACX_STREAM_RUN PattieEvtStreamRun;
-static EVT_ACX_STREAM_PAUSE PattieEvtStreamPause;
-static EVT_ACX_STREAM_GET_HW_LATENCY PattieEvtStreamGetHwLatency;
-static EVT_ACX_STREAM_ALLOCATE_RTPACKETS PattieEvtStreamAllocateRtPackets;
-static EVT_ACX_STREAM_FREE_RTPACKETS PattieEvtStreamFreeRtPackets;
-static EVT_ACX_STREAM_GET_CAPTURE_PACKET PattieEvtStreamGetCapturePacket;
-static EVT_ACX_STREAM_SET_RENDER_PACKET PattieEvtStreamSetRenderPacket;
-static EVT_ACX_STREAM_GET_CURRENT_PACKET PattieEvtStreamGetCurrentPacket;
-static EVT_ACX_STREAM_GET_PRESENTATION_POSITION PattieEvtStreamGetPresentationPosition;
-static EVT_WDF_TIMER PattieEvtStreamTimer;
+static EVT_ACX_STREAM_PREPARE_HARDWARE EvtStreamPrepareHardware;
+static EVT_ACX_STREAM_RELEASE_HARDWARE EvtStreamReleaseHardware;
+static EVT_ACX_STREAM_RUN EvtStreamRun;
+static EVT_ACX_STREAM_PAUSE EvtStreamPause;
+static EVT_ACX_STREAM_GET_HW_LATENCY EvtStreamGetHwLatency;
+static EVT_ACX_STREAM_ALLOCATE_RTPACKETS EvtStreamAllocateRtPackets;
+static EVT_ACX_STREAM_FREE_RTPACKETS EvtStreamFreeRtPackets;
+static EVT_ACX_STREAM_GET_CAPTURE_PACKET EvtStreamGetCapturePacket;
+static EVT_ACX_STREAM_SET_RENDER_PACKET EvtStreamSetRenderPacket;
+static EVT_ACX_STREAM_GET_CURRENT_PACKET EvtStreamGetCurrentPacket;
+static EVT_ACX_STREAM_GET_PRESENTATION_POSITION EvtStreamGetPresentationPosition;
+static EVT_WDF_TIMER EvtStreamTimer;
 
-static ULONGLONG PattieNow(void)
+static ULONGLONG Now(void)
 {
     return (ULONGLONG)KeQueryPerformanceCounter(NULL).QuadPart;
 }
 
 /* Ticks as microseconds, with the core clock's overflow-safe conversion. */
-static ULONGLONG PattieTicksToUs(const PATTIE_STREAM_CONTEXT *StreamCtx, ULONGLONG Ticks)
+static ULONGLONG TicksToUs(const STREAM_CONTEXT *StreamCtx, ULONGLONG Ticks)
 {
     return pattie_clock_frames(0, Ticks, StreamCtx->TickHz, 1000000u);
 }
@@ -78,9 +78,9 @@ static ULONGLONG PattieTicksToUs(const PATTIE_STREAM_CONTEXT *StreamCtx, ULONGLO
  * The StreamStopped event: how the timer kept up since the stream last ran, plus
  * the Ring's Gap and Overflow totals. Called with the timer stopped.
  */
-static VOID PattieTraceStreamStopped(const PATTIE_STREAM_CONTEXT *StreamCtx, const char *Reason)
+static VOID TraceStreamStopped(const STREAM_CONTEXT *StreamCtx, const char *Reason)
 {
-    PATTIE_CIRCUIT_DEVICE_CONTEXT *device = StreamCtx->Device;
+    CIRCUIT_DEVICE_CONTEXT *device = StreamCtx->Device;
     uint64_t gapFrames = 0;
     uint64_t overflowFrames = 0;
     ULONGLONG averageLatenessTicks = StreamCtx->Passes == 0 ? 0 : StreamCtx->TotalLatenessTicks / StreamCtx->Passes;
@@ -89,26 +89,26 @@ static VOID PattieTraceStreamStopped(const PATTIE_STREAM_CONTEXT *StreamCtx, con
         pattie_ring_losses(device->Ring, &gapFrames, &overflowFrames);
         ExReleaseRundownProtection(&device->Rundown);
     }
-    TraceLoggingWrite(PattieTraceProvider, "StreamStopped",
-                      TraceLoggingLevel(PATTIE_TRACE_LEVEL_INFO),
+    TraceLoggingWrite(TraceProvider, "StreamStopped",
+                      TraceLoggingLevel(TRACE_LEVEL_INFO),
                       TraceLoggingUInt32(device->DeviceId, "DeviceId"),
                       TraceLoggingString(Reason, "Reason"),
                       TraceLoggingUInt64(StreamCtx->Passes, "Passes"),
                       TraceLoggingUInt64(StreamCtx->LatePasses, "LatePasses"),
                       TraceLoggingUInt64(StreamCtx->Stalls, "Stalls"),
-                      TraceLoggingUInt64(PattieTicksToUs(StreamCtx, StreamCtx->MaxLatenessTicks), "MaxLatenessUs"),
-                      TraceLoggingUInt64(PattieTicksToUs(StreamCtx, averageLatenessTicks), "AvgLatenessUs"),
+                      TraceLoggingUInt64(TicksToUs(StreamCtx, StreamCtx->MaxLatenessTicks), "MaxLatenessUs"),
+                      TraceLoggingUInt64(TicksToUs(StreamCtx, averageLatenessTicks), "AvgLatenessUs"),
                       TraceLoggingUInt64(gapFrames, "RingGapFrames"),
                       TraceLoggingUInt64(overflowFrames, "RingOverflowFrames"));
 }
 
-static ULONGLONG PattiePosition(const PATTIE_STREAM_CONTEXT *StreamCtx)
+static ULONGLONG Position(const STREAM_CONTEXT *StreamCtx)
 {
     if (!StreamCtx->Running) {
         return StreamCtx->PausedFrames;
     }
     return StreamCtx->RunStartFrames +
-           pattie_clock_frames(StreamCtx->RunStartTicks, PattieNow(), StreamCtx->TickHz, StreamCtx->SampleRate);
+           pattie_clock_frames(StreamCtx->RunStartTicks, Now(), StreamCtx->TickHz, StreamCtx->SampleRate);
 }
 
 /*
@@ -118,11 +118,11 @@ static ULONGLONG PattiePosition(const PATTIE_STREAM_CONTEXT *StreamCtx)
  * forward instead, so a sleep or a suspended VM doesn't set off a burst of
  * passes, one per missed packet (Seam C, as Microsoft's ACX stream engine does).
  */
-static VOID PattieScheduleNextPass(PATTIE_STREAM_CONTEXT *StreamCtx)
+static VOID ScheduleNextPass(STREAM_CONTEXT *StreamCtx)
 {
     uint64_t start = StreamCtx->RunStartTicks;
     uint64_t due = 0;
-    ULONGLONG now = PattieNow();
+    ULONGLONG now = Now();
     LONGLONG wait = -1; /* due already: fire as soon as possible */
 
     if (pattie_clock_next_pass(&start, StreamCtx->PacketsSinceRun,
@@ -145,14 +145,14 @@ static VOID PattieScheduleNextPass(PATTIE_STREAM_CONTEXT *StreamCtx)
     (void)WdfTimerStart(StreamCtx->Timer, wait);
 }
 
-static VOID PattieEvtStreamTimer(WDFTIMER Timer)
+static VOID EvtStreamTimer(WDFTIMER Timer)
 {
-    PATTIE_STREAM_CONTEXT *streamCtx = PattieTimerContext(Timer)->StreamCtx;
-    PATTIE_CIRCUIT_DEVICE_CONTEXT *device = streamCtx->Device;
+    STREAM_CONTEXT *streamCtx = TimerContext(Timer)->StreamCtx;
+    CIRCUIT_DEVICE_CONTEXT *device = streamCtx->Device;
     ULONG index = (ULONG)streamCtx->CurrentPacket % streamCtx->PacketCount;
     UCHAR *packet = (UCHAR *)streamCtx->Packets[index] + (index == 0 ? streamCtx->FirstPacketOffset : 0);
     uint32_t frames = streamCtx->PacketSize / streamCtx->BytesPerFrame;
-    ULONGLONG firedAt = PattieNow();
+    ULONGLONG firedAt = Now();
     ULONGLONG completedAt;
     LONG completed;
 
@@ -181,9 +181,9 @@ static VOID PattieEvtStreamTimer(WDFTIMER Timer)
         /* The clock pair (ADR 0022): how far this side has got, and when, in
          * nanoseconds of the performance counter, as apps read it. */
         if (device->Kind == PATTIE_KIND_MICROPHONE) {
-            pattie_ring_publish_read_clock(device->Ring, pattie_clock_ns(PattieNow(), streamCtx->TickHz));
+            pattie_ring_publish_read_clock(device->Ring, pattie_clock_ns(Now(), streamCtx->TickHz));
         } else {
-            pattie_ring_publish_write_clock(device->Ring, pattie_clock_ns(PattieNow(), streamCtx->TickHz));
+            pattie_ring_publish_write_clock(device->Ring, pattie_clock_ns(Now(), streamCtx->TickHz));
         }
                 /* Wake the app's paced writer, reader or playout (ADR 0021). */
         (void)KeSetEvent(device->WakeEvent, IO_NO_INCREMENT, FALSE);
@@ -193,37 +193,37 @@ static VOID PattieEvtStreamTimer(WDFTIMER Timer)
     }
 
     completed = InterlockedIncrement(&streamCtx->CurrentPacket) - 1;
-    completedAt = PattieNow();
+    completedAt = Now();
     InterlockedExchange64(&streamCtx->LastPacketStart, streamCtx->CurrentPacketStart);
     InterlockedExchange64(&streamCtx->CurrentPacketStart, (LONG64)completedAt);
     (void)AcxRtStreamNotifyPacketComplete(streamCtx->Stream, (ULONGLONG)completed, completedAt);
 
     streamCtx->PacketsSinceRun++;
     if (streamCtx->Running) {
-        PattieScheduleNextPass(streamCtx);
+        ScheduleNextPass(streamCtx);
     }
 }
 
-NTSTATUS PattieEvtCircuitCreateStream(WDFDEVICE Device, ACXCIRCUIT Circuit, ACXPIN Pin,
+NTSTATUS EvtCircuitCreateStream(WDFDEVICE Device, ACXCIRCUIT Circuit, ACXPIN Pin,
                                   PACXSTREAM_INIT StreamInit, ACXDATAFORMAT StreamFormat,
                                   const GUID *SignalProcessingMode, ACXOBJECTBAG VarArguments)
 {
     ACX_STREAM_CALLBACKS streamCallbacks;
     ACX_RT_STREAM_CALLBACKS rtCallbacks;
     WDF_OBJECT_ATTRIBUTES attributes;
-    PATTIE_STREAM_CONTEXT *streamCtx;
+    STREAM_CONTEXT *streamCtx;
     LARGE_INTEGER frequency;
     ACXSTREAM stream;
-    PATTIE_CIRCUIT_DEVICE_CONTEXT *device = PattieCircuitDeviceContext(Device);
+    CIRCUIT_DEVICE_CONTEXT *device = CircuitDeviceContext(Device);
     ULONG bytesPerFrame = AcxDataFormatGetBlockAlign(StreamFormat);
     ULONG bitsPerSample = AcxDataFormatGetBitsPerSample(StreamFormat);
     ULONG sampleRate = AcxDataFormatGetSampleRate(StreamFormat);
     ULONG channels = AcxDataFormatGetChannelsCount(StreamFormat);
     BOOLEAN deviceShape = sampleRate == device->SampleRate && channels == device->Channels;
     BOOLEAN pcm16 = deviceShape && bitsPerSample == 16 &&
-                    bytesPerFrame == PATTIE_PCM16_BYTES_PER_SAMPLE * channels;
+                    bytesPerFrame == PCM16_BYTES_PER_SAMPLE * channels;
     BOOLEAN ringFloat = deviceShape && bitsPerSample == 32 &&
-                        bytesPerFrame == PATTIE_FLOAT_BYTES_PER_SAMPLE * channels;
+                        bytesPerFrame == FLOAT_BYTES_PER_SAMPLE * channels;
     NTSTATUS status;
 
     UNREFERENCED_PARAMETER(Pin);
@@ -239,25 +239,25 @@ NTSTATUS PattieEvtCircuitCreateStream(WDFDEVICE Device, ACXCIRCUIT Circuit, ACXP
     }
 
     ACX_STREAM_CALLBACKS_INIT(&streamCallbacks);
-    streamCallbacks.EvtAcxStreamPrepareHardware = PattieEvtStreamPrepareHardware;
-    streamCallbacks.EvtAcxStreamReleaseHardware = PattieEvtStreamReleaseHardware;
-    streamCallbacks.EvtAcxStreamRun = PattieEvtStreamRun;
-    streamCallbacks.EvtAcxStreamPause = PattieEvtStreamPause;
+    streamCallbacks.EvtAcxStreamPrepareHardware = EvtStreamPrepareHardware;
+    streamCallbacks.EvtAcxStreamReleaseHardware = EvtStreamReleaseHardware;
+    streamCallbacks.EvtAcxStreamRun = EvtStreamRun;
+    streamCallbacks.EvtAcxStreamPause = EvtStreamPause;
     status = AcxStreamInitAssignAcxStreamCallbacks(StreamInit, &streamCallbacks);
     if (!NT_SUCCESS(status)) {
         return status;
     }
 
     ACX_RT_STREAM_CALLBACKS_INIT(&rtCallbacks);
-    rtCallbacks.EvtAcxStreamGetHwLatency = PattieEvtStreamGetHwLatency;
-    rtCallbacks.EvtAcxStreamAllocateRtPackets = PattieEvtStreamAllocateRtPackets;
-    rtCallbacks.EvtAcxStreamFreeRtPackets = PattieEvtStreamFreeRtPackets;
-    rtCallbacks.EvtAcxStreamGetCurrentPacket = PattieEvtStreamGetCurrentPacket;
-    rtCallbacks.EvtAcxStreamGetPresentationPosition = PattieEvtStreamGetPresentationPosition;
+    rtCallbacks.EvtAcxStreamGetHwLatency = EvtStreamGetHwLatency;
+    rtCallbacks.EvtAcxStreamAllocateRtPackets = EvtStreamAllocateRtPackets;
+    rtCallbacks.EvtAcxStreamFreeRtPackets = EvtStreamFreeRtPackets;
+    rtCallbacks.EvtAcxStreamGetCurrentPacket = EvtStreamGetCurrentPacket;
+    rtCallbacks.EvtAcxStreamGetPresentationPosition = EvtStreamGetPresentationPosition;
     if (device->Kind == PATTIE_KIND_MICROPHONE) {
-        rtCallbacks.EvtAcxStreamGetCapturePacket = PattieEvtStreamGetCapturePacket;
+        rtCallbacks.EvtAcxStreamGetCapturePacket = EvtStreamGetCapturePacket;
     } else {
-        rtCallbacks.EvtAcxStreamSetRenderPacket = PattieEvtStreamSetRenderPacket;
+        rtCallbacks.EvtAcxStreamSetRenderPacket = EvtStreamSetRenderPacket;
     }
     status = AcxStreamInitAssignAcxRtStreamCallbacks(StreamInit, &rtCallbacks);
     if (!NT_SUCCESS(status)) {
@@ -265,13 +265,13 @@ NTSTATUS PattieEvtCircuitCreateStream(WDFDEVICE Device, ACXCIRCUIT Circuit, ACXP
     }
     AcxStreamInitSetAcxRtStreamSupportsNotifications(StreamInit);
 
-    WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&attributes, PATTIE_STREAM_CONTEXT);
+    WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&attributes, STREAM_CONTEXT);
     status = AcxRtStreamCreate(Device, Circuit, &attributes, &StreamInit, &stream);
     if (!NT_SUCCESS(status)) {
         return status;
     }
 
-    streamCtx = PattieStreamContext(stream);
+    streamCtx = StreamContext(stream);
     streamCtx->Stream = stream;
     streamCtx->Device = device;
     streamCtx->BytesPerFrame = bytesPerFrame;
@@ -281,8 +281,8 @@ NTSTATUS PattieEvtCircuitCreateStream(WDFDEVICE Device, ACXCIRCUIT Circuit, ACXP
     streamCtx->TickHz = (ULONGLONG)frequency.QuadPart;
 
     /* Which format Windows opened the stream in: float, or PCM16 through the conversion. */
-    TraceLoggingWrite(PattieTraceProvider, "StreamCreated",
-                      TraceLoggingLevel(PATTIE_TRACE_LEVEL_INFO),
+    TraceLoggingWrite(TraceProvider, "StreamCreated",
+                      TraceLoggingLevel(TRACE_LEVEL_INFO),
                       TraceLoggingUInt32(streamCtx->Device->DeviceId, "DeviceId"),
                       TraceLoggingUInt32(streamCtx->Device->Kind, "Kind"),
                       TraceLoggingBoolean(pcm16, "Pcm16"),
@@ -293,9 +293,9 @@ NTSTATUS PattieEvtCircuitCreateStream(WDFDEVICE Device, ACXCIRCUIT Circuit, ACXP
     return STATUS_SUCCESS;
 }
 
-static NTSTATUS PattieEvtStreamPrepareHardware(ACXSTREAM Stream)
+static NTSTATUS EvtStreamPrepareHardware(ACXSTREAM Stream)
 {
-    PATTIE_STREAM_CONTEXT *streamCtx = PattieStreamContext(Stream);
+    STREAM_CONTEXT *streamCtx = StreamContext(Stream);
     WDF_TIMER_CONFIG timerConfig;
     WDF_OBJECT_ATTRIBUTES attributes;
     NTSTATUS status;
@@ -303,21 +303,21 @@ static NTSTATUS PattieEvtStreamPrepareHardware(ACXSTREAM Stream)
     if (streamCtx->Timer != NULL) {
         return STATUS_SUCCESS;
     }
-    WDF_TIMER_CONFIG_INIT(&timerConfig, PattieEvtStreamTimer);
+    WDF_TIMER_CONFIG_INIT(&timerConfig, EvtStreamTimer);
     timerConfig.UseHighResolutionTimer = WdfTrue;
-    WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&attributes, PATTIE_TIMER_CONTEXT);
+    WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&attributes, TIMER_CONTEXT);
     attributes.ParentObject = Stream;
     status = WdfTimerCreate(&timerConfig, &attributes, &streamCtx->Timer);
     if (NT_SUCCESS(status)) {
-        PattieTimerContext(streamCtx->Timer)->StreamCtx = streamCtx;
+        TimerContext(streamCtx->Timer)->StreamCtx = streamCtx;
     }
     return status;
 }
 
 /* Pause to Stop, as Microsoft's ACX stream engine does it: the next start begins at packet 0. */
-static NTSTATUS PattieEvtStreamReleaseHardware(ACXSTREAM Stream)
+static NTSTATUS EvtStreamReleaseHardware(ACXSTREAM Stream)
 {
-    PATTIE_STREAM_CONTEXT *streamCtx = PattieStreamContext(Stream);
+    STREAM_CONTEXT *streamCtx = StreamContext(Stream);
     BOOLEAN wasRunning = streamCtx->Running;
 
     streamCtx->Running = FALSE;
@@ -328,7 +328,7 @@ static NTSTATUS PattieEvtStreamReleaseHardware(ACXSTREAM Stream)
     }
     KeFlushQueuedDpcs();
     if (wasRunning) {
-        PattieTraceStreamStopped(streamCtx, "Release"); /* a Pause already reported otherwise */
+        TraceStreamStopped(streamCtx, "Release"); /* a Pause already reported otherwise */
     }
 
     streamCtx->PausedFrames = 0;
@@ -344,9 +344,9 @@ static NTSTATUS PattieEvtStreamReleaseHardware(ACXSTREAM Stream)
  * recording, keeping one packet, so the first packet is fresh (ADR 0014). Returns
  * the frames dropped, for the StreamRun event.
  */
-static ULONGLONG PattieSkipStaleCapture(PATTIE_STREAM_CONTEXT *StreamCtx)
+static ULONGLONG SkipStaleCapture(STREAM_CONTEXT *StreamCtx)
 {
-    PATTIE_CIRCUIT_DEVICE_CONTEXT *device = StreamCtx->Device;
+    CIRCUIT_DEVICE_CONTEXT *device = StreamCtx->Device;
     ULONGLONG skipped = 0;
 
     if (device->Kind != PATTIE_KIND_MICROPHONE || !ExAcquireRundownProtection(&device->Rundown)) {
@@ -357,9 +357,9 @@ static ULONGLONG PattieSkipStaleCapture(PATTIE_STREAM_CONTEXT *StreamCtx)
     return skipped;
 }
 
-static NTSTATUS PattieEvtStreamRun(ACXSTREAM Stream)
+static NTSTATUS EvtStreamRun(ACXSTREAM Stream)
 {
-    PATTIE_STREAM_CONTEXT *streamCtx = PattieStreamContext(Stream);
+    STREAM_CONTEXT *streamCtx = StreamContext(Stream);
     ULONGLONG skippedFrames;
 
     if (streamCtx->Running) {
@@ -368,7 +368,7 @@ static NTSTATUS PattieEvtStreamRun(ACXSTREAM Stream)
     if (streamCtx->Timer == NULL || streamCtx->PacketCount == 0) {
         return STATUS_INVALID_DEVICE_STATE;
     }
-    streamCtx->RunStartTicks = PattieNow();
+    streamCtx->RunStartTicks = Now();
     streamCtx->RunStartFrames = streamCtx->PausedFrames;
     streamCtx->PacketsSinceRun = 0;
     streamCtx->Passes = 0;
@@ -376,36 +376,36 @@ static NTSTATUS PattieEvtStreamRun(ACXSTREAM Stream)
     streamCtx->Stalls = 0;
     streamCtx->MaxLatenessTicks = 0;
     streamCtx->TotalLatenessTicks = 0;
-    skippedFrames = PattieSkipStaleCapture(streamCtx); /* before the timer is armed */
-    TraceLoggingWrite(PattieTraceProvider, "StreamRun",
-                      TraceLoggingLevel(PATTIE_TRACE_LEVEL_INFO),
+    skippedFrames = SkipStaleCapture(streamCtx); /* before the timer is armed */
+    TraceLoggingWrite(TraceProvider, "StreamRun",
+                      TraceLoggingLevel(TRACE_LEVEL_INFO),
                       TraceLoggingUInt32(streamCtx->Device->DeviceId, "DeviceId"),
                       TraceLoggingUInt64(skippedFrames, "StaleFramesSkipped"));
     InterlockedExchange64(&streamCtx->CurrentPacketStart, (LONG64)streamCtx->RunStartTicks);
     streamCtx->Running = TRUE;
-    PattieScheduleNextPass(streamCtx);
+    ScheduleNextPass(streamCtx);
     return STATUS_SUCCESS;
 }
 
-static NTSTATUS PattieEvtStreamPause(ACXSTREAM Stream)
+static NTSTATUS EvtStreamPause(ACXSTREAM Stream)
 {
-    PATTIE_STREAM_CONTEXT *streamCtx = PattieStreamContext(Stream);
+    STREAM_CONTEXT *streamCtx = StreamContext(Stream);
 
     if (!streamCtx->Running) {
         return STATUS_SUCCESS;
     }
     {
-        ULONGLONG frames = PattiePosition(streamCtx);
+        ULONGLONG frames = Position(streamCtx);
 
         streamCtx->Running = FALSE;                 /* an in-flight pass won't re-arm */
         (void)WdfTimerStop(streamCtx->Timer, TRUE); /* waits for that pass */
         streamCtx->PausedFrames = frames;
     }
-    PattieTraceStreamStopped(streamCtx, "Pause");
+    TraceStreamStopped(streamCtx, "Pause");
     return STATUS_SUCCESS;
 }
 
-static NTSTATUS PattieEvtStreamGetHwLatency(ACXSTREAM Stream, ULONG *FifoSize, ULONG *Delay)
+static NTSTATUS EvtStreamGetHwLatency(ACXSTREAM Stream, ULONG *FifoSize, ULONG *Delay)
 {
     UNREFERENCED_PARAMETER(Stream);
     *FifoSize = 0; /* no hardware between the packets and the Ring */
@@ -413,26 +413,26 @@ static NTSTATUS PattieEvtStreamGetHwLatency(ACXSTREAM Stream, ULONG *FifoSize, U
     return STATUS_SUCCESS;
 }
 
-static VOID PattieFreePacketBuffers(PATTIE_STREAM_CONTEXT *StreamCtx)
+static VOID FreePacketBuffers(STREAM_CONTEXT *StreamCtx)
 {
-    for (ULONG i = 0; i < PATTIE_MAX_PACKETS; i++) {
+    for (ULONG i = 0; i < MAX_PACKETS; i++) {
         if (StreamCtx->Packets[i] != NULL) {
-            ExFreePoolWithTag(StreamCtx->Packets[i], PATTIE_POOL_TAG);
+            ExFreePoolWithTag(StreamCtx->Packets[i], POOL_TAG);
             StreamCtx->Packets[i] = NULL;
         }
     }
     StreamCtx->PacketCount = 0;
 }
 
-static VOID PattieEvtStreamFreeRtPackets(ACXSTREAM Stream, PACX_RTPACKET Packets, ULONG PacketCount)
+static VOID EvtStreamFreeRtPackets(ACXSTREAM Stream, PACX_RTPACKET Packets, ULONG PacketCount)
 {
     for (ULONG i = 0; i < PacketCount; i++) {
         if (Packets[i].RtPacketBuffer.u.MdlType.Mdl != NULL) {
             IoFreeMdl(Packets[i].RtPacketBuffer.u.MdlType.Mdl);
         }
     }
-    ExFreePoolWithTag(Packets, PATTIE_POOL_TAG);
-    PattieFreePacketBuffers(PattieStreamContext(Stream));
+    ExFreePoolWithTag(Packets, POOL_TAG);
+    FreePacketBuffers(StreamContext(Stream));
 }
 
 /*
@@ -440,16 +440,16 @@ static VOID PattieEvtStreamFreeRtPackets(ACXSTREAM Stream, PACX_RTPACKET Packets
  * a page boundary and packet 1 starts on one, so no other kernel memory is ever
  * mapped into the audio engine.
  */
-static NTSTATUS PattieEvtStreamAllocateRtPackets(ACXSTREAM Stream, ULONG PacketCount, ULONG PacketSize,
+static NTSTATUS EvtStreamAllocateRtPackets(ACXSTREAM Stream, ULONG PacketCount, ULONG PacketSize,
                                              PACX_RTPACKET *Packets)
 {
-    PATTIE_STREAM_CONTEXT *streamCtx = PattieStreamContext(Stream);
+    STREAM_CONTEXT *streamCtx = StreamContext(Stream);
     PACX_RTPACKET packets;
     ULONG allocation;
     NTSTATUS status;
 
     *Packets = NULL;
-    if (PacketCount == 0 || PacketCount > PATTIE_MAX_PACKETS || PacketSize == 0 ||
+    if (PacketCount == 0 || PacketCount > MAX_PACKETS || PacketSize == 0 ||
         PacketSize % streamCtx->BytesPerFrame != 0) {
         return STATUS_INVALID_PARAMETER;
     }
@@ -466,7 +466,7 @@ static NTSTATUS PattieEvtStreamAllocateRtPackets(ACXSTREAM Stream, ULONG PacketC
      */
     /* codeql[cpp/paddingbyteinformationdisclosure] */
     packets =(PACX_RTPACKET)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(ACX_RTPACKET) * PacketCount,
-                                             PATTIE_POOL_TAG);
+                                             POOL_TAG);
     if (packets == NULL) {
         return STATUS_INSUFFICIENT_RESOURCES;
     }
@@ -475,7 +475,7 @@ static NTSTATUS PattieEvtStreamAllocateRtPackets(ACXSTREAM Stream, ULONG PacketC
         PMDL mdl;
 
         ACX_RTPACKET_INIT(&packets[i]);
-        streamCtx->Packets[i] = ExAllocatePool2(POOL_FLAG_NON_PAGED, allocation, PATTIE_POOL_TAG);
+        streamCtx->Packets[i] = ExAllocatePool2(POOL_FLAG_NON_PAGED, allocation, POOL_TAG);
         if (streamCtx->Packets[i] == NULL) {
             status = STATUS_INSUFFICIENT_RESOURCES;
             break;
@@ -491,7 +491,7 @@ static NTSTATUS PattieEvtStreamAllocateRtPackets(ACXSTREAM Stream, ULONG PacketC
         packets[i].RtPacketOffset = i == 0 ? allocation - PacketSize : 0;
     }
     if (!NT_SUCCESS(status)) {
-        PattieEvtStreamFreeRtPackets(Stream, packets, PacketCount);
+        EvtStreamFreeRtPackets(Stream, packets, PacketCount);
         return status;
     }
 
@@ -500,8 +500,8 @@ static NTSTATUS PattieEvtStreamAllocateRtPackets(ACXSTREAM Stream, ULONG PacketC
     streamCtx->FirstPacketOffset = allocation - PacketSize;
 
     /* The engine's buffering: PacketCount packets of PacketFrames each. */
-    TraceLoggingWrite(PattieTraceProvider, "PacketsAllocated",
-                      TraceLoggingLevel(PATTIE_TRACE_LEVEL_INFO),
+    TraceLoggingWrite(TraceProvider, "PacketsAllocated",
+                      TraceLoggingLevel(TRACE_LEVEL_INFO),
                       TraceLoggingUInt32(streamCtx->Device->DeviceId, "DeviceId"),
                       TraceLoggingUInt32(PacketCount, "PacketCount"),
                       TraceLoggingUInt32(PacketSize, "PacketBytes"),
@@ -510,16 +510,16 @@ static NTSTATUS PattieEvtStreamAllocateRtPackets(ACXSTREAM Stream, ULONG PacketC
     return STATUS_SUCCESS;
 }
 
-static NTSTATUS PattieEvtStreamGetCurrentPacket(ACXSTREAM Stream, PULONG CurrentPacket)
+static NTSTATUS EvtStreamGetCurrentPacket(ACXSTREAM Stream, PULONG CurrentPacket)
 {
-    *CurrentPacket = (ULONG)InterlockedCompareExchange(&PattieStreamContext(Stream)->CurrentPacket, 0, 0);
+    *CurrentPacket = (ULONG)InterlockedCompareExchange(&StreamContext(Stream)->CurrentPacket, 0, 0);
     return STATUS_SUCCESS;
 }
 
-static NTSTATUS PattieEvtStreamGetCapturePacket(ACXSTREAM Stream, PULONG LastCapturePacket,
+static NTSTATUS EvtStreamGetCapturePacket(ACXSTREAM Stream, PULONG LastCapturePacket,
                                             PULONGLONG QPCPacketStart, PBOOLEAN MoreData)
 {
-    PATTIE_STREAM_CONTEXT *streamCtx = PattieStreamContext(Stream);
+    STREAM_CONTEXT *streamCtx = StreamContext(Stream);
 
     *LastCapturePacket = (ULONG)InterlockedCompareExchange(&streamCtx->CurrentPacket, 0, 0) - 1;
     *QPCPacketStart = (ULONGLONG)InterlockedCompareExchange64(&streamCtx->LastPacketStart, 0, 0);
@@ -528,10 +528,10 @@ static NTSTATUS PattieEvtStreamGetCapturePacket(ACXSTREAM Stream, PULONG LastCap
 }
 
 /* The engine must fill exactly the next packet: anything else is late or early. */
-static NTSTATUS PattieEvtStreamSetRenderPacket(ACXSTREAM Stream, ULONG Packet, ULONG Flags,
+static NTSTATUS EvtStreamSetRenderPacket(ACXSTREAM Stream, ULONG Packet, ULONG Flags,
                                            ULONG EosPacketLength)
 {
-    ULONG current = (ULONG)InterlockedCompareExchange(&PattieStreamContext(Stream)->CurrentPacket, 0, 0);
+    ULONG current = (ULONG)InterlockedCompareExchange(&StreamContext(Stream)->CurrentPacket, 0, 0);
 
     UNREFERENCED_PARAMETER(Flags);
     UNREFERENCED_PARAMETER(EosPacketLength);
@@ -545,12 +545,12 @@ static NTSTATUS PattieEvtStreamSetRenderPacket(ACXSTREAM Stream, ULONG Packet, U
     return STATUS_SUCCESS;
 }
 
-static NTSTATUS PattieEvtStreamGetPresentationPosition(ACXSTREAM Stream, PULONGLONG PositionInBlocks,
+static NTSTATUS EvtStreamGetPresentationPosition(ACXSTREAM Stream, PULONGLONG PositionInBlocks,
                                                    PULONGLONG QPCPosition)
 {
-    PATTIE_STREAM_CONTEXT *streamCtx = PattieStreamContext(Stream);
+    STREAM_CONTEXT *streamCtx = StreamContext(Stream);
 
-    *QPCPosition = PattieNow();
-    *PositionInBlocks = PattiePosition(streamCtx); /* one block is one frame, every channel */
+    *QPCPosition = Now();
+    *PositionInBlocks = Position(streamCtx); /* one block is one frame, every channel */
     return STATUS_SUCCESS;
 }

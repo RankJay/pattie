@@ -42,10 +42,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Restore the WDK and SDK from NuGet
-        run: nuget restore platforms/windows/driver/packages.config -PackagesDirectory target/nuget -NonInteractive
+        run: nuget restore driver/packages.config -PackagesDirectory target/nuget -NonInteractive
       - name: Build the driver and the cab
         shell: pwsh
-        run: ./platforms/windows/release/make-attestation-cab.ps1 -Version '${{ needs.version.outputs.version }}' -WdkNuGet
+        run: ./release/make-attestation-cab.ps1 -Version '${{ needs.version.outputs.version }}' -WdkNuGet
       - name: Collect the unsigned driver package
         shell: pwsh
         run: |

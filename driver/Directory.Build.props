@@ -7,7 +7,7 @@
 <Project>
   <PropertyGroup>
     <PattieKitVersion>10.0.28000.2526</PattieKitVersion>
-    <PattieNuGetDir>$(MSBuildThisFileDirectory)..\..\..\target\nuget\</PattieNuGetDir>
+    <PattieNuGetDir>$(MSBuildThisFileDirectory)..\target\nuget\</PattieNuGetDir>
   </PropertyGroup>
   <ImportGroup Condition="'$(PattieWdkNuGet)' == 'true'">
     <Import Project="$(PattieNuGetDir)Microsoft.Windows.SDK.CPP.$(PattieKitVersion)\build\native\Microsoft.Windows.SDK.cpp.props" />

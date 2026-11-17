@@ -32,7 +32,7 @@ $ErrorActionPreference = 'Stop'
 $here = $PSScriptRoot
 $session = 'PattieDriver'
 . (Join-Path $here 'trace-provider.ps1')
-$provider = $PattieProvider
+$provider = $TraceProviderGuid
 $driverEtl = Join-Path $here "$Name-driver.etl"
 $cpuEtl = Join-Path $here "$Name-cpu.etl"
 

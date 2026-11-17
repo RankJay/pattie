@@ -29,7 +29,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Restore the WDK and SDK from NuGet
-        run: nuget restore platforms/windows/driver/packages.config -PackagesDirectory target/nuget -NonInteractive
+        run: nuget restore driver/packages.config -PackagesDirectory target/nuget -NonInteractive
       - name: Cache the CodeQL CLI
         id: codeql-cache
         uses: actions/cache@v4
@@ -54,7 +54,7 @@ jobs:
           # quotes inside --command don't survive every PowerShell's argument
           # passing (Windows PowerShell 5.1 drops them; checked 2026-11-14).
           New-Item -ItemType Directory -Force target/codeql | Out-Null
-          "@`"$msbuild`" platforms\windows\driver\pattie.vcxproj -t:Rebuild -p:Configuration=Release -p:Platform=x64 -p:PattieWdkNuGet=true" |
+          "@`"$msbuild`" driver\pattie.vcxproj -t:Rebuild -p:Configuration=Release -p:Platform=x64 -p:PattieWdkNuGet=true" |
             Set-Content -Encoding ascii target/codeql/build.cmd
           & $codeql database create target/codeql/db --language=cpp --source-root=. --overwrite `
             --command=target\codeql\build.cmd

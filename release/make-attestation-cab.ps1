@@ -26,12 +26,12 @@ param(
     [string]$Version,
 
     # Build against the WDK NuGet packages (restored into target\nuget from
-    # platforms\windows\driver\packages.config) instead of an installed WDK: CI.
+    # driver\packages.config) instead of an installed WDK: CI.
     [switch]$WdkNuGet
 )
 
 $ErrorActionPreference = 'Stop'
-$repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
+$repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $driverOut = Join-Path $repo 'target\driver\x64\Release'
 $out = Join-Path $repo 'target\attestation'
 $stage = Join-Path $out 'pattie'
@@ -48,7 +48,7 @@ $nugetArgs = @() # an explicit array: splatting a lone string would pass its cha
 if ($WdkNuGet) { $nugetArgs += '-p:PattieWdkNuGet=true' }
 
 Write-Host "== Building the Release driver, version $Version"
-& $msbuild (Join-Path $repo 'platforms\windows\driver\pattie.vcxproj') -t:Rebuild `
+& $msbuild (Join-Path $repo 'driver\pattie.vcxproj') -t:Rebuild `
     -p:Configuration=Release -p:Platform=x64 "-p:PattieDriverVersion=$Version" @nugetArgs -nologo -v:minimal
 if ($LASTEXITCODE -ne 0) { throw "Driver build failed (exit $LASTEXITCODE)" }
 

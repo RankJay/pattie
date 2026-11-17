@@ -11,7 +11,7 @@
 #define PATTIE_KERNEL_STDINT_H
 
 #ifndef _KERNEL_MODE
-#error "kernel-crt/stdint.h is for kernel-mode builds only"
+#error "kernel_crt/stdint.h is for kernel-mode builds only"
 #endif
 
 typedef signed __int8 int8_t;

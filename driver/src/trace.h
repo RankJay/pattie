@@ -5,19 +5,19 @@
  * Events are written only from lifecycle callbacks (stream create, packets,
  * run, pause, release; circuit device added and prepared), never per audio pass:
  * the timer pass only updates counters, reported when the stream stops. Recording
- * them: platforms/windows/vm/trace-run.ps1 (.ai/ops/vm-steps.md, section G).
+ * them: driver/vm/trace-run.ps1 (.ai/ops/vm-steps.md, section G).
  *
  * The GUID is the standard name hash of "Pattie.Driver" (as EventSource and
  * tracelog's "*Name" syntax compute it), so tools can enable it by name.
  */
-#ifndef PATTIE_TRACE_H
-#define PATTIE_TRACE_H
+#ifndef DRIVER_TRACE_H
+#define DRIVER_TRACE_H
 
 #include <TraceLoggingProvider.h>
 
-TRACELOGGING_DECLARE_PROVIDER(PattieTraceProvider);
+TRACELOGGING_DECLARE_PROVIDER(TraceProvider);
 
 /* Event levels used: lifecycle events are informational. */
-#define PATTIE_TRACE_LEVEL_INFO 4
+#define TRACE_LEVEL_INFO 4
 
-#endif /* PATTIE_TRACE_H */
+#endif /* DRIVER_TRACE_H */

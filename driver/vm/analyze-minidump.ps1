@@ -29,7 +29,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
+$repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $kd = 'C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\kd.exe'
 $symbols = Join-Path $repo "target\driver\x64\$Configuration"
 

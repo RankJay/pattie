@@ -4,7 +4,7 @@
     its GUID is the standard name hash (as EventSource and TraceLogging derive
     it), computed here rather than copied, so only trace.c holds the literal.
 #>
-$PattieProviderName = 'Pattie.Driver'
+$TraceProviderName = 'Pattie.Driver'
 
 # SHA-1 over a fixed namespace and the upper-cased name in UTF-16BE; the first
 # 16 bytes, marked version 5, read as a GUID.
@@ -18,4 +18,4 @@ function Get-EtwProviderGuid([string]$Name) {
     [guid]::new($bytes)
 }
 
-$PattieProvider = '{' + (Get-EtwProviderGuid $PattieProviderName) + '}'
+$TraceProviderGuid = '{' + (Get-EtwProviderGuid $TraceProviderName) + '}'

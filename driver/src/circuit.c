@@ -12,8 +12,8 @@
  * The circuit's name is also the reference string of its audio interfaces
  * (interfaces.c), so both take it from here.
  */
-DECLARE_CONST_UNICODE_STRING(PattieMicrophoneCircuitName, L"Microphone0");
-DECLARE_CONST_UNICODE_STRING(PattieSpeakerCircuitName, L"Speaker0");
+DECLARE_CONST_UNICODE_STRING(MicrophoneCircuitName, L"Microphone0");
+DECLARE_CONST_UNICODE_STRING(SpeakerCircuitName, L"Speaker0");
 
 /*
  * The host pin's formats (ADR 0005, ADR 0023): the Device's own rate and
@@ -26,7 +26,7 @@ DECLARE_CONST_UNICODE_STRING(PattieSpeakerCircuitName, L"Speaker0");
  * The channel layouts are the standard masks, in WAVEFORMATEXTENSIBLE's order;
  * the Linux backend offers the same positions (ADR 0023). Indexed by channels.
  */
-static const DWORD PattieChannelMasks[PATTIE_RING_MAX_CHANNELS + 1] = {
+static const DWORD ChannelMasks[PATTIE_RING_MAX_CHANNELS + 1] = {
     0,
     KSAUDIO_SPEAKER_MONO,                                           /* mono */
     KSAUDIO_SPEAKER_STEREO,                                         /* stereo */
@@ -43,7 +43,7 @@ static const DWORD PattieChannelMasks[PATTIE_RING_MAX_CHANNELS + 1] = {
  * Fills Format: SampleRate, Channels (1 to PATTIE_RING_MAX_CHANNELS, as the core
  * checked), BytesPerSample of SubFormat (float or PCM).
  */
-static VOID PattieFillFormat(KSDATAFORMAT_WAVEFORMATEXTENSIBLE *Format, UINT32 SampleRate, UINT32 Channels,
+static VOID FillFormat(KSDATAFORMAT_WAVEFORMATEXTENSIBLE *Format, UINT32 SampleRate, UINT32 Channels,
                          UINT32 BytesPerSample, const GUID *SubFormat)
 {
     UINT32 blockAlign = BytesPerSample * Channels;
@@ -61,18 +61,18 @@ static VOID PattieFillFormat(KSDATAFORMAT_WAVEFORMATEXTENSIBLE *Format, UINT32 S
     Format->WaveFormatExt.Format.wBitsPerSample = (WORD)(8 * BytesPerSample);
     Format->WaveFormatExt.Format.cbSize = sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX);
     Format->WaveFormatExt.Samples.wValidBitsPerSample = (WORD)(8 * BytesPerSample);
-    Format->WaveFormatExt.dwChannelMask = PattieChannelMasks[Channels];
+    Format->WaveFormatExt.dwChannelMask = ChannelMasks[Channels];
     Format->WaveFormatExt.SubFormat = *SubFormat;
 }
 
 _Use_decl_annotations_
-PCUNICODE_STRING PattieCircuitName(UINT32 Kind)
+PCUNICODE_STRING CircuitName(UINT32 Kind)
 {
-    return Kind == PATTIE_KIND_MICROPHONE ? &PattieMicrophoneCircuitName : &PattieSpeakerCircuitName;
+    return Kind == PATTIE_KIND_MICROPHONE ? &MicrophoneCircuitName : &SpeakerCircuitName;
 }
 
 /* Adds one format, owned by the circuit, to the host pin's list. */
-static NTSTATUS PattieAddFormat(WDFDEVICE Device, ACXCIRCUIT Circuit, ACXDATAFORMATLIST List,
+static NTSTATUS AddFormat(WDFDEVICE Device, ACXCIRCUIT Circuit, ACXDATAFORMATLIST List,
                             KSDATAFORMAT_WAVEFORMATEXTENSIBLE *Format)
 {
     ACX_DATAFORMAT_CONFIG formatConfig;
@@ -91,7 +91,7 @@ static NTSTATUS PattieAddFormat(WDFDEVICE Device, ACXCIRCUIT Circuit, ACXDATAFOR
 }
 
 /* Creates one pin owned by the circuit. */
-static NTSTATUS PattieCreatePin(ACXCIRCUIT Circuit, ACX_PIN_TYPE Type, ACX_PIN_COMMUNICATION Communication,
+static NTSTATUS CreatePin(ACXCIRCUIT Circuit, ACX_PIN_TYPE Type, ACX_PIN_COMMUNICATION Communication,
                             const GUID *Category, ACXPIN *Pin)
 {
     ACX_PIN_CONFIG pinConfig;
@@ -112,7 +112,7 @@ static NTSTATUS PattieCreatePin(ACXCIRCUIT Circuit, ACX_PIN_TYPE Type, ACX_PIN_C
  * first prepares its hardware.
  */
 _Use_decl_annotations_
-NTSTATUS PattieCircuitCreate(WDFDEVICE Device, PATTIE_CIRCUIT_DEVICE_CONTEXT *DeviceCtx)
+NTSTATUS CircuitCreate(WDFDEVICE Device, CIRCUIT_DEVICE_CONTEXT *DeviceCtx)
 {
     BOOLEAN microphone = DeviceCtx->Kind == PATTIE_KIND_MICROPHONE;
     PACXCIRCUIT_INIT circuitInit;
@@ -126,11 +126,11 @@ NTSTATUS PattieCircuitCreate(WDFDEVICE Device, PATTIE_CIRCUIT_DEVICE_CONTEXT *De
     if (circuitInit == NULL) {
         return STATUS_INSUFFICIENT_RESOURCES;
     }
-    AcxCircuitInitSetComponentId(circuitInit, &PATTIE_COMPONENT_GUID);
-    status = AcxCircuitInitAssignName(circuitInit, PattieCircuitName(DeviceCtx->Kind));
+    AcxCircuitInitSetComponentId(circuitInit, &COMPONENT_GUID);
+    status = AcxCircuitInitAssignName(circuitInit, CircuitName(DeviceCtx->Kind));
     if (NT_SUCCESS(status)) {
         AcxCircuitInitSetCircuitType(circuitInit, microphone ? AcxCircuitTypeCapture : AcxCircuitTypeRender);
-        status = AcxCircuitInitAssignAcxCreateStreamCallback(circuitInit, PattieEvtCircuitCreateStream);
+        status = AcxCircuitInitAssignAcxCreateStreamCallback(circuitInit, EvtCircuitCreateStream);
     }
     if (!NT_SUCCESS(status)) {
         AcxCircuitInitFree(circuitInit);
@@ -144,11 +144,11 @@ NTSTATUS PattieCircuitCreate(WDFDEVICE Device, PATTIE_CIRCUIT_DEVICE_CONTEXT *De
     }
 
     /* Host pin: where Windows' audio engine streams. */
-    status = PattieCreatePin(circuit, microphone ? AcxPinTypeSource : AcxPinTypeSink,
+    status = CreatePin(circuit, microphone ? AcxPinTypeSource : AcxPinTypeSink,
                          AcxPinCommunicationSink, &KSCATEGORY_AUDIO, &pins[0]);
     if (NT_SUCCESS(status)) {
         /* Bridge pin: the "physical" end, a microphone or speaker. */
-        status = PattieCreatePin(circuit, microphone ? AcxPinTypeSink : AcxPinTypeSource,
+        status = CreatePin(circuit, microphone ? AcxPinTypeSink : AcxPinTypeSource,
                              AcxPinCommunicationNone,
                              microphone ? &KSNODETYPE_MICROPHONE : &KSNODETYPE_SPEAKER, &pins[1]);
     }
@@ -163,14 +163,14 @@ NTSTATUS PattieCircuitCreate(WDFDEVICE Device, PATTIE_CIRCUIT_DEVICE_CONTEXT *De
     if (DeviceCtx->Channels == 0 || DeviceCtx->Channels > PATTIE_RING_MAX_CHANNELS) {
         return STATUS_INVALID_PARAMETER; /* the core never attaches such a Ring */
     }
-    PattieFillFormat(&DeviceCtx->FormatFloat, DeviceCtx->SampleRate, DeviceCtx->Channels,
-                 PATTIE_FLOAT_BYTES_PER_SAMPLE, &KSDATAFORMAT_SUBTYPE_IEEE_FLOAT);
-    PattieFillFormat(&DeviceCtx->FormatPcm16, DeviceCtx->SampleRate, DeviceCtx->Channels,
-                 PATTIE_PCM16_BYTES_PER_SAMPLE, &KSDATAFORMAT_SUBTYPE_PCM);
+    FillFormat(&DeviceCtx->FormatFloat, DeviceCtx->SampleRate, DeviceCtx->Channels,
+                 FLOAT_BYTES_PER_SAMPLE, &KSDATAFORMAT_SUBTYPE_IEEE_FLOAT);
+    FillFormat(&DeviceCtx->FormatPcm16, DeviceCtx->SampleRate, DeviceCtx->Channels,
+                 PCM16_BYTES_PER_SAMPLE, &KSDATAFORMAT_SUBTYPE_PCM);
     /* Float first, then PCM16: the order the VM endpoint went ACTIVE with. */
-    status = PattieAddFormat(Device, circuit, formatList, &DeviceCtx->FormatFloat);
+    status = AddFormat(Device, circuit, formatList, &DeviceCtx->FormatFloat);
     if (NT_SUCCESS(status)) {
-        status = PattieAddFormat(Device, circuit, formatList, &DeviceCtx->FormatPcm16);
+        status = AddFormat(Device, circuit, formatList, &DeviceCtx->FormatPcm16);
     }
     if (NT_SUCCESS(status)) {
         status = AcxCircuitAddPins(circuit, pins, ARRAYSIZE(pins));

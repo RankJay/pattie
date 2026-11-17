@@ -21,7 +21,7 @@ use crate::Kind;
 /// core's; this copy is for apps and tools, and is tested against it.
 ///
 /// Where it appears: on Windows, the Device's circuit device instance ID (the
-/// driver writes it in lowercase; `platforms/windows/driver/src/endpoint.c`); on
+/// driver writes it in lowercase; `driver/src/endpoint.c`); on
 /// Linux, the PipeWire `node.name` is `pattie.` followed by it. Tools use it to
 /// find a Device's endpoint or node.
 ///

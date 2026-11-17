@@ -1,12 +1,12 @@
 //! The installer's authoring (ADR 0024): the rules that keep an upgrade from
 //! removing the driver it installs, and the identity in one place. Read from
-//! `platforms/windows/release/pattie.wxs` and `identity.wxi`; a build of the
+//! `release/msi/pattie.wxs` and `identity.wxi`; a build of the
 //! MSI and the VM (VM-STEPS R3) check the rest.
 
 use roxmltree::{Document, Node};
 
-const WXS: &str = include_str!("../../../../platforms/windows/release/pattie.wxs");
-const IDENTITY: &str = include_str!("../../../../platforms/windows/release/identity.wxi");
+const WXS: &str = include_str!("../../../../release/msi/pattie.wxs");
+const IDENTITY: &str = include_str!("../../../../release/msi/identity.wxi");
 
 fn element<'a>(doc: &'a Document, name: &str) -> Node<'a, 'a> {
     let mut found = doc.descendants().filter(|n| n.has_tag_name(name));

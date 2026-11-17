@@ -6,7 +6,7 @@
 #define PATTIE_KERNEL_STDBOOL_H
 
 #ifndef _KERNEL_MODE
-#error "kernel-crt/stdbool.h is for kernel-mode builds only"
+#error "kernel_crt/stdbool.h is for kernel-mode builds only"
 #endif
 
 #define bool _Bool

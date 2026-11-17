@@ -221,9 +221,9 @@ jobs:
           msbuild-architecture: x64
       - name: Restore the WDK and SDK from NuGet
         # The runner's own WDK isn't reliable (actions/runner-images#13071, #14263).
-        run: nuget restore platforms/windows/driver/packages.config -PackagesDirectory target/nuget -NonInteractive
+        run: nuget restore driver/packages.config -PackagesDirectory target/nuget -NonInteractive
       - name: Build (Release, warnings are errors, Microsoft's code analysis)
-        run: msbuild platforms/windows/driver/pattie.vcxproj -p:Configuration=Release -p:Platform=x64 -p:RunCodeAnalysis=true -p:PattieWdkNuGet=true -nologo -v:minimal
+        run: msbuild driver/pattie.vcxproj -p:Configuration=Release -p:Platform=x64 -p:RunCodeAnalysis=true -p:PattieWdkNuGet=true -nologo -v:minimal
       # The installer (ADR 0024) stays buildable: a test MSI from the driver just
       # built, then Windows Installer's ICE validation. Only a build check: the
       # payload's catalog is a placeholder (no signing in CI), so the MSI isn't
@@ -244,7 +244,7 @@ jobs:
           New-Item -ItemType Directory -Force $payload | Out-Null
           Copy-Item target/driver/x64/Release/pattie.inf, target/driver/x64/Release/pattie.sys $payload
           Set-Content "$payload/pattie.cat" 'placeholder: CI builds the MSI only'
-          ./platforms/windows/release/make-msi.ps1 -Payload $payload
+          ./release/make-msi.ps1 -Payload $payload
           $msi = Get-ChildItem target/msi/*-test.msi | Select-Object -First 1
           if (-not $msi) { throw 'make-msi.ps1 produced no MSI' }
           wix msi validate $msi.FullName

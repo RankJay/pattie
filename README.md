@@ -120,7 +120,7 @@ The driver is split in two on purpose:
 name rules, the Ring protocol and format conversion. It's compiled into the driver
 unchanged, and into host-side tests, so all of its logic is tested on any PC
 without loading a driver.
-- **The shell** (`platforms/windows/driver/src/`) is the thin ACX/KMDF layer around it:
+- **The shell** (`driver/src/`) is the thin ACX/KMDF layer around it:
 devices, streams, the timer and tracing. It's checked in the test VM.
 
 Everything that can live in user space (validation, buffering policy, later drift
@@ -198,17 +198,16 @@ crates/
                             Converter, Stats, Error, stable_id); the Backends in src/backend/;
                             src/backend/in_process/ runs the C core in-process (Linux, and the
                             contract suite's Fake backend on every OS)
-  pattie-cli/               test tool: mic, speaker, measure, install, uninstall
-  pattie-install/           puts the driver on a machine or takes it off: the engine behind
-                            `pattie-cli install` and the MSI's custom action
-  pattie-msi/               the MSI's custom actions (a DLL over pattie-install)
+  cli/                      pattie-cli, the test tool: mic, speaker, measure, install, uninstall
+  install/                  pattie-install: puts the driver on a machine or takes it off, the
+                            engine behind `pattie-cli install` and the MSI's custom action
+  msi/                      pattie-msi: the MSI's custom actions (a DLL over pattie-install)
 bindings/python/            the Python binding (`pattie` on PyPI), built with maturin
 integrations/pipecat/       the Pipecat transport (`pipecat-pattie` on PyPI)
-platforms/windows/
-  driver/                   the ACX/KMDF driver: shell sources, pattie.inf, project
+driver/                     the ACX/KMDF driver: shell sources, pattie.inf, project
   vm/                       scripts for the test VM (package, install, probe, trace)
-  release/                  make-attestation-cab.ps1 (the .cab for Microsoft signing);
-                            make-msi.ps1, pattie.wxs, identity.wxi (the installer); winget/
+release/                    make-attestation-cab.ps1 (the .cab for Microsoft signing);
+                            make-msi.ps1 and msi/ (pattie.wxs, identity.wxi: the installer); winget/
 target/                     build output (driver, VM package, attestation cab, CodeQL)
 clippy.toml, deny.toml      banned methods; allowed dependencies (Lint rules, Dependency checks)
 .github/workflows/          CI, nightly checks and releases (Continuous integration)
@@ -250,12 +249,12 @@ Use the **64-bit** MSBuild (the 32-bit one picks a validator that can't check x6
 drivers):
 
 ```bash
-"/c/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" platforms/windows/driver/pattie.vcxproj -p:Configuration=Release -p:Platform=x64
+"/c/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" driver/pattie.vcxproj -p:Configuration=Release -p:Platform=x64
 ```
 
 Add `-p:RunCodeAnalysis=true` for Microsoft's driver code analysis. Output goes to
 `target/driver/x64/Release/`. Building never signs, installs or loads anything. More in
-[platforms/windows/driver/README.md](platforms/windows/driver/README.md).
+[driver/README.md](driver/README.md).
 
 ## Testing the driver (VM only)
 
@@ -285,7 +284,7 @@ The loop:
 Snapshots are the undo button: if the guest crashes, go back and try the next build.
 
 - **Crashes:** the guest writes a small minidump. Read it on the host with
-`platforms/windows/vm/analyze-minidump.ps1`, which is deliberately light. Don't open
+`driver/vm/analyze-minidump.ps1`, which is deliberately light. Don't open
 the full `MEMORY.DMP` with `!analyze -v`: it can fill a 32 GB RAM on host.
 - **No live kernel debugger:** with one attached, VMware guests bugcheck at boot
 (`NMI_HARDWARE_FAILURE`) on hosts running Windows' own hypervisor. It's a known
@@ -310,10 +309,10 @@ VMware issue.
 
 | Script | Where | What it does |
 | --- | --- | --- |
-| `platforms/windows/vm/make-test-package.ps1` | host | Builds and test-signs everything into `target\vm-package` |
-| `platforms/windows/release/make-attestation-cab.ps1 -Version a.b.c.d` | host | Builds the release driver and packs the `.cab` for Microsoft's attestation signing (signs nothing itself) |
-| `platforms/windows/vm/analyze-minidump.ps1 <dmp>` | host | A crash's bug check and the driver's frames, kept under 1 GB of memory |
-| `platforms/windows/vm/analyze-trace.ps1 <etl>` | host | The driver's events and DPC/ISR summary from a recording |
+| `driver/vm/make-test-package.ps1` | host | Builds and test-signs everything into `target\vm-package` |
+| `release/make-attestation-cab.ps1 -Version a.b.c.d` | host | Builds the release driver and packs the `.cab` for Microsoft's attestation signing (signs nothing itself) |
+| `driver/vm/analyze-minidump.ps1 <dmp>` | host | A crash's bug check and the driver's frames, kept under 1 GB of memory |
+| `driver/vm/analyze-trace.ps1 <etl>` | host | The driver's events and DPC/ISR summary from a recording |
 | `prepare-vm.ps1` | guest | Test signing on, small crash dumps, kernel debugging off; refuses outside VMware |
 | `install-in-vm.ps1 [-Verifier] [-Signed <folder>]` | guest | Installs the test-signed driver, or with `-Signed` the Microsoft-signed one (needs Secure Boot on) |
 | `probe-endpoint.ps1` | guest | Opens each Pattie audio interface the way Windows' audio service does |
@@ -372,7 +371,7 @@ If you touched the driver, build it too (warnings are errors there), with Micros
 code analysis:
 
 ```bash
-"/c/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" platforms/windows/driver/pattie.vcxproj -p:Configuration=Release -p:Platform=x64 -p:RunCodeAnalysis=true
+"/c/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" driver/pattie.vcxproj -p:Configuration=Release -p:Platform=x64 -p:RunCodeAnalysis=true
 ```
 
 ### Continuous integration
@@ -391,16 +390,16 @@ the cab with the EV certificate and submitting it, the real-desktop Linux checks
 (Zoom, browsers), and the PipeWire restart test.
 
 The runners' own WDK isn't reliable, so CI builds the driver against the WDK and SDK
-NuGet packages (`platforms/windows/driver/packages.config`, version 10.0.28000.2526,
+NuGet packages (`driver/packages.config`, version 10.0.28000.2526,
 matching the installed kit). Local builds keep using the installed WDK; to build the
 way CI does:
 
 ```bash
-nuget restore platforms/windows/driver/packages.config -PackagesDirectory target/nuget
+nuget restore driver/packages.config -PackagesDirectory target/nuget
 ```
 
 ```bash
-"/c/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" platforms/windows/driver/pattie.vcxproj -p:Configuration=Release -p:Platform=x64 -p:RunCodeAnalysis=true -p:PattieWdkNuGet=true
+"/c/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" driver/pattie.vcxproj -p:Configuration=Release -p:Platform=x64 -p:RunCodeAnalysis=true -p:PattieWdkNuGet=true
 ```
 
 `make-attestation-cab.ps1 -WdkNuGet` does the same for the cab, and finds MSBuild
@@ -570,7 +569,7 @@ After a driver change, build the database from a full rebuild, then analyze it
 (a few minutes in all):
 
 ```bash
-MSYS_NO_PATHCONV=1 /d/Tools/codeql-home/codeql/codeql.exe database create target/codeql/db --language=cpp --source-root=. --overwrite --command="\"C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\amd64\MSBuild.exe\" platforms\windows\driver\pattie.vcxproj -t:Rebuild -p:Configuration=Release -p:Platform=x64"
+MSYS_NO_PATHCONV=1 /d/Tools/codeql-home/codeql/codeql.exe database create target/codeql/db --language=cpp --source-root=. --overwrite --command="\"C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\amd64\MSBuild.exe\" driver\pattie.vcxproj -t:Rebuild -p:Configuration=Release -p:Platform=x64"
 ```
 
 ```bash
@@ -673,7 +672,7 @@ deserves the most care; it follows the Ring protocol exactly, and Miri checks it
 - C: C17, warnings as errors, no floating point in the driver (the core converts audio
 with integer arithmetic on the bit patterns), no allocation on the streaming path.
 - Comments say *why*, not what. Docs live next to what they describe: this file for
-the project, `platforms/windows/driver/README.md` for the driver.
+the project, `driver/README.md` for the driver.
 
 ## Not in v0
 
@@ -686,7 +685,7 @@ update), the macOS backend, bindings for C, Node and Swift.
 Built since the v0 scope was set: 44.1, 48 and 96 kHz with 1 to 8 channels, drift
 compensation and frame timestamps, barge-in playout, the Linux backend, the
 Python binding, a Pipecat transport (`integrations/pipecat`), and a Windows MSI
-installer with in-place driver upgrades (`platforms/windows/release`, ADR 0024).
+installer with in-place driver upgrades (`release`, ADR 0024).
 
 ## License
 

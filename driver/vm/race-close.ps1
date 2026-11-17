@@ -30,6 +30,11 @@
     (\\.\Pattie\x) must fail with ERROR_FILE_NOT_FOUND (2); opening
     \\.\Pattie itself must still work.
 
+    The C# below has its own copy of a few ABI facts: the IOCTL formula, the
+    request size (160) and its offsets, the Ring header size (192) and the
+    offset of its capacity (128). They mirror core/include/pattie_abi.h, which is
+    frozen, so they stay right.
+
     Run it in the guest with Driver Verifier on, then exit PowerShell (the
     process exit is when locked pages would bugcheck), and check
     `verifier /query`.
@@ -54,7 +59,7 @@ Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
 
-public static class PattieRaw
+public static class ControlDevice
 {
     const uint GENERIC_READ = 0x80000000, GENERIC_WRITE = 0x40000000;
     const uint OPEN_EXISTING = 3, FILE_FLAG_OVERLAPPED = 0x40000000;
@@ -303,7 +308,7 @@ public static class PattieRaw
 '@
 
 if ($Mode -eq 'Race') {
-    $c = [PattieRaw]::Race($Rounds)
+    $c = [ControlDevice]::Race($Rounds)
     "Race, $Rounds rounds: 6 threads send Creates while another closes the handle"
     "  created: $($c[0]); refused after the close: $($c[1]); cancelled at the close: $($c[3])"
     "  busy: $($c[2]); too many Devices: $($c[4]); other (handle already closed, ...): $($c[5])"
@@ -315,7 +320,7 @@ if ($Mode -eq 'Race') {
 } elseif ($Mode -eq 'Gone') {
     $root = (Get-PnpDevice -FriendlyName 'Pattie Virtual Audio' -ErrorAction Stop).InstanceId
     "Gone: a forced removal of $root under a live Owner"
-    [PattieRaw]::Gone($root, [bool]$Hard) | ForEach-Object { "  $_" }
+    [ControlDevice]::Gone($root, [bool]$Hard) | ForEach-Object { "  $_" }
     Start-Sleep -Seconds 2
     $after = Get-PnpDevice -InstanceId $root
     "  the root now: Status $($after.Status), Problem $($after.Problem)   <- want OK"
@@ -323,13 +328,13 @@ if ($Mode -eq 'Race') {
         Where-Object { $_.FriendlyName -like '*(Gone *' -and $_.Status -eq 'OK' })
     "  'Gone' endpoints still present: $($left.Count)   <- expect 0"
 } elseif ($Mode -eq 'Names') {
-    $named = [PattieRaw]::TryOpen('\\.\Pattie\x')
-    $plain = [PattieRaw]::TryOpen('\\.\Pattie')
+    $named = [ControlDevice]::TryOpen('\\.\Pattie\x')
+    $plain = [ControlDevice]::TryOpen('\\.\Pattie')
     "Opening \\.\Pattie\x: error $named   <- expect 2 (ERROR_FILE_NOT_FOUND)"
     "Opening \\.\Pattie:   error $plain   <- expect 0 (it opens)"
     return
 } else {
-    $c = [PattieRaw]::Burst()
+    $c = [ControlDevice]::Burst()
     "Burst: 40 threads send a Create each, at once, on one handle"
     "  created: $($c[0]); busy (ERROR_BUSY): $($c[2]); too many Devices: $($c[4]); other: $($c[1] + $c[3] + $c[5])"
     "  expect: created at most 8, and busy above 0 (only 16 may hold a pinned Ring at once)"

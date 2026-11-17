@@ -6,7 +6,7 @@ the core. Layout (ADR 0010, ADR 0011, ADR 0013):
 
 | Piece | File | Role |
 | --- | --- | --- |
-| Root ACX device | `src/driver.c` | Installed by `pattie.inf`; parents the circuit devices |
+| Root ACX device | `src/entry.c` | Installed by `pattie.inf`; parents the circuit devices |
 | Control device `\\.\Pattie` | `src/control.c` | Owners' commands: one handle per Owner, one buffered IOCTL per command; pins Rings in the caller's context |
 | Circuit devices | `src/endpoint.c` | One raw child per Device: create with a stable instance ID from kind + name (ADR 0015), add its circuit once, name it, safe teardown |
 | Circuit | `src/circuit.c` | The child's one capture or render circuit: host and bridge pins, float and PCM16 formats |
@@ -21,7 +21,7 @@ Needs Visual Studio's driver tools plus a matching Windows SDK and Driver Kit
 API-validator helper that can't check x64 drivers.
 
 ```bash
-"/c/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" platforms/windows/driver/pattie.vcxproj -p:Configuration=Debug -p:Platform=x64
+"/c/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" driver/pattie.vcxproj -p:Configuration=Debug -p:Platform=x64
 ```
 
 Platforms: `x64`, `ARM64`. Configurations: `Debug`, `Release`. Add
@@ -33,7 +33,7 @@ certificate is created), and catalog generation and deployment are disabled.
 
 `DriverVer`'s version comes from the build time unless
 `-p:PattieDriverVersion=a.b.c.d` sets it. A release goes through
-`platforms/windows/release/make-attestation-cab.ps1 -Version a.b.c.d`, which builds
+`release/make-attestation-cab.ps1 -Version a.b.c.d`, which builds
 with that version and packs the `.cab` for Microsoft's attestation signing
 (`.ai/ops/vm-steps.md`, section H).
 
@@ -44,7 +44,7 @@ driver of the same or a newer version.
 
 ## Kernel-mode notes
 
-- `kernel-crt/` holds kernel-safe `stdint.h` and `stdbool.h`. The kernel C runtime
+- `kernel_crt/` holds kernel-safe `stdint.h` and `stdbool.h`. The kernel C runtime
   has neither, and Visual Studio's versions pull in user-mode headers.
 - The kernel toolset ignores `LanguageStandard_C`; C17 is passed as `/std:c17`.
 - The core copies audio samples as raw 32-bit values, and converts float to and
@@ -54,7 +54,7 @@ driver of the same or a newer version.
 - Tracing is TraceLogging (ETW) and stays in production builds: it costs nothing
   until a session listens. Events come only from lifecycle callbacks; the timer pass
   just updates counters. The provider must be unregistered on every `DriverEntry`
-  failure and on unload, or the system crashes later (`src/driver.c`). Recording
+  failure and on unload, or the system crashes later (`src/entry.c`). Recording
   and reading it: `.ai/ops/vm-steps.md`, section G.
 
 ## Checked in the test VM (2026-11-07)

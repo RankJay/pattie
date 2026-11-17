@@ -41,7 +41,7 @@ mod tests {
 
     #[test]
     fn root_and_endpoint_ids_match_the_inf() {
-        let inf = include_str!("../../../platforms/windows/driver/pattie.inf");
+        let inf = include_str!("../../../driver/pattie.inf");
         assert!(inf_lists_hardware_id(inf, ROOT_HARDWARE_ID));
         assert!(inf_lists_hardware_id(inf, ENDPOINT_HARDWARE_ID));
         assert_ne!(ROOT_HARDWARE_ID, ENDPOINT_HARDWARE_ID);

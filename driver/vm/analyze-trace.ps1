@@ -29,7 +29,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $xperf = 'C:\Program Files (x86)\Windows Kits\10\Windows Performance Toolkit\xperf.exe'
 . (Join-Path $PSScriptRoot 'trace-provider.ps1')
-$provider = $PattieProvider
+$provider = $TraceProviderGuid
 
 if (-not (Test-Path $xperf)) { throw "Missing xperf.exe: $xperf (installed with the Driver Kit)" }
 if (-not (Test-Path $Path)) { throw "No such trace: $Path" }
@@ -58,7 +58,7 @@ function Invoke-Xperf([string[]]$Arguments) {
 
 Write-Host '== Pattie driver events'
 $events = Invoke-Xperf @('-i', "`"$Path`"", '-a', 'dumper', '-provider', $provider, '-add_fieldnames')
-$ours = $events | Where-Object { $_ -match "$([regex]::Escape($PattieProviderName))|$($provider.Trim('{}'))" }
+$ours = $events | Where-Object { $_ -match "$([regex]::Escape($TraceProviderName))|$($provider.Trim('{}'))" }
 if (-not $ours) {
     Write-Host '   (none: was the driver loaded and a stream started while recording?)'
 } else {

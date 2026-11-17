@@ -45,7 +45,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $here = $PSScriptRoot
-$repo = (Resolve-Path (Join-Path $here '..\..\..')).Path
+$repo = (Resolve-Path (Join-Path $here '..')).Path
 $out = Join-Path $repo 'target\msi'
 $build = Join-Path $out 'build'
 
@@ -61,7 +61,7 @@ $productVersion = "$($g[1].Value).$($g[2].Value).$($g[3].Value)"
 Write-Host "== Payload $Payload, DriverVer $($g[1].Value).$($g[2].Value).$($g[3].Value).$($g[4].Value), product $productVersion"
 
 # --- 2. Identity, and what a release needs.
-$identity = Get-Content -Raw (Join-Path $here 'identity.wxi')
+$identity = Get-Content -Raw (Join-Path $here 'msi\identity.wxi')
 function Get-Define([string]$name) {
     $m = [regex]::Match($identity, "<\?define\s+$name\s*=\s*""([^""]*)""\s*\?>")
     if (-not $m.Success) { throw "identity.wxi defines no $name" }
@@ -157,7 +157,7 @@ $Cli = (Resolve-Path $Cli).Path
 New-Item -ItemType Directory -Force $out | Out-Null
 $msi = Join-Path $out $msiName
 Write-Host "== wix build -> $msi"
-& wix build (Join-Path $here 'pattie.wxs') -arch x64 -i $here `
+& wix build (Join-Path $here 'msi\pattie.wxs') -arch x64 -i $here `
     -d "ProductVersion=$productVersion" -d "UpgradeCode=$upgradeCode" `
     -d "Payload=$Payload" -d "Cli=$Cli" -d "ActionsDll=$actions" `
     -o $msi
