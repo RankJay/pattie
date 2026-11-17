@@ -7,8 +7,8 @@
     UpgradeCode     identity.wxi's release code, or its test code
     Payload         the driver folder (pattie.inf, .sys, .cat), byte for byte
     Cli             pattie-cli.exe
-    ActionsDll      pattie_msi.dll, the custom actions (crates/pattie-msi)
-  crates/pattie-msi/tests/authoring.rs checks the rules below.
+    ActionsDll      pattie_msi.dll, the custom actions (crates/msi)
+  crates/msi/tests/authoring/ checks the rules below.
 -->
 <?include identity.wxi ?>
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">

@@ -423,7 +423,7 @@ cargo install cargo-llvm-cov --locked
 Then:
 
 ```bash
-CC="/c/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/Llvm/x64/bin/clang-cl.exe" cargo llvm-cov --workspace --include-ffi --summary-only --ignore-filename-regex 'sdk[\\/]src[\\/]backend[\\/]windows\.rs|pattie-cli[\\/]src[\\/](main|measure)\.rs|pattie-install[\\/]src[\\/]setup\.rs|pattie-msi[\\/]src[\\/]msi\.rs|backend[\\/]fake\.rs'
+CC="/c/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/Llvm/x64/bin/clang-cl.exe" cargo llvm-cov --workspace --include-ffi --summary-only --ignore-filename-regex 'sdk[\\/]src[\\/]backend[\\/]windows\.rs|cli[\\/]src[\\/](main\.rs|commands[\\/])|install[\\/]src[\\/]setup[\\/]|msi[\\/]src[\\/]installer_api|backend[\\/]fake\.rs'
 ```
 
 Add `--show-missing-lines` to list the lines each file misses. Left out of the
@@ -434,10 +434,10 @@ test VM):
 | Left out | Why | Where its logic is tested |
 | --- | --- | --- |
 | `crates/sdk/src/backend/windows.rs` | The Windows Backend: IOCTLs to the real driver | VM; the not-installed path has a test |
-| `crates/pattie-cli/src/main.rs` | The mic/speaker loops on a live Device | Parsing: `cli.rs` |
-| `crates/pattie-cli/src/measure.rs` | WASAPI streams on a live endpoint | Pairing and statistics: `latency.rs` |
-| `crates/pattie-install/src/setup.rs` | SetupAPI calls that change the machine | INF parsing and the outcome (exit codes, reboot): `lib.rs`; VM for the rest |
-| `crates/pattie-msi/src/msi.rs` | The MSI's custom-action entry points (Windows Installer calls) | What each action returns: `lib.rs`; the authoring: `tests/authoring.rs`; VM (R3) for the rest |
+| `crates/cli/src/main.rs`, `commands/` | The mic and speaker loops on a live Device | Parsing: `args/` |
+| `crates/cli/src/commands/measure/` | WASAPI streams on a live endpoint | Pairing and statistics: `clicks/` |
+| `crates/install/src/setup/` | SetupAPI calls that change the machine | INF parsing and the outcome (exit codes, reboot): `inf.rs`, `outcome.rs`; VM for the rest |
+| `crates/msi/src/installer_api.rs`, `installer_api/` | The MSI's custom-action entry points (Windows Installer calls) | What each action returns: `lib.rs`; the authoring: `tests/authoring/`; VM (R3) for the rest |
 | `crates/sdk/src/backend/fake.rs` | Test scaffolding (the contract suite's nodes), never shipped | The contract tests it serves |
 
 ### Property tests
@@ -646,13 +646,13 @@ Where they live, from widest to narrowest:
 | Root `Cargo.toml`, `[workspace.lints]` | every crate (each opts in with `[lints] workspace = true`) | The `unsafe` rules below; no `dbg!`, `todo!`, `unimplemented!`; no pointer casts that hide a type or alignment change (`ptr_as_ptr`, `cast_ptr_alignment`, `transmute_ptr_to_ptr`); rustdoc links and HTML must be valid |
 | `clippy.toml` | every crate | Methods banned by name, each with its reason: `std::process::exit` (skips destructors, so a live Device isn't removed cleanly) and `std::thread::sleep` (a 1 ms sleep can last ~15.6 ms and starve an audio loop: use the SDK's `Writer::write_paced` or `Reader::read_paced`, which wake on the Device's doorbell). Also: the `unsafe fn` contract rule covers private functions, and tests may unwrap |
 | Top of `crates/sdk/src/lib.rs` | the SDK only | It runs inside other people's apps: no `unwrap`/`expect`/`panic!`, no printing, no silently narrowing casts, and every public item is documented and has `Debug` |
-| `#![forbid(unsafe_code)]` at the top of a module | `cli.rs`, `latency.rs`, `error/`, `stable_id.rs`, `backend/traits.rs`, `audio/` | The compiler guarantees these hold no `unsafe`, so a reviewer can skip them for memory safety |
+| `#![forbid(unsafe_code)]` at the top of a module | `args/`, `clicks/`, `error/`, `stable_id.rs`, `backend/traits.rs`, `audio/` | The compiler guarantees these hold no `unsafe`, so a reviewer can skip them for memory safety |
 | `core/tests/conformance/build.rs`, `crates/sdk/build.rs`, `pattie.vcxproj` | the C core (and the driver) | Warnings are errors, plus implicit narrowing and sign changes: `-Wconversion -Wsign-conversion` under clang, C4242/C4244/C4365 under MSVC |
 
 To make an exception in one place, use `#[expect(clippy::…, reason = "…")]` on that
 item or statement, never a crate-wide `allow`: the reason is written down, and the
 build fails when the exception is no longer needed. The one file-wide exception is
-`measure.rs`, whose WASAPI blocks are each one COM call sequence
+`commands/measure/`, whose WASAPI blocks are each one COM call sequence
 (`multiple_unsafe_ops_per_block`, with its reason at the top of the file).
 
 ### `unsafe` code

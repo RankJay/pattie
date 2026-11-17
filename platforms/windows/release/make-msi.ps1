@@ -17,7 +17,7 @@
        - a pattie-cli.exe (-Cli) without a valid Authenticode signature.
        Without -Release it builds a test MSI (identity.wxi's test UpgradeCode,
        "-test" in its name) from any payload, e.g. a VM test package.
-    3. Builds the custom actions (crates/pattie-msi) and, for a test MSI,
+    3. Builds the custom actions (crates/msi) and, for a test MSI,
        pattie-cli, with the C runtime linked in (+crt-static): a fresh machine
        may lack VCRUNTIME140.dll. Into target\msi\build.
     4. Runs WiX v6 (`wix build`) on pattie.wxs into target\msi.

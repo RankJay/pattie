@@ -4,10 +4,11 @@
 # machine setup, checked in the test VM. And test code itself.
 exclude_globs = [
     "crates/sdk/src/backend/windows.rs",
-    "crates/pattie-cli/src/main.rs",
-    "crates/pattie-cli/src/measure.rs",
-    "crates/pattie-install/src/setup.rs",
-    "crates/pattie-msi/src/msi.rs",
+    "crates/cli/src/main.rs",
+    "crates/cli/src/commands/**",
+    "crates/install/src/setup/**",
+    "crates/msi/src/installer_api.rs",
+    "crates/msi/src/installer_api/**",
     # The Linux backend: not compiled on Windows, where mutation runs (locally and
     # nightly.yml), so every mutant there would read as missed. Its tests run on
     # Linux (ci.yml), the PipeWire parts against a real PipeWire.
@@ -24,6 +25,9 @@ exclude_globs = [
     # names it without `tests::`, so the ` tests::` pattern below no longer catches it.
     "crates/sdk/src/**/tests.rs",
     "crates/sdk/src/**/tests/**",
+    "crates/install/src/**/tests.rs",
+    "crates/cli/src/**/tests.rs",
+    "crates/cli/src/**/tests/**",
     # The Python binding: its tests are Python (pytest), which cargo-mutants
     # can't run, so all ~480 of its mutants would read as missed. Mutation-test
     # it with a Python tool if it's wanted.
@@ -50,7 +54,7 @@ exclude_re = [
     "<impl Drop for Bell>::drop",
     # Test code inside src/ (the `mod tests` helpers).
     " tests::",
-    # The non-Windows stand-ins for pattie-install/src/setup.rs, which changes
+    # The non-Windows stand-ins for crates/install/src/setup/, which changes
     # the machine (VM-STEPS D.5 and R).
     "replace (install|uninstall) -> Result<Outcome, String> with Ok",
     # MMCSS "Pro Audio": its effect is only scheduling priority under load (the
