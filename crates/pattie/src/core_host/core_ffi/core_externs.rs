@@ -1,7 +1,7 @@
 // The C core's functions (core/src/pattie_core.h), as the Linux backend calls
 // them. The includer brings `c_void` and the types `PattieCore`, `PattieOwner`, `PattieRing`
 // and `PattieDeviceInfo` into scope: the SDK's own (core_ffi.rs, core_types.rs), or
-// bindgen's in core/tests/tests/ffi_mirror.rs, which checks each signature
+// bindgen's in core/tests/conformance/tests/ffi_mirror.rs, which checks each signature
 // against the header.
 unsafe extern "C" {
     fn pattie_core_command(

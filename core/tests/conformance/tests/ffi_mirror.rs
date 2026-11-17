@@ -20,7 +20,7 @@ mod sdk {
     type PattieRing = c::pattie_ring;
     type PattieDeviceInfo = c::pattie_device_info;
 
-    include!("../../../crates/pattie/src/core_host/core_ffi/core_externs.rs");
+    include!("../../../../crates/pattie/src/core_host/core_ffi/core_externs.rs");
 
     /// Compiles only if both are the same type.
     fn same<T>(_: T, _: T) {}
@@ -75,7 +75,7 @@ mod sdk_types {
     use super::c;
     use std::mem::{offset_of, size_of};
 
-    include!("../../../crates/pattie/src/core_host/core_ffi/core_types.rs");
+    include!("../../../../crates/pattie/src/core_host/core_ffi/core_types.rs");
 
     #[test]
     fn every_struct_the_sdk_declares_matches_the_header() {

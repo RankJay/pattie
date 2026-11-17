@@ -442,7 +442,7 @@ test VM):
 
 ### Property tests
 
-`core/tests/tests/properties_commands.rs` and `properties_ring.rs` run with
+`core/tests/conformance/tests/properties_commands.rs` and `properties_ring.rs` run with
 `cargo test`. Instead of hand-picked cases, each states a rule and checks it against
 hundreds of random sequences (`proptest`), shrinking any failure to the smallest one:
 
@@ -466,20 +466,20 @@ the end. All are caught.
 
 ### Fuzzing the core
 
-`core/fuzz/fuzz_core.c` feeds random bytes to the core as a script of hostile apps
+`core/tests/fuzz/hostile_apps.c` feeds random bytes to the core as a script of hostile apps
 (raw requests, Rings of every wrong size, header rewrites, closes, streaming), with
 AddressSanitizer stopping at the first out-of-bounds or use-after-free access. Every
 Ring is a `malloc` of exactly the size the driver is told, so even a one-byte read
 past it is caught. Build it (Visual Studio's clang, which ships libFuzzer and ASan):
 
 ```bash
-mkdir -p target/fuzz/corpus && MSYS_NO_PATHCONV=1 "/c/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/Llvm/x64/bin/clang-cl.exe" -fsanitize=fuzzer,address /Zi /O1 /MT /W4 /WX -Wconversion -Wsign-conversion /std:c17 /Icore/include /Icore/src core/src/pattie_core.c core/src/pattie_ring.c core/src/pattie_clock.c core/src/pattie_pcm16.c core/fuzz/fuzz_core.c /Fotarget/fuzz/ /Fetarget/fuzz/fuzz_core.exe
+mkdir -p target/fuzz/corpus && MSYS_NO_PATHCONV=1 "/c/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/Llvm/x64/bin/clang-cl.exe" -fsanitize=fuzzer,address /Zi /O1 /MT /W4 /WX -Wconversion -Wsign-conversion /std:c17 /Icore/include /Icore/src core/src/pattie_core.c core/src/pattie_ring.c core/src/pattie_clock.c core/src/pattie_pcm16.c core/tests/fuzz/hostile_apps.c /Fotarget/fuzz/ /Fetarget/fuzz/hostile_apps.exe
 ```
 
 Run it for as long as you like (here 10 minutes); ASan's DLL must be on the `PATH`:
 
 ```bash
-PATH="/c/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/Llvm/x64/lib/clang/22/lib/windows:$PATH" target/fuzz/fuzz_core.exe -max_total_time=600 -max_len=4096 target/fuzz/corpus
+PATH="/c/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/Llvm/x64/lib/clang/22/lib/windows:$PATH" target/fuzz/hostile_apps.exe -max_total_time=600 -max_len=4096 target/fuzz/corpus
 ```
 
 - `/MT` matters: with `/MD` the program links the static C runtime's `malloc`
@@ -488,7 +488,7 @@ PATH="/c/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/Llvm/x64/li
 - `target/fuzz/corpus` keeps the inputs that reached new code, so each run starts
   where the last left off. On a finding it writes `crash-<hash>` with the input and
   ASan's report names the line; rerun one input with
-  `target/fuzz/fuzz_core.exe crash-<hash>`. Turn each finding into a test in
+  `target/fuzz/hostile_apps.exe crash-<hash>`. Turn each finding into a test in
   `core/tests/` before fixing it.
 - Checked: an injected read past the end of the Ring was caught in a few seconds.
 
@@ -647,7 +647,7 @@ Where they live, from widest to narrowest:
 | `clippy.toml` | every crate | Methods banned by name, each with its reason: `std::process::exit` (skips destructors, so a live Device isn't removed cleanly) and `std::thread::sleep` (a 1 ms sleep can last ~15.6 ms and starve an audio loop: use the SDK's `Writer::write_paced` or `Reader::read_paced`, which wake on the Device's doorbell). Also: the `unsafe fn` contract rule covers private functions, and tests may unwrap |
 | Top of `crates/pattie/src/lib.rs` | the SDK only | It runs inside other people's apps: no `unwrap`/`expect`/`panic!`, no printing, no silently narrowing casts, and every public item is documented and has `Debug` |
 | `#![forbid(unsafe_code)]` at the top of a module | `cli.rs`, `latency.rs`, `error.rs`, `identity.rs`, `transport.rs` | The compiler guarantees these hold no `unsafe`, so a reviewer can skip them for memory safety |
-| `core/tests/build.rs`, `crates/pattie/build.rs`, `pattie.vcxproj` | the C core (and the driver) | Warnings are errors, plus implicit narrowing and sign changes: `-Wconversion -Wsign-conversion` under clang, C4242/C4244/C4365 under MSVC |
+| `core/tests/conformance/build.rs`, `crates/pattie/build.rs`, `pattie.vcxproj` | the C core (and the driver) | Warnings are errors, plus implicit narrowing and sign changes: `-Wconversion -Wsign-conversion` under clang, C4242/C4244/C4365 under MSVC |
 
 To make an exception in one place, use `#[expect(clippy::…, reason = "…")]` on that
 item or statement, never a crate-wide `allow`: the reason is written down, and the

@@ -114,7 +114,7 @@ bool pattie_core_device_info(const pattie_core *core, uint32_t device_id, pattie
  * it because Windows saves a format per endpoint: the same name in another format
  * must be another endpoint, or Windows opens it in a format the pin no longer
  * offers. The one hash the system uses; the SDK's Rust copy
- * (`pattie::stable_id`) is checked against it (core/tests/tests/stable_id.rs).
+ * (`pattie::stable_id`) is checked against it (core/tests/conformance/tests/stable_id.rs).
  * How it's written is each host's: the driver's instance ID, PipeWire's
  * node.name.
  */

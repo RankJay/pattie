@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/pattie", "crates/pattie-cli", "crates/pattie-install", "crates/pattie-msi", "core/tests", "bindings/python"]
+members = ["crates/pattie", "crates/pattie-cli", "crates/pattie-install", "crates/pattie-msi", "core/tests/conformance", "bindings/python"]
 resolver = "3"
 
 [workspace.package]
