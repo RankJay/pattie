@@ -19,7 +19,6 @@ exclude_globs = [
     # Test scaffolding (the contract suite's nodes), never shipped; coverage
     # leaves it out too.
     "crates/sdk/src/backend/fake.rs",
-    "testing/**",
     "core/tests/**",
     # Test code in its own files under src/ (`tests.rs`, `tests/`): cargo-mutants
     # names it without `tests::`, so the ` tests::` pattern below no longer catches it.

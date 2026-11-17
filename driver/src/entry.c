@@ -123,8 +123,7 @@ static NTSTATUS EvtRootQueryRemove(WDFDEVICE Device)
 
     UNREFERENCED_PARAMETER(Device);
     if (owners > 0) {
-        TraceLoggingWrite(TraceProvider, "QueryRemoveVetoed",
-                          TraceLoggingLevel(TRACE_LEVEL_INFO),
+        TraceLoggingWrite(TraceProvider, "QueryRemoveVetoed", TraceLoggingLevel(TRACE_LEVEL_INFO),
                           TraceLoggingInt32(owners, "OpenOwners"));
         return STATUS_DEVICE_BUSY;
     }

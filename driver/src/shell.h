@@ -62,8 +62,8 @@
 #define PCM16_BYTES_PER_SAMPLE 2u  /* 16-bit PCM: converted in the copy */
 
 /* Identifies Pattie's circuits to ACX. */
-DEFINE_GUID(COMPONENT_GUID,
-            0x6c1a1f0e, 0x3b7d, 0x4b52, 0x9a, 0x61, 0x2f, 0x0d, 0x84, 0x51, 0x7c, 0xe3);
+DEFINE_GUID(COMPONENT_GUID, 0x6c1a1f0e, 0x3b7d, 0x4b52, 0x9a, 0x61, 0x2f, 0x0d, 0x84, 0x51, 0x7c,
+            0xe3);
 
 /* Per circuit device: one per live Device. */
 typedef struct _CIRCUIT_DEVICE_CONTEXT {
@@ -150,15 +150,16 @@ VOID UnpinRing(_In_ PMDL Mdl);
  * to NULL); otherwise they stay the caller's to release.
  */
 pattie_status DeviceCreate(_In_ DRIVER_CONTEXT *Ctx, _In_ pattie_owner *Owner,
-                         _In_reads_bytes_(InputLength) const UCHAR *Input, _In_ size_t InputLength,
-                         _Inout_ PMDL *Mdl, _Inout_ PKEVENT *Wake,
-                         _Out_writes_bytes_to_(ReplyCap, *ReplyLength) UCHAR *Reply, _In_ size_t ReplyCap,
-                         _Out_ size_t *ReplyLength);
+                           _In_reads_bytes_(InputLength) const UCHAR *Input,
+                           _In_ size_t InputLength, _Inout_ PMDL *Mdl, _Inout_ PKEVENT *Wake,
+                           _Out_writes_bytes_to_(ReplyCap, *ReplyLength) UCHAR *Reply,
+                           _In_ size_t ReplyCap, _Out_ size_t *ReplyLength);
 /* Remove Device: the core's remove, then the Device's teardown. */
 pattie_status DeviceRemove(_In_ DRIVER_CONTEXT *Ctx, _In_ pattie_owner *Owner,
-                         _In_reads_bytes_(InputLength) const UCHAR *Input, _In_ size_t InputLength,
-                         _Out_writes_bytes_to_(ReplyCap, *ReplyLength) UCHAR *Reply, _In_ size_t ReplyCap,
-                         _Out_ size_t *ReplyLength);
+                           _In_reads_bytes_(InputLength) const UCHAR *Input,
+                           _In_ size_t InputLength,
+                           _Out_writes_bytes_to_(ReplyCap, *ReplyLength) UCHAR *Reply,
+                           _In_ size_t ReplyCap, _Out_ size_t *ReplyLength);
 /*
  * An Owner's handle closed, crash included: removes and tears down all its
  * Devices, and the core refuses the Owner's later commands, so a Create still
@@ -171,7 +172,8 @@ PCUNICODE_STRING CircuitName(_In_ UINT32 Kind);
 NTSTATUS CircuitCreate(_In_ WDFDEVICE Device, _Inout_ CIRCUIT_DEVICE_CONTEXT *DeviceCtx);
 
 /* interfaces.c */
-NTSTATUS EndpointInterfacesPrepare(_In_ WDFDEVICE Device, _In_ const CIRCUIT_DEVICE_CONTEXT *DeviceCtx);
+NTSTATUS EndpointInterfacesPrepare(_In_ WDFDEVICE Device,
+                                   _In_ const CIRCUIT_DEVICE_CONTEXT *DeviceCtx);
 
 /* stream.c */
 EVT_ACX_CIRCUIT_CREATE_STREAM EvtCircuitCreateStream;

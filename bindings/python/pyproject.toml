@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Virtual microphones and speakers that every app sees as real audio devices"
 readme = "README.md"
 requires-python = ">=3.14"
-license = "MIT OR Apache-2.0"
+license = "Apache-2.0"
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.14",
@@ -59,7 +59,7 @@ extend = "../../ruff.toml"
 
 [tool.ruff.lint]
 extend-ignore = [
-    "N818", # the exception names are the SDK's error names (DuplicateName, ...)
+    "N818",  # the exception names are the SDK's error names (DuplicateName, ...)
 ]
 
 [tool.ruff.lint.per-file-ignores]

@@ -58,7 +58,8 @@ static NTSTATUS WriteEndpointValues(HANDLE Key)
     }
     if (NT_SUCCESS(status)) {
         /* Packet-completion notifications (stream.c) support event-driven mode. */
-        status = ZwSetValueKey(ep0, (PUNICODE_STRING)&ValueEventDriven, 0, REG_DWORD, &one, sizeof one);
+        status =
+            ZwSetValueKey(ep0, (PUNICODE_STRING)&ValueEventDriven, 0, REG_DWORD, &one, sizeof one);
     }
     if (ep0 != NULL) {
         ZwClose(ep0);
@@ -71,7 +72,7 @@ static NTSTATUS WriteEndpointValues(HANDLE Key)
 
 /* Writes one interface's values into its Device Parameters key. */
 static NTSTATUS WriteInterfaceValues(PCUNICODE_STRING Link, const CIRCUIT_DEVICE_CONTEXT *DeviceCtx,
-                                       BOOLEAN Endpoint)
+                                     BOOLEAN Endpoint)
 {
     HANDLE key = NULL;
     NTSTATUS status;
@@ -84,7 +85,7 @@ static NTSTATUS WriteInterfaceValues(PCUNICODE_STRING Link, const CIRCUIT_DEVICE
     if (NT_SUCCESS(status)) {
         /* NameBuffer is zero-filled past the name, so it is NUL-terminated. */
         status = SetString(key, &ValueFriendlyName, DeviceCtx->NameBuffer,
-                             DeviceCtx->Name.Length + sizeof(WCHAR));
+                           DeviceCtx->Name.Length + sizeof(WCHAR));
     }
     if (NT_SUCCESS(status) && Endpoint) {
         status = WriteEndpointValues(key);
@@ -103,24 +104,25 @@ static NTSTATUS WriteInterfaceValues(PCUNICODE_STRING Link, const CIRCUIT_DEVICE
  * opposite direction's category (RENDER on a capture circuit and vice versa); it
  * is left without values so Windows doesn't build a second, bogus endpoint.
  */
-_Use_decl_annotations_
-NTSTATUS EndpointInterfacesPrepare(WDFDEVICE Device, const CIRCUIT_DEVICE_CONTEXT *DeviceCtx)
+_Use_decl_annotations_ NTSTATUS EndpointInterfacesPrepare(WDFDEVICE Device,
+                                                          const CIRCUIT_DEVICE_CONTEXT *DeviceCtx)
 {
     BOOLEAN microphone = DeviceCtx->Kind == PATTIE_KIND_MICROPHONE;
     const ENDPOINT_INTERFACE interfaces[] = {
-        { &KSCATEGORY_AUDIO, TRUE },
-        { microphone ? &KSCATEGORY_CAPTURE : &KSCATEGORY_RENDER, TRUE },
-        { &KSCATEGORY_REALTIME, TRUE },
-        { &KSCATEGORY_TOPOLOGY, FALSE },
+        {&KSCATEGORY_AUDIO, TRUE},
+        {microphone ? &KSCATEGORY_CAPTURE : &KSCATEGORY_RENDER, TRUE},
+        {&KSCATEGORY_REALTIME, TRUE},
+        {&KSCATEGORY_TOPOLOGY, FALSE},
     };
     PDEVICE_OBJECT pdo = WdfDeviceWdmGetPhysicalDevice(Device);
     PCUNICODE_STRING reference = CircuitName(DeviceCtx->Kind);
     NTSTATUS status = STATUS_SUCCESS;
 
     for (ULONG i = 0; i < ARRAYSIZE(interfaces) && NT_SUCCESS(status); i++) {
-        UNICODE_STRING link = { 0 };
+        UNICODE_STRING link = {0};
 
-        status = IoRegisterDeviceInterface(pdo, interfaces[i].Category, (PUNICODE_STRING)reference, &link);
+        status = IoRegisterDeviceInterface(pdo, interfaces[i].Category, (PUNICODE_STRING)reference,
+                                           &link);
         if (NT_SUCCESS(status)) {
             status = WriteInterfaceValues(&link, DeviceCtx, interfaces[i].Endpoint);
             RtlFreeUnicodeString(&link);

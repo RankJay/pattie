@@ -21,8 +21,7 @@ DECLARE_CONST_UNICODE_STRING(ControlSddl, L"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;
 DECLARE_CONST_UNICODE_STRING(ControlName, L"\\Device\\Pattie");
 DECLARE_CONST_UNICODE_STRING(ControlLink, L"\\DosDevices\\Pattie");
 
-_Use_decl_annotations_
-NTSTATUS ControlDeviceCreate(WDFDRIVER Driver)
+_Use_decl_annotations_ NTSTATUS ControlDeviceCreate(WDFDRIVER Driver)
 {
     DRIVER_CONTEXT *ctx = DriverContext(Driver);
     PWDFDEVICE_INIT init;
@@ -83,8 +82,7 @@ NTSTATUS ControlDeviceCreate(WDFDRIVER Driver)
     return STATUS_SUCCESS;
 }
 
-_Use_decl_annotations_
-VOID UnpinRing(PMDL Mdl)
+_Use_decl_annotations_ VOID UnpinRing(PMDL Mdl)
 {
     MmUnlockPages(Mdl);
     IoFreeMdl(Mdl);
@@ -129,15 +127,16 @@ static PMDL TryPinRing(WDFREQUEST Request)
     size_t length;
     PMDL mdl;
 
-    if (!NT_SUCCESS(WdfRequestRetrieveInputBuffer(Request, sizeof *request, (PVOID *)&request, &length))) {
+    if (!NT_SUCCESS(
+            WdfRequestRetrieveInputBuffer(Request, sizeof *request, (PVOID *)&request, &length))) {
         return NULL;
     }
     if (request->ring_address == 0 || request->ring_bytes == 0 ||
         request->ring_bytes > PATTIE_RING_MAX_BYTES) {
         return NULL;
     }
-    mdl = IoAllocateMdl((PVOID)(ULONG_PTR)request->ring_address, (ULONG)request->ring_bytes,
-                        FALSE, FALSE, NULL);
+    mdl = IoAllocateMdl((PVOID)(ULONG_PTR)request->ring_address, (ULONG)request->ring_bytes, FALSE,
+                        FALSE, NULL);
     if (mdl == NULL) {
         return NULL;
     }
@@ -162,14 +161,14 @@ static PKEVENT TryReferenceWake(WDFREQUEST Request)
     size_t length;
     PKEVENT event;
 
-    if (!NT_SUCCESS(WdfRequestRetrieveInputBuffer(Request, sizeof *request, (PVOID *)&request, &length))) {
+    if (!NT_SUCCESS(
+            WdfRequestRetrieveInputBuffer(Request, sizeof *request, (PVOID *)&request, &length))) {
         return NULL;
     }
     if (request->wake_event == 0 ||
-        !NT_SUCCESS(ObReferenceObjectByHandle((HANDLE)(ULONG_PTR)request->wake_event,
-                                              EVENT_MODIFY_STATE, *ExEventObjectType,
-                                              WdfRequestGetRequestorMode(Request),
-                                              (PVOID *)&event, NULL))) {
+        !NT_SUCCESS(ObReferenceObjectByHandle(
+            (HANDLE)(ULONG_PTR)request->wake_event, EVENT_MODIFY_STATE, *ExEventObjectType,
+            WdfRequestGetRequestorMode(Request), (PVOID *)&event, NULL))) {
         return NULL;
     }
     return event;
@@ -223,7 +222,9 @@ static VOID EvtRequestCleanup(WDFOBJECT Object)
 static BOOLEAN CommandFromIoctl(ULONG IoControlCode, uint32_t *Command)
 {
     static const uint32_t commands[] = {
-        PATTIE_CMD_HELLO, PATTIE_CMD_CREATE_DEVICE, PATTIE_CMD_REMOVE_DEVICE,
+        PATTIE_CMD_HELLO,
+        PATTIE_CMD_CREATE_DEVICE,
+        PATTIE_CMD_REMOVE_DEVICE,
     };
 
     for (ULONG i = 0; i < ARRAYSIZE(commands); i++) {
@@ -236,7 +237,7 @@ static BOOLEAN CommandFromIoctl(ULONG IoControlCode, uint32_t *Command)
 }
 
 static VOID EvtIoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request, size_t OutputBufferLength,
-                                 size_t InputBufferLength, ULONG IoControlCode)
+                               size_t InputBufferLength, ULONG IoControlCode)
 {
     DRIVER_CONTEXT *ctx = DriverContext(WdfGetDriver());
     pattie_owner *owner = &FileContext(WdfRequestGetFileObject(Request))->Owner;
@@ -284,15 +285,16 @@ static VOID EvtIoDeviceControl(WDFQUEUE Queue, WDFREQUEST Request, size_t Output
     }
     if (command == PATTIE_CMD_CREATE_DEVICE) {
         envelope.status = DeviceCreate(ctx, owner, input, InputBufferLength, &requestCtx->Mdl,
-                                         &requestCtx->WakeEvent, output + sizeof envelope,
-                                         length - sizeof envelope, &replyLength);
+                                       &requestCtx->WakeEvent, output + sizeof envelope,
+                                       length - sizeof envelope, &replyLength);
     } else if (command == PATTIE_CMD_REMOVE_DEVICE) {
-        envelope.status = DeviceRemove(ctx, owner, input, InputBufferLength, output + sizeof envelope,
-                                         length - sizeof envelope, &replyLength);
+        envelope.status =
+            DeviceRemove(ctx, owner, input, InputBufferLength, output + sizeof envelope,
+                         length - sizeof envelope, &replyLength);
     } else {
-        envelope.status = pattie_core_command(&ctx->Core, owner, command, input, InputBufferLength,
-                                          NULL, 0, output + sizeof envelope,
-                                          length - sizeof envelope, &replyLength);
+        envelope.status =
+            pattie_core_command(&ctx->Core, owner, command, input, InputBufferLength, NULL, 0,
+                                output + sizeof envelope, length - sizeof envelope, &replyLength);
     }
     WdfWaitLockRelease(ctx->Lock);
 

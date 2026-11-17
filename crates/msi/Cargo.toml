@@ -1,7 +1,9 @@
 [package]
 name = "pattie-msi"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
 publish = false
 description = "The MSI's custom actions (ADR 0024): a DLL that puts the driver on or takes it off through pattie-install, inside the installer's transaction"
 
@@ -11,10 +13,10 @@ description = "The MSI's custom actions (ADR 0024): a DLL that puts the driver o
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-pattie-install = { path = "../install" }
+pattie-install.workspace = true
 
 [target."cfg(windows)".dependencies]
-windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_System_ApplicationInstallationAndServicing", "Win32_System_DataExchange"] }
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_System_ApplicationInstallationAndServicing", "Win32_System_DataExchange"] }
 
 [dev-dependencies]
 # The installer authoring test reads pattie.wxs (tests/authoring/).

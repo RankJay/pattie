@@ -2,13 +2,13 @@
 //! driver (first VM test, see driver/README.md).
 //!
 //! ```text
-//! pattie-cli mic "Agent Mic" [--tone 440]   stream a sine tone into a microphone
-//! pattie-cli speaker "Agent Speaker"        show the level of what's played to it
-//! pattie-cli measure mic|speaker <name> [--seconds 60]
-//! pattie-cli measure drift <name> [--seconds 3600] [--ppm 50] [--uncorrected]
-//!                                            latency and glitches, WASAPI as the app
-//! pattie-cli install <package folder or .inf>   put the driver on this machine
-//! pattie-cli uninstall                      take it off (both as administrator)
+//! pattie-cli mic <name> [--tone <hz>] [--rate <hz>] [--channels <n>]
+//! pattie-cli speaker <name> [--rate <hz>] [--channels <n>]
+//! pattie-cli measure mic|speaker <name> [--seconds <n>] [--rate <hz>] [--channels <n>]
+//! pattie-cli measure drift <name> [--seconds <n>] [--ppm <p>] [--uncorrected]
+//! pattie-cli measure cable <render endpoint> <capture endpoint> [--seconds <n>]
+//! pattie-cli install <package folder or pattie.inf>      (as administrator)
+//! pattie-cli uninstall                                   (as administrator)
 //! ```
 //!
 //! install and uninstall exit with 0 when done, 3010 when Windows finishes at the

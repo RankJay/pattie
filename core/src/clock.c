@@ -1,8 +1,8 @@
 /* Clock arithmetic for the system side: ticks to frames and ns, the next Pass (ADR 0022). */
 #include "pattie_core.h"
 
-uint64_t pattie_clock_frames(uint64_t start_ticks, uint64_t now_ticks,
-                         uint64_t tick_hz, uint32_t sample_rate)
+uint64_t pattie_clock_frames(uint64_t start_ticks, uint64_t now_ticks, uint64_t tick_hz,
+                             uint32_t sample_rate)
 {
     uint64_t elapsed = now_ticks - start_ticks; /* unsigned: survives tick wrap */
 
@@ -11,8 +11,7 @@ uint64_t pattie_clock_frames(uint64_t start_ticks, uint64_t now_ticks,
      * and a remainder so the product can't overflow 64 bits. Always computed
      * from the stream's start, so no rounding error accumulates.
      */
-    return (elapsed / tick_hz) * sample_rate
-         + (elapsed % tick_hz) * sample_rate / tick_hz;
+    return (elapsed / tick_hz) * sample_rate + (elapsed % tick_hz) * sample_rate / tick_hz;
 }
 
 uint64_t pattie_clock_ns(uint64_t ticks, uint64_t tick_hz)
@@ -35,16 +34,15 @@ uint64_t pattie_clock_ticks_for(uint64_t frames, uint64_t tick_hz, uint32_t samp
 }
 
 bool pattie_clock_next_pass(uint64_t *start_ticks, uint64_t packets_done, uint32_t packet_frames,
-                        uint32_t max_behind, uint64_t now_ticks, uint64_t tick_hz,
-                        uint32_t sample_rate, uint64_t *due_ticks)
+                            uint32_t max_behind, uint64_t now_ticks, uint64_t tick_hz,
+                            uint32_t sample_rate, uint64_t *due_ticks)
 {
     uint64_t next_frames = (packets_done + 1u) * packet_frames;
     uint64_t next_ticks = pattie_clock_ticks_for(next_frames, tick_hz, sample_rate);
     /* The pass `max_behind` packets after this one: if even it is due, more than
      * `max_behind` passes are, and the stream was stalled. */
-    uint64_t last_catchable_ticks =
-        pattie_clock_ticks_for(next_frames + (uint64_t)max_behind * packet_frames, tick_hz,
-            sample_rate);
+    uint64_t last_catchable_ticks = pattie_clock_ticks_for(
+        next_frames + (uint64_t)max_behind * packet_frames, tick_hz, sample_rate);
     uint64_t elapsed = now_ticks - *start_ticks; /* unsigned: survives tick wrap */
     bool slipped = elapsed >= last_catchable_ticks;
 

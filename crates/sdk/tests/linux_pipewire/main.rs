@@ -1,6 +1,6 @@
 //! The Linux backend against a real PipeWire (ADR 0018), through the public API
 //! and the default backend. Needs a running PipeWire with `pw-record` and
-//! `pw-play` (README, Linux), so these are opt-in:
+//! `pw-play` (a Linux desktop session, or WSL2 with WSLg), so these are opt-in:
 //! `cargo test -p pattie --test linux_pipewire -- --ignored --test-threads=1`.
 
 #![cfg(target_os = "linux")]

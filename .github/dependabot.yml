@@ -1,0 +1,35 @@
+# Dependency updates, one pull request per ecosystem and week. Actions are pinned by
+# commit SHA with the version in a comment (`@<sha> # v1.2.3`); Dependabot updates both.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      cargo:
+        patterns: ["*"]
+  - package-ecosystem: uv
+    directories:
+      - /bindings/python
+      - /integrations/pipecat
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      python:
+        patterns: ["*"]
+  - package-ecosystem: github-actions
+    directories:
+      - /
+      - /.github/actions/*
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]

@@ -78,9 +78,9 @@ void pattie_owner_init(pattie_owner *owner);
  * On return *output_len holds the number of reply bytes written to output.
  */
 pattie_status pattie_core_command(pattie_core *core, pattie_owner *owner, uint32_t command,
-                          const void *input, size_t input_len,
-                          void *ring_memory, size_t ring_len,
-                          void *output, size_t output_cap, size_t *output_len);
+                                  const void *input, size_t input_len, void *ring_memory,
+                                  size_t ring_len, void *output, size_t output_cap,
+                                  size_t *output_len);
 
 /*
  * Commands, continued: the Owner's handle closed (crash included). Removes every
@@ -91,7 +91,7 @@ pattie_status pattie_core_command(pattie_core *core, pattie_owner *owner, uint32
  * 2026-11-14). Only pattie_owner_init opens it again.
  */
 size_t pattie_core_owner_closed(pattie_core *core, pattie_owner *owner,
-                            uint32_t removed[PATTIE_MAX_DEVICES]);
+                                uint32_t removed[PATTIE_MAX_DEVICES]);
 
 /*
  * The Ring of a live Device, for the shell to stream through; NULL when no live
@@ -119,7 +119,7 @@ bool pattie_core_device_info(const pattie_core *core, uint32_t device_id, pattie
  * node.name.
  */
 uint64_t pattie_stable_id(uint32_t kind, const uint16_t *name, uint32_t name_len,
-                      uint32_t sample_rate, uint32_t channels);
+                          uint32_t sample_rate, uint32_t channels);
 
 /*
  * The Ring, driver side. Attaches to a Ring the SDK laid out at `memory`,
@@ -184,8 +184,8 @@ void pattie_ring_losses(const pattie_ring *ring, uint64_t *gap_frames, uint64_t 
  * The clock. Frames a Device has played between two tick readings
  * the shell took (ticks at `tick_hz`), at `sample_rate` frames per second.
  */
-uint64_t pattie_clock_frames(uint64_t start_ticks, uint64_t now_ticks,
-                         uint64_t tick_hz, uint32_t sample_rate);
+uint64_t pattie_clock_frames(uint64_t start_ticks, uint64_t now_ticks, uint64_t tick_hz,
+                             uint32_t sample_rate);
 
 /*
  * The clock: a tick reading at `tick_hz` in nanoseconds, rounded down: the unit a
@@ -211,7 +211,7 @@ uint64_t pattie_clock_ticks_for(uint64_t frames, uint64_t tick_hz, uint32_t samp
  * Survives the tick counter wrapping.
  */
 bool pattie_clock_next_pass(uint64_t *start_ticks, uint64_t packets_done, uint32_t packet_frames,
-                        uint32_t max_behind, uint64_t now_ticks, uint64_t tick_hz,
-                        uint32_t sample_rate, uint64_t *due_ticks);
+                            uint32_t max_behind, uint64_t now_ticks, uint64_t tick_hz,
+                            uint32_t sample_rate, uint64_t *due_ticks);
 
 #endif /* PATTIE_CORE_H */

@@ -1,6 +1,6 @@
 //! The SetupAPI half of the install engine (ADR 0016, ADR 0024): the calls that
 //! change the machine. Checked in the test VM (VM-STEPS D.5 and R), never run on
-//! the host, and left out of coverage for that reason (README, Coverage). What
+//! the host, and left out of coverage for that reason (nightly.yml). What
 //! each step ends as is decided by the tested `install_outcome` and
 //! `uninstall_outcome`.
 

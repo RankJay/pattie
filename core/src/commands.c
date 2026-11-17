@@ -79,9 +79,9 @@ static uint32_t next_device_id(pattie_core *core)
 }
 
 static pattie_status create_device(pattie_core *core, const pattie_owner *owner,
-                               const pattie_create_device_request *request,
-                               void *ring_memory, size_t ring_len,
-                               void *output, size_t output_cap, size_t *output_len)
+                                   const pattie_create_device_request *request, void *ring_memory,
+                                   size_t ring_len, void *output, size_t output_cap,
+                                   size_t *output_len)
 {
     pattie_create_device_reply reply;
     pattie_device *free_slot = NULL;
@@ -124,7 +124,7 @@ static pattie_status create_device(pattie_core *core, const pattie_owner *owner,
     copy_bytes(free_slot->name, request->name, sizeof free_slot->name);
     /* The format as attach read it: a zeroed header is 48 kHz mono here too. */
     free_slot->stable_id = pattie_stable_id(request->kind, free_slot->name, free_slot->name_len,
-                                        ring.sample_rate, ring.channels);
+                                            ring.sample_rate, ring.channels);
     free_slot->ring = ring;
 
     reply.device_id = free_slot->id;
@@ -147,9 +147,9 @@ static pattie_status remove_device(pattie_core *core, const pattie_owner *owner,
 }
 
 pattie_status pattie_core_command(pattie_core *core, pattie_owner *owner, uint32_t command,
-                          const void *input, size_t input_len,
-                          void *ring_memory, size_t ring_len,
-                          void *output, size_t output_cap, size_t *output_len)
+                                  const void *input, size_t input_len, void *ring_memory,
+                                  size_t ring_len, void *output, size_t output_cap,
+                                  size_t *output_len)
 {
     *output_len = 0;
 
@@ -190,8 +190,8 @@ pattie_status pattie_core_command(pattie_core *core, pattie_owner *owner, uint32
         }
         /* Copy first: the app could change shared input while we validate it. */
         copy_bytes(&request, input, sizeof request);
-        return create_device(core, owner, &request, ring_memory, ring_len,
-                             output, output_cap, output_len);
+        return create_device(core, owner, &request, ring_memory, ring_len, output, output_cap,
+                             output_len);
     }
     if (command == PATTIE_CMD_REMOVE_DEVICE) {
         pattie_remove_device_request request;
@@ -206,7 +206,7 @@ pattie_status pattie_core_command(pattie_core *core, pattie_owner *owner, uint32
 }
 
 size_t pattie_core_owner_closed(pattie_core *core, pattie_owner *owner,
-                            uint32_t removed[PATTIE_MAX_DEVICES])
+                                uint32_t removed[PATTIE_MAX_DEVICES])
 {
     size_t count = 0;
 
@@ -237,7 +237,7 @@ bool pattie_core_device_info(const pattie_core *core, uint32_t device_id, pattie
 }
 
 uint64_t pattie_stable_id(uint32_t kind, const uint16_t *name, uint32_t name_len,
-                      uint32_t sample_rate, uint32_t channels)
+                          uint32_t sample_rate, uint32_t channels)
 {
     const uint64_t prime = 0x100000001b3ull;
     uint64_t hash = 0xcbf29ce484222325ull;

@@ -3,8 +3,9 @@
 #include "atomic.h"
 
 _Static_assert(sizeof(pattie_ring_header) == 192, "Ring header is three cache lines");
-_Static_assert(PATTIE_RING_MAX_BYTES == sizeof(pattie_ring_header) +
-                                        PATTIE_RING_MAX_FRAMES * PATTIE_RING_MAX_CHANNELS * sizeof(float),
+_Static_assert(PATTIE_RING_MAX_BYTES == sizeof(pattie_ring_header) + PATTIE_RING_MAX_FRAMES *
+                                                                         PATTIE_RING_MAX_CHANNELS *
+                                                                         sizeof(float),
                "PATTIE_RING_MAX_BYTES matches the largest valid Ring");
 
 /*
@@ -70,7 +71,7 @@ pattie_status pattie_ring_attach(pattie_ring *ring, void *memory, size_t memory_
  * first, and one that sees `seq` even again saw the whole pair.
  */
 static void publish_clock(pattie_ring *ring, pattie_ring_clock *clock, uint64_t frames,
-                             uint64_t now_ns)
+                          uint64_t now_ns)
 {
     ring->clock_seq += 2u; /* our own copy: the app can't skew it */
     store_release_u64(&clock->seq, ring->clock_seq - 1u);

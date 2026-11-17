@@ -1,7 +1,9 @@
 [package]
 name = "pattie-conformance"
-version = "0.0.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
 publish = false
 description = "Host-side tests for the pure C driver core (ADR 0002, ADR 0008)"
 
@@ -9,10 +11,10 @@ description = "Host-side tests for the pure C driver core (ADR 0002, ADR 0008)"
 
 [build-dependencies]
 bindgen = "0.73.2"
-cc = "1.11.0"
+cc.workspace = true
 
 [dev-dependencies]
-pattie = { path = "../../../crates/sdk" }
+pattie.workspace = true
 proptest = "1"
 
 [lints]

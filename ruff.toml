@@ -6,5 +6,5 @@ line-length = 99
 [lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "SIM", "RUF", "PT", "ASYNC", "PL"]
 ignore = [
-    "PLR2004", # tests compare against literal frame counts on purpose
+    "PLR2004",  # tests compare against literal frame counts on purpose
 ]

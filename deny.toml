@@ -30,7 +30,7 @@ ignore = true
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
-allow-wildcard-paths = true # the workspace's own path dependencies
+allow-wildcard-paths = true  # the workspace's own path dependencies
 skip = [
     # windows' macros (the CLI) are on syn 2, bindgen (test builds only) on syn 3:
     # an upstream split, and no shipped binary contains both.

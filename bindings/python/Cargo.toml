@@ -1,7 +1,9 @@
 [package]
 name = "pattie-python"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
 publish = false
 description = "Python binding of the Pattie SDK (ADR 0019), built with maturin as the pattie package"
 
@@ -19,7 +21,7 @@ doctest = false
 fake-backend = ["pattie/fake-backend"]
 
 [dependencies]
-pattie = { path = "../../crates/sdk" }
+pattie.workspace = true
 # abi3-py314: one wheel for CPython 3.14 and every later version.
 # generate-import-lib: Windows builds need no Python install to link.
 pyo3 = { version = "0.30", features = ["abi3-py314", "extension-module", "generate-import-lib"] }

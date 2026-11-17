@@ -1,10 +1,10 @@
 /*
  * A Device's whole lifecycle in the shell (ADR 0010): the slot beside the core's
- * table, the core's create and remove, the stable ID's claim, the circuit device (one raw child of the
- * root per live Device), and the undo when a step fails. control.c is only the
- * transport that calls in here; the circuit is built in circuit.c and its audio
- * interface values are written in interfaces.c. Every entry point runs under
- * the driver lock.
+ * table, the core's create and remove, the stable ID's claim, the circuit device
+ * (one raw child of the root per live Device), and the undo when a step fails.
+ * control.c is only the transport that calls in here; the circuit is built in
+ * circuit.c and its audio interface values are written in interfaces.c. Every
+ * entry point runs under the driver lock.
  *
  * Follows Microsoft's runtime circuit-device pattern (SdcaVad sample, the XU
  * driver's dynamic capture devices): allocate a child with WdfPdoInitAllocate,
@@ -89,8 +89,9 @@ static NTSTATUS ChildIdClaim(DRIVER_CONTEXT *Ctx, ULONG64 Id)
  * Gives a Device the core just accepted its circuit device. On success the child
  * holds the stable ID until Windows deletes it; on failure nothing is left.
  */
-static NTSTATUS CircuitDeviceAdd(DRIVER_CONTEXT *Ctx, UINT32 DeviceId, const pattie_device_info *Info,
-                                   PKEVENT WakeEvent, WDFDEVICE *CircuitDevice)
+static NTSTATUS CircuitDeviceAdd(DRIVER_CONTEXT *Ctx, UINT32 DeviceId,
+                                 const pattie_device_info *Info, PKEVENT WakeEvent,
+                                 WDFDEVICE *CircuitDevice)
 {
     PWDFDEVICE_INIT init;
     ACX_DEVICEINIT_CONFIG acxInitConfig;
@@ -201,8 +202,7 @@ static NTSTATUS CircuitDeviceAdd(DRIVER_CONTEXT *Ctx, UINT32 DeviceId, const pat
     }
 
     /* With CircuitPrepared, times how long Windows takes to start the child. */
-    TraceLoggingWrite(TraceProvider, "CircuitDeviceAdded",
-                      TraceLoggingLevel(TRACE_LEVEL_INFO),
+    TraceLoggingWrite(TraceProvider, "CircuitDeviceAdded", TraceLoggingLevel(TRACE_LEVEL_INFO),
                       TraceLoggingUInt32(DeviceId, "DeviceId"),
                       TraceLoggingUInt32(Info->kind, "Kind"));
     *CircuitDevice = device;
@@ -236,7 +236,8 @@ static VOID DeviceTeardown(DRIVER_CONTEXT *Ctx, UINT32 DeviceId)
         /* 3. Ask Windows to remove the endpoint (asynchronous), unless it already did. */
         if (slot->CircuitDevice != NULL) {
             if (Ctx->Root != NULL &&
-                InterlockedCompareExchange(&CircuitDeviceContext(slot->CircuitDevice)->Deleted, 0, 0) == 0) {
+                InterlockedCompareExchange(&CircuitDeviceContext(slot->CircuitDevice)->Deleted, 0,
+                                           0) == 0) {
                 (void)AcxDeviceRemoveCircuitDevice(Ctx->Root, slot->CircuitDevice);
             }
             WdfObjectDereference(slot->CircuitDevice); /* taken when the slot was filled */
@@ -249,9 +250,10 @@ static VOID DeviceTeardown(DRIVER_CONTEXT *Ctx, UINT32 DeviceId)
     }
 }
 
-_Use_decl_annotations_
-pattie_status DeviceCreate(DRIVER_CONTEXT *Ctx, pattie_owner *Owner, const UCHAR *Input, size_t InputLength,
-                         PMDL *Mdl, PKEVENT *Wake, UCHAR *Reply, size_t ReplyCap, size_t *ReplyLength)
+_Use_decl_annotations_ pattie_status DeviceCreate(DRIVER_CONTEXT *Ctx, pattie_owner *Owner,
+                                                  const UCHAR *Input, size_t InputLength, PMDL *Mdl,
+                                                  PKEVENT *Wake, UCHAR *Reply, size_t ReplyCap,
+                                                  size_t *ReplyLength)
 {
     pattie_create_device_reply created;
     pattie_device_info info;
@@ -285,7 +287,7 @@ pattie_status DeviceCreate(DRIVER_CONTEXT *Ctx, pattie_owner *Owner, const UCHAR
     }
 
     result = pattie_core_command(&Ctx->Core, Owner, PATTIE_CMD_CREATE_DEVICE, Input, InputLength,
-                             ringMemory, ringLength, Reply, ReplyCap, ReplyLength);
+                                 ringMemory, ringLength, Reply, ReplyCap, ReplyLength);
     if (result != PATTIE_OK) {
         return result;
     }
@@ -295,10 +297,10 @@ pattie_status DeviceCreate(DRIVER_CONTEXT *Ctx, pattie_owner *Owner, const UCHAR
     if (!pattie_core_device_info(&Ctx->Core, created.device_id, &info) ||
         !NT_SUCCESS(CircuitDeviceAdd(Ctx, created.device_id, &info, *Wake, &circuitDevice))) {
         /* Undo through the core's own Remove Device, then report the failure. */
-        pattie_remove_device_request undo = { created.device_id };
+        pattie_remove_device_request undo = {created.device_id};
         size_t ignored;
         (void)pattie_core_command(&Ctx->Core, Owner, PATTIE_CMD_REMOVE_DEVICE, &undo, sizeof undo,
-                              NULL, 0, NULL, 0, &ignored);
+                                  NULL, 0, NULL, 0, &ignored);
         *ReplyLength = 0;
         return PATTIE_ERR_SYSTEM;
     }
@@ -315,15 +317,16 @@ pattie_status DeviceCreate(DRIVER_CONTEXT *Ctx, pattie_owner *Owner, const UCHAR
     return PATTIE_OK;
 }
 
-_Use_decl_annotations_
-pattie_status DeviceRemove(DRIVER_CONTEXT *Ctx, pattie_owner *Owner, const UCHAR *Input, size_t InputLength,
-                         UCHAR *Reply, size_t ReplyCap, size_t *ReplyLength)
+_Use_decl_annotations_ pattie_status DeviceRemove(DRIVER_CONTEXT *Ctx, pattie_owner *Owner,
+                                                  const UCHAR *Input, size_t InputLength,
+                                                  UCHAR *Reply, size_t ReplyCap,
+                                                  size_t *ReplyLength)
 {
     pattie_status result;
 
     *ReplyLength = 0;
     result = pattie_core_command(&Ctx->Core, Owner, PATTIE_CMD_REMOVE_DEVICE, Input, InputLength,
-                             NULL, 0, Reply, ReplyCap, ReplyLength);
+                                 NULL, 0, Reply, ReplyCap, ReplyLength);
 
     if (result == PATTIE_OK) {
         pattie_remove_device_request removed;
@@ -334,8 +337,7 @@ pattie_status DeviceRemove(DRIVER_CONTEXT *Ctx, pattie_owner *Owner, const UCHAR
     return result;
 }
 
-_Use_decl_annotations_
-VOID OwnerDevicesRemove(DRIVER_CONTEXT *Ctx, pattie_owner *Owner)
+_Use_decl_annotations_ VOID OwnerDevicesRemove(DRIVER_CONTEXT *Ctx, pattie_owner *Owner)
 {
     uint32_t removed[PATTIE_MAX_DEVICES];
     size_t count = pattie_core_owner_closed(&Ctx->Core, Owner, removed);
@@ -377,11 +379,12 @@ static VOID AssignFriendlyName(WDFDEVICE Device, const CIRCUIT_DEVICE_CONTEXT *D
     property.Lcid = LOCALE_NEUTRAL;
     /* NameBuffer is zero-filled past the name, so it is NUL-terminated. */
     (void)WdfDeviceAssignProperty(Device, &property, DEVPROP_TYPE_STRING,
-                                  DeviceCtx->Name.Length + sizeof(WCHAR), (PVOID)DeviceCtx->NameBuffer);
+                                  DeviceCtx->Name.Length + sizeof(WCHAR),
+                                  (PVOID)DeviceCtx->NameBuffer);
 }
 
 static NTSTATUS EvtCircuitDevicePrepareHardware(WDFDEVICE Device, WDFCMRESLIST Resources,
-                                                  WDFCMRESLIST ResourcesTranslated)
+                                                WDFCMRESLIST ResourcesTranslated)
 {
     CIRCUIT_DEVICE_CONTEXT *deviceCtx = CircuitDeviceContext(Device);
     NTSTATUS status;
@@ -402,8 +405,7 @@ static NTSTATUS EvtCircuitDevicePrepareHardware(WDFDEVICE Device, WDFCMRESLIST R
     status = AcxDeviceAddCircuit(Device, deviceCtx->Circuit);
     if (NT_SUCCESS(status)) {
         deviceCtx->CircuitAdded = TRUE;
-        TraceLoggingWrite(TraceProvider, "CircuitPrepared",
-                          TraceLoggingLevel(TRACE_LEVEL_INFO),
+        TraceLoggingWrite(TraceProvider, "CircuitPrepared", TraceLoggingLevel(TRACE_LEVEL_INFO),
                           TraceLoggingUInt32(deviceCtx->DeviceId, "DeviceId"));
     }
     return status;

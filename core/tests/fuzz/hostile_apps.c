@@ -95,7 +95,8 @@ static void unpin(world *w, uint32_t id)
 /* Ring formats to offer (ADR 0023): the valid ones, plus nonsense. */
 static void format_from(uint8_t choice, uint32_t *rate, uint16_t *channels)
 {
-    static const uint32_t rates[] = {0u, 44100u, 48000u, 96000u, 22050u, 0xFFFFFFFFu, 48000u, 96000u};
+    static const uint32_t rates[] = {0u,     44100u,      48000u, 96000u,
+                                     22050u, 0xFFFFFFFFu, 48000u, 96000u};
     static const uint16_t counts[] = {0u, 1u, 2u, 6u, 8u, 9u, 64u, 0xFFFFu};
 
     *rate = rates[choice % 8u];
@@ -109,7 +110,8 @@ static size_t ring_len_from(uint8_t choice, uint16_t channels, uint32_t *capacit
     uint32_t claim = claims[choice % (sizeof claims / sizeof claims[0])];
     /* 0 means mono; past the maximum, size as mono (the core must refuse it). */
     size_t width = channels == 0u || channels > PATTIE_RING_MAX_CHANNELS ? 1u : channels;
-    size_t exact = sizeof(pattie_ring_header) + (size_t)(claim > 65536u ? 0u : claim) * width * sizeof(float);
+    size_t exact =
+        sizeof(pattie_ring_header) + (size_t)(claim > 65536u ? 0u : claim) * width * sizeof(float);
 
     *capacity_claim = claim;
     switch ((choice >> 3) % 4u) {
@@ -147,7 +149,7 @@ static void create(world *w, cursor *c, pattie_owner *owner)
     }
     take(c, &request, sizeof request); /* every field straight from the input */
     if (pattie_core_command(&w->core, owner, PATTIE_CMD_CREATE_DEVICE, &request, sizeof request,
-                        memory, ring_len, reply, reply_cap, &reply_len) == PATTIE_OK) {
+                            memory, ring_len, reply, reply_cap, &reply_len) == PATTIE_OK) {
         pattie_create_device_reply created;
         if (reply_len != sizeof created) {
             abort();
@@ -244,21 +246,19 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
                 take(&c, &hello, sizeof hello);
             }
             cap = take_u8(&c) % 8u;
-            if (pattie_core_command(&w.core, owner, PATTIE_CMD_HELLO, &hello, sizeof hello,
-                                NULL, 0, output, cap, &output_len) == PATTIE_OK &&
-                (output_len != sizeof(pattie_hello_reply) ||
-                 owner->minor > hello.minor || owner->minor > PATTIE_ABI_MINOR)) {
+            if (pattie_core_command(&w.core, owner, PATTIE_CMD_HELLO, &hello, sizeof hello, NULL, 0,
+                                    output, cap, &output_len) == PATTIE_OK &&
+                (output_len != sizeof(pattie_hello_reply) || owner->minor > hello.minor ||
+                 owner->minor > PATTIE_ABI_MINOR)) {
                 abort(); /* a wrong reply, or a minor neither side speaks: a core bug */
             }
             break;
         }
-        case 1:
-            create(&w, &c, owner);
-            break;
+        case 1: create(&w, &c, owner); break;
         case 2: { /* Remove, with an ID from the input */
             pattie_remove_device_request remove = {take_u32(&c) % 12u};
-            (void)pattie_core_command(&w.core, owner, PATTIE_CMD_REMOVE_DEVICE, &remove, sizeof remove,
-                                  NULL, 0, output, sizeof output, &output_len);
+            (void)pattie_core_command(&w.core, owner, PATTIE_CMD_REMOVE_DEVICE, &remove,
+                                      sizeof remove, NULL, 0, output, sizeof output, &output_len);
             for (uint32_t i = 0; i < PATTIE_MAX_DEVICES; i++) {
                 uint32_t id = w.rings[i].id;
                 if (id != 0 && pattie_core_device_ring(&w.core, id) == NULL) {
@@ -271,22 +271,16 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
             uint32_t command = take_u32(&c);
             size_t len = take_u8(&c) % (sizeof input + 1u);
             take(&c, input, len);
-            (void)pattie_core_command(&w.core, owner, command, input, len,
-                                  NULL, 0, output, take_u8(&c) % (sizeof output + 1u), &output_len);
+            (void)pattie_core_command(&w.core, owner, command, input, len, NULL, 0, output,
+                                      take_u8(&c) % (sizeof output + 1u), &output_len);
             if (output_len > sizeof output) {
                 abort(); /* the core claimed more reply than the buffer holds */
             }
             break;
         }
-        case 4:
-            close_owner(&w, owner);
-            break;
-        case 5:
-            stream(&w, &c);
-            break;
-        default:
-            scribble(&w, &c);
-            break;
+        case 4: close_owner(&w, owner); break;
+        case 5: stream(&w, &c); break;
+        default: scribble(&w, &c); break;
         }
     }
 
