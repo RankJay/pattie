@@ -31,7 +31,7 @@ dev = [
 ]
 
 [tool.maturin]
-module-name = "pattie._pattie"
+module-name = "pattie._native"
 python-source = "python"
 
 [tool.uv]
@@ -61,6 +61,10 @@ extend = "../../ruff.toml"
 extend-ignore = [
     "N818", # the exception names are the SDK's error names (DuplicateName, ...)
 ]
+
+[tool.ruff.lint.per-file-ignores]
+# The stub package re-exports each topic stub with `from .x import *`, the stub-file way.
+"python/pattie/_native/__init__.pyi" = ["F403"]
 
 [tool.ruff.lint.isort]
 # The package lives in python/, so ruff can't tell it's this project's own.

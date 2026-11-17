@@ -82,7 +82,7 @@ Times are `time.perf_counter()` seconds, so they compare directly with your own.
 ```python
 data, played_at = speaker.read_timed(timeout=1)  # when its first frame played
 mic.next_play_time  # when the next frame written will be heard
-mic.clock  # Clock(frames, at): how far listeners had got, and when
+mic.clock  # ClockPoint(frames, at): how far listeners had got, and when
 ```
 
 `read_timed` gives an echo canceller its reference; `next_play_time` keeps audio

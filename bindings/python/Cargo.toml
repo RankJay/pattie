@@ -6,7 +6,7 @@ publish = false
 description = "Python binding of the Pattie SDK (ADR 0019), built with maturin as the pattie package"
 
 [lib]
-name = "_pattie"
+name = "_native"
 crate-type = ["cdylib"]
 # A Python extension can't link a Rust test binary on its own: tests are the
 # pytest suite in tests/, run against the built module.

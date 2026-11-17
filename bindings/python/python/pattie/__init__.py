@@ -1,6 +1,6 @@
 """Virtual microphones and speakers that every app sees as real audio devices."""
 
-from pattie._pattie import (
+from pattie._native import (
     AccessDenied,
     AlreadyTaken,
     AudioFormat,
@@ -8,7 +8,7 @@ from pattie._pattie import (
     AudioServerUnavailable,
     BadBufferSize,
     BadName,
-    Clock,
+    ClockPoint,
     Converter,
     DriverNotInstalled,
     DriverRemoved,
@@ -40,7 +40,7 @@ __all__ = [
     "AudioServerUnavailable",
     "BadBufferSize",
     "BadName",
-    "Clock",
+    "ClockPoint",
     "Converter",
     "DriverNotInstalled",
     "DriverRemoved",
