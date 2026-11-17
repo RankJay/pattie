@@ -21,15 +21,15 @@ fn from_pcm16(pcm: i16) -> u32 {
 /// either side comes out the same.
 mod the_sdk_converter_agrees_with_the_core {
     use super::*;
-    use pattie::{Converter, Encoding, Format};
+    use pattie::{AudioFormat, Converter, Encoding};
 
-    const PCM16: Format = Format {
+    const PCM16: AudioFormat = AudioFormat {
         rate: 48_000,
         channels: 1,
         encoding: Encoding::I16,
     };
 
-    fn sdk(from: Format, to: Format, input: &[u8]) -> Vec<u8> {
+    fn sdk(from: AudioFormat, to: AudioFormat, input: &[u8]) -> Vec<u8> {
         let mut converter = Converter::new(from, to).unwrap();
         let mut out = Vec::new();
         converter.convert(input, &mut out);
@@ -41,7 +41,7 @@ mod the_sdk_converter_agrees_with_the_core {
         let all: Vec<i16> = (i16::MIN..=i16::MAX).collect();
         let bytes: Vec<u8> = all.iter().flat_map(|s| s.to_le_bytes()).collect();
 
-        let decoded = sdk(PCM16, Format::DEVICE, &bytes);
+        let decoded = sdk(PCM16, AudioFormat::DEVICE, &bytes);
 
         let mismatches = decoded
             .as_chunks::<4>()
@@ -67,7 +67,7 @@ mod the_sdk_converter_agrees_with_the_core {
             .flat_map(|bits| bits.to_le_bytes())
             .collect();
 
-        let encoded = sdk(Format::DEVICE, PCM16, &bytes);
+        let encoded = sdk(AudioFormat::DEVICE, PCM16, &bytes);
 
         let mismatches: Vec<u32> = encoded
             .as_chunks::<2>()

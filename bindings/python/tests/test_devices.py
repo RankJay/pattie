@@ -8,7 +8,7 @@ import pattie
 from pattie import _testing
 
 
-def test_a_microphone_gets_an_id_and_with_closes_it(backend: _testing.TestBackend) -> None:
+def test_a_microphone_gets_an_id_and_with_closes_it(backend: _testing.FakeBackend) -> None:
     with pattie.Microphone("Agent Mic", _backend=backend) as mic:
         first_id = mic.id
         assert not mic.closed
@@ -19,7 +19,7 @@ def test_a_microphone_gets_an_id_and_with_closes_it(backend: _testing.TestBacken
         assert again.id != first_id
 
 
-def test_a_duplicate_name_raises_duplicate_name(backend: _testing.TestBackend) -> None:
+def test_a_duplicate_name_raises_duplicate_name(backend: _testing.FakeBackend) -> None:
     with (
         pattie.Microphone("Agent Mic", _backend=backend),
         pytest.raises(pattie.DuplicateName),
@@ -27,14 +27,14 @@ def test_a_duplicate_name_raises_duplicate_name(backend: _testing.TestBackend) -
         pattie.Microphone("Agent Mic", _backend=backend)
 
 
-def test_every_sdk_error_is_a_pattie_error(backend: _testing.TestBackend) -> None:
+def test_every_sdk_error_is_a_pattie_error(backend: _testing.FakeBackend) -> None:
     with pytest.raises(pattie.Error) as raised:
         pattie.Microphone("", _backend=backend)
 
     assert isinstance(raised.value, pattie.BadName)
 
 
-def test_a_speaker_and_a_microphone_may_share_a_name(backend: _testing.TestBackend) -> None:
+def test_a_speaker_and_a_microphone_may_share_a_name(backend: _testing.FakeBackend) -> None:
     with (
         pattie.Microphone("Agent", _backend=backend) as mic,
         pattie.Speaker("Agent", _backend=backend) as speaker,
@@ -42,7 +42,7 @@ def test_a_speaker_and_a_microphone_may_share_a_name(backend: _testing.TestBacke
         assert mic.id != speaker.id
 
 
-def test_using_a_closed_device_raises_value_error(backend: _testing.TestBackend) -> None:
+def test_using_a_closed_device_raises_value_error(backend: _testing.FakeBackend) -> None:
     mic = pattie.Microphone("Agent Mic", _backend=backend)
     mic.close()
     mic.close()  # closing twice is fine

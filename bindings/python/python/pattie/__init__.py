@@ -3,6 +3,7 @@
 from pattie._pattie import (
     AccessDenied,
     AlreadyTaken,
+    AudioFormat,
     AudioLost,
     AudioServerUnavailable,
     BadBufferSize,
@@ -13,7 +14,6 @@ from pattie._pattie import (
     DriverRemoved,
     DuplicateName,
     Error,
-    Format,
     Interrupted,
     LiveStats,
     LiveWriter,
@@ -35,6 +35,7 @@ from pattie._pattie import (
 __all__ = [
     "AccessDenied",
     "AlreadyTaken",
+    "AudioFormat",
     "AudioLost",
     "AudioServerUnavailable",
     "BadBufferSize",
@@ -45,7 +46,6 @@ __all__ = [
     "DriverRemoved",
     "DuplicateName",
     "Error",
-    "Format",
     "Interrupted",
     "LiveStats",
     "LiveWriter",

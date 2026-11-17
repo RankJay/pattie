@@ -12,7 +12,7 @@ bindgen = "0.73.2"
 cc = "1.11.0"
 
 [dev-dependencies]
-pattie = { path = "../../../crates/pattie" }
+pattie = { path = "../../../crates/sdk" }
 proptest = "1"
 
 [lints]

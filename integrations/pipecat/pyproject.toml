@@ -28,7 +28,7 @@ dev = ["pytest>=9", "pytest-asyncio>=1", "ruff>=0.14", "ty>=0.0.1a30"]
 pattie = { path = "../../bindings/python", editable = true }
 
 [tool.uv]
-config-settings-package = { pattie = { build-args = "--features test-backend" } }
+config-settings-package = { pattie = { build-args = "--features fake-backend" } }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/pipecat_pattie"]

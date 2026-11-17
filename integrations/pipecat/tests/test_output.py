@@ -12,7 +12,7 @@ from pipecat.tests.utils import SleepFrame, run_test
 from pipecat_pattie import PattieTransport, PattieTransportParams
 
 
-def speaking(backend: _testing.TestBackend, **params: Any) -> PattieTransport:
+def speaking(backend: _testing.FakeBackend, **params: Any) -> PattieTransport:
     """A transport with only its microphone, the pipeline at 24 kHz."""
     return PattieTransport(
         PattieTransportParams(
@@ -32,7 +32,7 @@ def speech(seconds: float, value: float = 0.25) -> OutputAudioRawFrame:
 
 
 async def test_speech_reaches_the_meeting_converted_to_the_microphones_format(
-    backend: _testing.TestBackend,
+    backend: _testing.FakeBackend,
 ) -> None:
     transport = speaking(backend)
     assert transport.microphone is not None
@@ -48,7 +48,7 @@ async def test_speech_reaches_the_meeting_converted_to_the_microphones_format(
 
 
 async def test_writes_take_as_long_as_the_speech_as_pipecat_expects(
-    backend: _testing.TestBackend,
+    backend: _testing.FakeBackend,
 ) -> None:
     transport = speaking(backend)
     assert transport.microphone is not None
@@ -65,7 +65,7 @@ async def test_writes_take_as_long_as_the_speech_as_pipecat_expects(
 
 
 async def test_an_interruption_stops_the_speech_within_a_chunk_and_the_lead(
-    backend: _testing.TestBackend,
+    backend: _testing.FakeBackend,
 ) -> None:
     transport = speaking(backend)
     assert transport.microphone is not None

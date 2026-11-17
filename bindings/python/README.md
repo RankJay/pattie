@@ -18,13 +18,13 @@ Linux it uses PipeWire, which most desktops already run.
 import pattie
 
 # 24 kHz 16-bit PCM in, the way most speech models send it.
-with pattie.Microphone("Agent Mic", format=pattie.Format(24_000, "pcm16")) as mic:
+with pattie.Microphone("Agent Mic", format=pattie.AudioFormat(24_000, "pcm16")) as mic:
     mic.write(pcm_audio)  # waits as the audio plays; nothing is dropped
     mic.wait_for_playout()
 ```
 
 ```python
-with pattie.Speaker("Agent Speaker", format=pattie.Format(16_000, "pcm16")) as speaker:
+with pattie.Speaker("Agent Speaker", format=pattie.AudioFormat(16_000, "pcm16")) as speaker:
     for chunk in speaker:  # what other apps play, as it plays
         transcriber.feed(chunk)
 ```
@@ -40,7 +40,7 @@ event loop keeps running, and a call can be cancelled:
 ```python
 from pattie.aio import AsyncMicrophone
 
-async with AsyncMicrophone("Agent Mic", format=pattie.Format(24_000, "pcm16")) as mic:
+async with AsyncMicrophone("Agent Mic", format=pattie.AudioFormat(24_000, "pcm16")) as mic:
     await mic.write(pcm_audio)
     async with asyncio.timeout(5):
         await mic.wait_for_playout()
@@ -70,7 +70,7 @@ it. Over hours that adds up to seconds of delay, or gaps. A `LiveWriter` holds
 it at about 40 ms and keeps it there by resampling a few parts per million:
 
 ```python
-relay = mic.live_writer(pattie.Format(16_000, "pcm16"))
+relay = mic.live_writer(pattie.AudioFormat(16_000, "pcm16"))
 relay.push(chunk)  # as each chunk arrives; never waits
 relay.stats.correction_ppm  # how far off the source's clock is
 ```

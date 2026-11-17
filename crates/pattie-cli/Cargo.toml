@@ -10,7 +10,7 @@ name = "pattie-cli"
 path = "src/main.rs"
 
 [dependencies]
-pattie = { path = "../pattie" }
+pattie = { path = "../sdk" }
 pattie-install = { path = "../pattie-install" }
 
 [target."cfg(windows)".dependencies]

@@ -5,7 +5,7 @@ keeps running. Each wait in that thread lasts at most 100 ms, so cancelling a ca
 stops it within about that long, and closing never waits on a stuck call. To give
 up after a while, use ``asyncio.timeout``::
 
-    async with AsyncMicrophone("Agent Mic", format=Format(24_000, "pcm16")) as mic:
+    async with AsyncMicrophone("Agent Mic", format=AudioFormat(24_000, "pcm16")) as mic:
         await mic.write(audio)
         async with asyncio.timeout(5):
             await mic.wait_for_playout()
@@ -17,9 +17,9 @@ from types import TracebackType
 from typing import Self
 
 from pattie._pattie import (
+    AudioFormat,
     Clock,
     Converter,
-    Format,
     Interrupted,
     LiveWriter,
     Microphone,
@@ -46,14 +46,14 @@ class AsyncMicrophone:
         *,
         rate: int = 48_000,
         channels: int = 1,
-        format: Format | None = None,  # noqa: A002
+        format: AudioFormat | None = None,  # noqa: A002
         strict: bool = False,
         _backend: object = None,
     ) -> None:
         # The microphone below takes the Device's own format; this class converts
         # first. Then a write cut short by its 100 ms wait says exactly which
         # bytes went in, and the next wait carries on from there.
-        device = Format(rate, "f32", channels=channels)
+        device = AudioFormat(rate, "f32", channels=channels)
         self._format = format or device
         self._input = Converter(self._format, device)
         self._frame_bytes = _SAMPLE_BYTES * channels
@@ -66,7 +66,7 @@ class AsyncMicrophone:
         return self._mic.id
 
     @property
-    def format(self) -> Format:
+    def format(self) -> AudioFormat:
         return self._format
 
     @property
@@ -108,11 +108,11 @@ class AsyncMicrophone:
         while not await asyncio.to_thread(self._mic.wait_for_playout, _PIECE_SECONDS):
             pass
 
-    def playout(self, format: Format | None = None) -> AsyncPlayout:  # noqa: A002
+    def playout(self, format: AudioFormat | None = None) -> AsyncPlayout:  # noqa: A002
         """The microphone as a voice agent's output. See ``Microphone.playout``."""
         return AsyncPlayout(self._mic.playout(format or self._format))
 
-    def live_writer(self, format: Format | None = None) -> LiveWriter:  # noqa: A002
+    def live_writer(self, format: AudioFormat | None = None) -> LiveWriter:  # noqa: A002
         """The microphone as a live source's input, drift-compensated. Its push()
         never waits, so the sync ``LiveWriter`` serves asyncio code as it is. See
         ``Microphone.live_writer``."""
@@ -193,7 +193,7 @@ class AsyncSpeaker:
         *,
         rate: int = 48_000,
         channels: int = 1,
-        format: Format | None = None,  # noqa: A002
+        format: AudioFormat | None = None,  # noqa: A002
         _backend: object = None,
     ) -> None:
         self._speaker = Speaker(

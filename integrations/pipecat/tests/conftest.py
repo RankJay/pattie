@@ -10,9 +10,9 @@ from pattie import _testing
 
 
 @pytest.fixture
-def backend() -> _testing.TestBackend:
+def backend() -> _testing.FakeBackend:
     """A fresh backend: as far as names and IDs go, a new app."""
-    return _testing.TestBackend()
+    return _testing.FakeBackend()
 
 
 def pcm16(value: float, frames: int) -> bytes:
@@ -29,7 +29,7 @@ class SystemPull:
     card does: on its own thread, it takes whatever 10 ms packets the wall
     clock says are due."""
 
-    def __init__(self, backend: _testing.TestBackend, device_id: int) -> None:
+    def __init__(self, backend: _testing.FakeBackend, device_id: int) -> None:
         self.taken: list[float] = []
         self._stop = threading.Event()
 
@@ -38,7 +38,7 @@ class SystemPull:
             while not self._stop.is_set():
                 due = int((time.monotonic() - started) * 100)  # packets so far
                 while pulled < due:
-                    got = backend.driver_read(device_id, 480)
+                    got = backend.system_read(device_id, 480)
                     if got is not None:
                         self.taken.extend(array.array("f", got).tolist())
                     pulled += 1

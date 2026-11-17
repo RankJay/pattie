@@ -175,7 +175,7 @@ jobs:
         # PipeWire code, which only the opt-in real-PipeWire tests reach.
         run: |
           cargo llvm-cov --workspace --include-ffi --summary-only \
-            --ignore-filename-regex 'pattie[\\/]src[\\/]windows\.rs|pattie-cli[\\/]src[\\/](main|measure)\.rs|pattie-install[\\/]src[\\/]setup\.rs|pattie-msi[\\/]src[\\/]msi\.rs|core_host[\\/]test_backend|linux[\\/]pipewire' \
+            --ignore-filename-regex 'sdk[\\/]src[\\/]backend[\\/]windows\.rs|pattie-cli[\\/]src[\\/](main|measure)\.rs|pattie-install[\\/]src[\\/]setup\.rs|pattie-msi[\\/]src[\\/]msi\.rs|backend[\\/]fake\.rs|linux[\\/](nodes|sys)[\\/]' \
             | tee coverage.txt
           { echo '```'; cat coverage.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 

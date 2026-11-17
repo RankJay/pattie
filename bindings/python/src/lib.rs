@@ -203,7 +203,7 @@ fn audio_bytes(data: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
         PyTypeError::new_err("audio must be bytes-like (bytes, bytearray, memoryview, array)")
     })?;
     // As plain bytes, whatever the buffer's own element type (a float32 array,
-    // say): the Format says how to read them.
+    // say): the AudioFormat says how to read them.
     let bytes = view.call_method1("cast", ("B",))?;
     PyBuffer::<u8>::get(&bytes)?.to_vec(data.py())
 }
@@ -227,7 +227,7 @@ fn f32_samples(bytes: &[u8]) -> Vec<f32> {
 /// A stream's sample rate, encoding and channel count.
 #[pyclass(module = "pattie", frozen, eq, from_py_object)]
 #[derive(Clone, Copy, PartialEq, Eq)]
-struct Format {
+struct AudioFormat {
     #[pyo3(get)]
     rate: u32,
     encoding: sdk::Encoding,
@@ -235,7 +235,7 @@ struct Format {
     channels: u16,
 }
 
-impl Format {
+impl AudioFormat {
     fn encoding_name(&self) -> &'static str {
         match self.encoding {
             sdk::Encoding::F32 => "f32",
@@ -244,8 +244,8 @@ impl Format {
         }
     }
 
-    fn sdk(&self) -> sdk::Format {
-        sdk::Format {
+    fn sdk(&self) -> sdk::AudioFormat {
+        sdk::AudioFormat {
             rate: self.rate,
             channels: self.channels,
             encoding: self.encoding,
@@ -254,13 +254,13 @@ impl Format {
 
     /// The format a `format=` argument names, or `device` (the Device's own)
     /// when it's None.
-    fn or_device(format: Option<Format>, device: sdk::Format) -> sdk::Format {
+    fn or_device(format: Option<AudioFormat>, device: sdk::AudioFormat) -> sdk::AudioFormat {
         format.map_or(device, |format| format.sdk())
     }
 
     /// A Device's own format: 32-bit float at its rate and channels.
-    fn device(rate: u32, channels: u16) -> sdk::Format {
-        sdk::Format {
+    fn device(rate: u32, channels: u16) -> sdk::AudioFormat {
+        sdk::AudioFormat {
             rate,
             channels,
             encoding: sdk::Encoding::F32,
@@ -269,13 +269,13 @@ impl Format {
 }
 
 #[pymethods]
-impl Format {
+impl AudioFormat {
     /// `encoding` is "f32" (32-bit float), "pcm16" (16-bit signed PCM) or
     /// "ulaw" (8-bit G.711 μ-law). Samples are little-endian; stereo is
     /// interleaved.
     #[new]
     #[pyo3(signature = (rate, encoding = "f32", channels = 1))]
-    fn new(rate: u32, encoding: &str, channels: u16) -> PyResult<Format> {
+    fn new(rate: u32, encoding: &str, channels: u16) -> PyResult<AudioFormat> {
         let encoding = match encoding {
             "f32" => sdk::Encoding::F32,
             "pcm16" => sdk::Encoding::I16,
@@ -286,19 +286,19 @@ impl Format {
                 )));
             }
         };
-        // Checked here, not at first use, so a bad Format fails where it's written.
-        let format = Format {
+        // Checked here, not at first use, so a bad AudioFormat fails where it's written.
+        let format = AudioFormat {
             rate,
             encoding,
             channels,
         };
-        sdk::Converter::new(format.sdk(), sdk::Format::DEVICE).map_err(to_py)?;
+        sdk::Converter::new(format.sdk(), sdk::AudioFormat::DEVICE).map_err(to_py)?;
         Ok(format)
     }
 
     /// What a Device takes and gives by default: 48 kHz, mono, 32-bit float.
     #[classattr]
-    const DEVICE: Format = Format {
+    const DEVICE: AudioFormat = AudioFormat {
         rate: 48_000,
         encoding: sdk::Encoding::F32,
         channels: 1,
@@ -322,7 +322,7 @@ impl Format {
 
     fn __repr__(&self) -> String {
         format!(
-            "Format({}, '{}', channels={})",
+            "AudioFormat({}, '{}', channels={})",
             self.rate,
             self.encoding_name(),
             self.channels
@@ -370,16 +370,16 @@ impl Stats {
 /// builds. Ordinary code leaves it out and gets the real driver.
 fn transport(
     backend: Option<&Bound<'_, PyAny>>,
-) -> PyResult<Option<Arc<dyn sdk::transport::Transport>>> {
+) -> PyResult<Option<Arc<dyn sdk::backend::Backend>>> {
     let Some(backend) = backend else {
         return Ok(None);
     };
-    #[cfg(feature = "test-backend")]
-    if let Ok(test) = backend.cast::<testing::TestBackend>() {
-        return Ok(Some(test.get().inner.transport()));
+    #[cfg(feature = "fake-backend")]
+    if let Ok(test) = backend.cast::<testing::FakeBackend>() {
+        return Ok(Some(test.get().inner.backend()));
     }
     Err(PyTypeError::new_err(format!(
-        "_backend must be a pattie._testing.TestBackend, not {}",
+        "_backend must be a pattie._testing.FakeBackend, not {}",
         backend.get_type().name()?
     )))
 }
@@ -387,7 +387,7 @@ fn transport(
 fn create(
     name: &str,
     kind: sdk::Kind,
-    format: sdk::Format,
+    format: sdk::AudioFormat,
     backend: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<sdk::Device> {
     let mut builder = sdk::Device::builder()
@@ -395,7 +395,7 @@ fn create(
         .kind(kind)
         .format(format.rate, format.channels);
     if let Some(transport) = transport(backend)? {
-        builder = builder.transport(transport);
+        builder = builder.backend(transport);
     }
     builder.create().map_err(to_py)
 }
@@ -597,7 +597,7 @@ enum Input {
 }
 
 impl Input {
-    fn new(format: sdk::Format, device: sdk::Format) -> PyResult<Input> {
+    fn new(format: sdk::AudioFormat, device: sdk::AudioFormat) -> PyResult<Input> {
         Ok(if format == device {
             Input::Device {
                 tail: Vec::new(),
@@ -655,9 +655,9 @@ type PlayoutSlot = Arc<RwLock<Option<Arc<sdk::Playout>>>>;
 struct Microphone {
     id: u32,
     /// What write() takes.
-    format: sdk::Format,
+    format: sdk::AudioFormat,
     /// The Device's own: float at its rate and channels.
-    device_format: sdk::Format,
+    device_format: sdk::AudioFormat,
     watch: LossWatch,
     /// Set by close() before it takes any lock: a waiting call stops at its next
     /// piece, so close() never waits long.
@@ -707,12 +707,12 @@ impl Microphone {
         name: &str,
         rate: u32,
         channels: u16,
-        format: Option<Format>,
+        format: Option<AudioFormat>,
         strict: bool,
         _backend: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Microphone> {
-        let device_format = Format::device(rate, channels);
-        let format = Format::or_device(format, device_format);
+        let device_format = AudioFormat::device(rate, channels);
+        let format = AudioFormat::or_device(format, device_format);
         let device = create(name, sdk::Kind::Microphone, device_format, _backend)?;
         let input = Input::new(format, device_format)?;
         Ok(Microphone {
@@ -738,8 +738,8 @@ impl Microphone {
 
     /// What write() takes.
     #[getter]
-    fn format(&self) -> Format {
-        Format {
+    fn format(&self) -> AudioFormat {
+        AudioFormat {
             rate: self.format.rate,
             encoding: self.format.encoding,
             channels: self.format.channels,
@@ -864,7 +864,7 @@ impl Microphone {
     /// It takes the microphone's one writer, so it can't be mixed with write().
     /// Closing the microphone closes it too.
     #[pyo3(signature = (format = None))]
-    fn playout(&self, py: Python<'_>, format: Option<Format>) -> PyResult<Playout> {
+    fn playout(&self, py: Python<'_>, format: Option<AudioFormat>) -> PyResult<Playout> {
         let writing = lock(py, &self.writing);
         let device = lock(py, &self.device);
         let device = device.as_ref().ok_or_else(closed)?;
@@ -886,7 +886,7 @@ impl Microphone {
     /// playout(). It takes the microphone's one writer; closing the microphone
     /// closes it too.
     #[pyo3(signature = (format = None))]
-    fn live_writer(&self, py: Python<'_>, format: Option<Format>) -> PyResult<LiveWriter> {
+    fn live_writer(&self, py: Python<'_>, format: Option<AudioFormat>) -> PyResult<LiveWriter> {
         let writing = lock(py, &self.writing);
         let device = lock(py, &self.device);
         let device = device.as_ref().ok_or_else(closed)?;
@@ -983,7 +983,7 @@ struct Reading {
 struct Speaker {
     id: u32,
     /// The Device's own format: float at its rate and channels.
-    device_format: sdk::Format,
+    device_format: sdk::AudioFormat,
     /// Set by close() before it takes any lock, as for a microphone.
     closing: AtomicBool,
     reading: Mutex<Reading>,
@@ -1048,11 +1048,11 @@ impl Speaker {
         name: &str,
         rate: u32,
         channels: u16,
-        format: Option<Format>,
+        format: Option<AudioFormat>,
         _backend: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Speaker> {
-        let device_format = Format::device(rate, channels);
-        let format = Format::or_device(format, device_format);
+        let device_format = AudioFormat::device(rate, channels);
+        let format = AudioFormat::or_device(format, device_format);
         let device = create(name, sdk::Kind::Speaker, device_format, _backend)?;
         let output = if format == device_format {
             None
@@ -1306,7 +1306,7 @@ struct Converter {
 #[pymethods]
 impl Converter {
     #[new]
-    fn new(source: Format, target: Format) -> PyResult<Converter> {
+    fn new(source: AudioFormat, target: AudioFormat) -> PyResult<Converter> {
         Ok(Converter {
             inner: Mutex::new(sdk::Converter::new(source.sdk(), target.sdk()).map_err(to_py)?),
         })
@@ -1344,7 +1344,7 @@ fn stable_id(kind: &str, name: &str, rate: u32, channels: u16) -> PyResult<Strin
     Ok(sdk::stable_id(kind, name, rate, channels))
 }
 
-#[cfg(feature = "test-backend")]
+#[cfg(feature = "fake-backend")]
 mod testing {
     use pyo3::prelude::*;
     use pyo3::types::PyBytes;
@@ -1352,42 +1352,42 @@ mod testing {
     /// The SDK's test backend: Devices without the driver, and the system's side
     /// of them played by the test. Only in the project's own test builds.
     #[pyclass(module = "pattie._testing", frozen)]
-    pub(crate) struct TestBackend {
-        pub(crate) inner: pattie::transport::TestBackend,
+    pub(crate) struct FakeBackend {
+        pub(crate) inner: pattie::backend::FakeBackend,
     }
 
     #[pymethods]
-    impl TestBackend {
+    impl FakeBackend {
         #[new]
-        fn new() -> PyResult<TestBackend> {
-            Ok(TestBackend {
-                inner: pattie::transport::TestBackend::new().map_err(super::to_py)?,
+        fn new() -> PyResult<FakeBackend> {
+            Ok(FakeBackend {
+                inner: pattie::backend::FakeBackend::new().map_err(super::to_py)?,
             })
         }
 
         /// How far ahead of the system a paced write fills the Ring, in frames.
         #[getter]
         fn lead_frames(&self) -> u32 {
-            self.inner.transport().lead_frames()
+            self.inner.backend().lead_frames()
         }
 
         /// The system takes `count` frames from a microphone: float32 bytes, or
         /// None when no live Device has that ID.
-        fn driver_read<'py>(
+        fn system_read<'py>(
             &self,
             py: Python<'py>,
             device_id: u32,
             count: usize,
         ) -> Option<Bound<'py, PyBytes>> {
-            let samples = self.inner.driver_read(device_id, count)?;
+            let samples = self.inner.system_read(device_id, count)?;
             Some(PyBytes::new(py, &super::f32_bytes(&samples)))
         }
 
         /// The system plays float32 `data` to a speaker; False when no live Device
         /// has that ID.
-        fn driver_write(&self, device_id: u32, data: &[u8]) -> bool {
+        fn system_write(&self, device_id: u32, data: &[u8]) -> bool {
             self.inner
-                .driver_write(device_id, &super::f32_samples(data))
+                .system_write(device_id, &super::f32_samples(data))
         }
     }
 
@@ -1436,7 +1436,7 @@ fn _pattie(module: &Bound<'_, PyModule>) -> PyResult<()> {
     ] {
         module.add(name, error)?;
     }
-    module.add_class::<Format>()?;
+    module.add_class::<AudioFormat>()?;
     module.add_class::<Stats>()?;
     module.add_class::<Microphone>()?;
     module.add_class::<Speaker>()?;
@@ -1447,9 +1447,9 @@ fn _pattie(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<LiveWriter>()?;
     module.add_class::<LiveStats>()?;
     module.add_function(wrap_pyfunction!(stable_id, module)?)?;
-    #[cfg(feature = "test-backend")]
-    module.add_class::<testing::TestBackend>()?;
-    #[cfg(feature = "test-backend")]
+    #[cfg(feature = "fake-backend")]
+    module.add_class::<testing::FakeBackend>()?;
+    #[cfg(feature = "fake-backend")]
     module.add_function(wrap_pyfunction!(testing::sdk_error, module)?)?;
     Ok(())
 }

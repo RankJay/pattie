@@ -111,10 +111,10 @@ class PattieInputTransport(BaseInputTransport):
         speaker = self._devices.speaker
         assert speaker is not None
         # What read() returns: float at the Speaker's own rate and channels.
-        played = pattie.Format(speaker.rate, "f32", channels=speaker.channels)
+        played = pattie.AudioFormat(speaker.rate, "f32", channels=speaker.channels)
         self._converter = pattie.Converter(
             played,
-            pattie.Format(self.sample_rate, "pcm16", channels=self._params.audio_in_channels),
+            pattie.AudioFormat(self.sample_rate, "pcm16", channels=self._params.audio_in_channels),
         )
 
     async def start(self, frame: StartFrame) -> None:
@@ -197,7 +197,9 @@ class PattieOutputTransport(BaseOutputTransport):
         microphone = self._devices.microphone
         assert microphone is not None
         self._converter = pattie.Converter(
-            pattie.Format(self.sample_rate, "pcm16", channels=self._params.audio_out_channels),
+            pattie.AudioFormat(
+                self.sample_rate, "pcm16", channels=self._params.audio_out_channels
+            ),
             microphone.format,
         )
 
@@ -233,7 +235,7 @@ class PattieOutputTransport(BaseOutputTransport):
 class PattieTransport(BaseTransport):
     """A bot's own virtual microphone (``output()``) and speaker (``input()``).
 
-    ``_backend`` is for tests only (``pattie._testing.TestBackend``).
+    ``_backend`` is for tests only (``pattie._testing.FakeBackend``).
     """
 
     def __init__(

@@ -1,5 +1,5 @@
 //! The In-process core's calls (ADR 0012, ADR 0018): the SDK declares the C core's
-//! functions by hand (crates/pattie/src/sys/core_functions.rs), so apps build without
+//! functions by hand (crates/sdk/src/sys/core_functions.rs), so apps build without
 //! libclang. This includes that same file next to bindgen's reading of pattie_core.h
 //! and checks every declaration
 //! against it. A mismatch doesn't compile: the types below differ, and rustc's
@@ -20,7 +20,7 @@ mod sdk {
     type RawRing = c::pattie_ring;
     type DeviceInfo = c::pattie_device_info;
 
-    include!("../../../../crates/pattie/src/sys/core_functions.rs");
+    include!("../../../../crates/sdk/src/sys/core_functions.rs");
 
     /// Compiles only if both are the same type.
     fn same<T>(_: T, _: T) {}
@@ -75,7 +75,7 @@ mod sdk_types {
     use super::c;
     use std::mem::{offset_of, size_of};
 
-    include!("../../../../crates/pattie/src/sys/device_info.rs");
+    include!("../../../../crates/sdk/src/sys/device_info.rs");
 
     #[test]
     fn every_struct_the_sdk_declares_matches_the_header() {

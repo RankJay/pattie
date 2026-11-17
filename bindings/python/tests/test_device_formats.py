@@ -26,16 +26,16 @@ def stereo(frames: int) -> list[float]:
 
 
 def test_a_stereo_microphone_says_its_format_and_carries_whole_frames(
-    backend: _testing.TestBackend,
+    backend: _testing.FakeBackend,
 ) -> None:
     samples = stereo(441)
 
     with pattie.Microphone("Stereo Mic", rate=44_100, channels=2, _backend=backend) as mic:
         written = mic.write_nowait(floats(samples))
-        taken = backend.driver_read(mic.id, 441)
+        taken = backend.system_read(mic.id, 441)
 
         assert (mic.rate, mic.channels) == (44_100, 2)
-        assert mic.format == pattie.Format(44_100, "f32", channels=2)
+        assert mic.format == pattie.AudioFormat(44_100, "f32", channels=2)
 
     assert written == 441, "frames"
     assert taken is not None
@@ -43,7 +43,7 @@ def test_a_stereo_microphone_says_its_format_and_carries_whole_frames(
 
 
 def test_a_paced_write_to_a_stereo_microphone_counts_frames(
-    backend: _testing.TestBackend,
+    backend: _testing.FakeBackend,
 ) -> None:
     with pattie.Microphone("Stereo Mic", channels=2, _backend=backend) as mic:
         written = mic.write(floats(stereo(4_800)), timeout=0.05)
@@ -54,7 +54,7 @@ def test_a_paced_write_to_a_stereo_microphone_counts_frames(
 
 
 def test_a_write_cut_mid_frame_carries_the_rest_to_the_next(
-    backend: _testing.TestBackend,
+    backend: _testing.FakeBackend,
 ) -> None:
     samples = stereo(2)
 
@@ -62,7 +62,7 @@ def test_a_write_cut_mid_frame_carries_the_rest_to_the_next(
         # Three samples are a frame and a half: the half waits for the rest.
         first = mic.write_nowait(floats(samples[:3]))
         second = mic.write_nowait(floats(samples[3:]))
-        taken = backend.driver_read(mic.id, 2)
+        taken = backend.system_read(mic.id, 2)
 
     assert (first, second) == (1, 1)
     assert taken is not None
@@ -70,24 +70,24 @@ def test_a_write_cut_mid_frame_carries_the_rest_to_the_next(
 
 
 def test_mono_written_to_a_stereo_microphone_fills_both_channels(
-    backend: _testing.TestBackend,
+    backend: _testing.FakeBackend,
 ) -> None:
     with pattie.Microphone(
-        "Stereo Mic", channels=2, format=pattie.Format(48_000), _backend=backend
+        "Stereo Mic", channels=2, format=pattie.AudioFormat(48_000), _backend=backend
     ) as mic:
         written = mic.write_nowait(floats([0.5] * 480))
-        taken = backend.driver_read(mic.id, 480)
+        taken = backend.system_read(mic.id, 480)
 
     assert written == 480
     assert taken is not None
     assert as_floats(taken) == pytest.approx([0.5] * 960)
 
 
-def test_a_stereo_96_khz_speaker_reads_whole_frames(backend: _testing.TestBackend) -> None:
+def test_a_stereo_96_khz_speaker_reads_whole_frames(backend: _testing.FakeBackend) -> None:
     samples = stereo(960)
 
     with pattie.Speaker("Stereo Speaker", rate=96_000, channels=2, _backend=backend) as speaker:
-        assert backend.driver_write(speaker.id, floats(samples))
+        assert backend.system_write(speaker.id, floats(samples))
         data = speaker.read()
 
         assert (speaker.rate, speaker.channels) == (96_000, 2)
@@ -96,18 +96,18 @@ def test_a_stereo_96_khz_speaker_reads_whole_frames(backend: _testing.TestBacken
 
 
 def test_a_mono_speaker_format_mixes_a_stereo_speaker_down(
-    backend: _testing.TestBackend,
+    backend: _testing.FakeBackend,
 ) -> None:
     with pattie.Speaker(
-        "Stereo Speaker", channels=2, format=pattie.Format(48_000), _backend=backend
+        "Stereo Speaker", channels=2, format=pattie.AudioFormat(48_000), _backend=backend
     ) as speaker:
-        backend.driver_write(speaker.id, floats([0.25, 0.75] * 480))
+        backend.system_write(speaker.id, floats([0.25, 0.75] * 480))
         data = speaker.read()
 
     assert as_floats(data) == pytest.approx([0.5] * 480)
 
 
-def test_heard_ms_counts_at_the_microphones_rate(backend: _testing.TestBackend) -> None:
+def test_heard_ms_counts_at_the_microphones_rate(backend: _testing.FakeBackend) -> None:
     with (
         pattie.Microphone("Agent Mic", rate=96_000, _backend=backend) as mic,
         mic.playout() as playout,
@@ -116,7 +116,7 @@ def test_heard_ms_counts_at_the_microphones_rate(backend: _testing.TestBackend) 
         deadline = time.monotonic() + 5
         taken = 0
         while taken < 9_600 and time.monotonic() < deadline:
-            got = backend.driver_read(mic.id, 960)
+            got = backend.system_read(mic.id, 960)
             assert got is not None
             taken += sum(1 for x in as_floats(got) if x != 0)
             time.sleep(0.005)
@@ -126,10 +126,10 @@ def test_heard_ms_counts_at_the_microphones_rate(backend: _testing.TestBackend) 
     assert cut.heard_ms == cut.heard_frames * 1000 // 96_000
 
 
-def test_played_ms_counts_at_the_microphones_rate(backend: _testing.TestBackend) -> None:
+def test_played_ms_counts_at_the_microphones_rate(backend: _testing.FakeBackend) -> None:
     with pattie.Microphone("Agent Mic", rate=44_100, _backend=backend) as mic:
         mic.write_nowait(floats([0.1] * 2_205))
-        backend.driver_read(mic.id, 2_205)
+        backend.system_read(mic.id, 2_205)
 
         assert mic.played_frames == 2_205
         assert mic.played_ms == 50, "2,205 frames at 44.1 kHz"
@@ -137,22 +137,22 @@ def test_played_ms_counts_at_the_microphones_rate(backend: _testing.TestBackend)
 
 @pytest.mark.parametrize(("rate", "channels"), [(24_000, 1), (48_000, 9), (48_000, 0)])
 def test_a_device_format_outside_the_three_rates_and_eight_channels_is_refused(
-    backend: _testing.TestBackend, rate: int, channels: int
+    backend: _testing.FakeBackend, rate: int, channels: int
 ) -> None:
     with pytest.raises(pattie.UnsupportedFormat, match="kHz"):
         pattie.Microphone("Agent Mic", rate=rate, channels=channels, _backend=backend)
 
 
-def test_an_async_stereo_microphone_writes_whole_frames(backend: _testing.TestBackend) -> None:
+def test_an_async_stereo_microphone_writes_whole_frames(backend: _testing.FakeBackend) -> None:
     async def main() -> None:
         async with AsyncMicrophone("Stereo Mic", rate=44_100, channels=2, _backend=backend) as mic:
-            assert mic.format == pattie.Format(44_100, "f32", channels=2)
+            assert mic.format == pattie.AudioFormat(44_100, "f32", channels=2)
             done = asyncio.Event()
 
             async def pull() -> int:
                 taken = 0
                 while not done.is_set():
-                    got = backend.driver_read(mic.id, 441)
+                    got = backend.system_read(mic.id, 441)
                     taken += len(got or b"") // 8
                     await asyncio.sleep(0.005)
                 return taken

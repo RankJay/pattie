@@ -1,6 +1,6 @@
 # Clippy's settings for every crate. The lint levels are in Cargo.toml
 # ([workspace.lints]); the SDK's stricter ones are at the top of
-# crates/pattie/src/lib.rs.
+# crates/sdk/src/lib.rs.
 
 # "Every unsafe fn documents its contract" covers private functions too.
 check-private-items = true

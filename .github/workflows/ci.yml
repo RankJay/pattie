@@ -264,7 +264,7 @@ jobs:
       - run: cargo miri setup
       # Only the SDK's pure-Rust unit tests: on Linux the lib also holds the Linux
       # backend's tests, which call the C core, and Miri can't run C.
-      - run: "cargo miri test -p pattie --lib -- ring:: error:: identity::"
+      - run: "cargo miri test -p pattie --lib -- ring:: error:: stable_id::"
       - run: "cargo miri test -p pattie --lib -- ring::"
         env:
           MIRIFLAGS: -Zmiri-many-seeds=0..32

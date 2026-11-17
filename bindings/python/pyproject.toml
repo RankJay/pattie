@@ -38,15 +38,15 @@ python-source = "python"
 # The project's own builds include the SDK's test backend (pattie._testing) so
 # the tests run without the driver. Wheels for users are built by release.yml
 # with plain `maturin build`, which leaves it out.
-config-settings = { build-args = "--features test-backend" }
+config-settings = { build-args = "--features fake-backend" }
 # Rebuild the extension whenever its Rust or the SDK's changes.
 cache-keys = [
     { file = "pyproject.toml" },
     { file = "Cargo.toml" },
     { file = "src/**/*.rs" },
-    { file = "../../crates/pattie/Cargo.toml" },
-    { file = "../../crates/pattie/src/**/*.rs" },
-    { file = "../../crates/pattie/build.rs" },
+    { file = "../../crates/sdk/Cargo.toml" },
+    { file = "../../crates/sdk/src/**/*.rs" },
+    { file = "../../crates/sdk/build.rs" },
     { file = "../../core/**/*.{c,h}" },
 ]
 

@@ -7,6 +7,6 @@ from pattie import _testing
 
 
 @pytest.fixture
-def backend() -> _testing.TestBackend:
+def backend() -> _testing.FakeBackend:
     """A fresh backend: as far as names and IDs go, a new app."""
-    return _testing.TestBackend()
+    return _testing.FakeBackend()

@@ -697,7 +697,7 @@ pub fn drift(name: &str, seconds: u64, ppm: f64, correct: bool) -> Result<(), St
         .create()
         .map_err(|e| format!("couldn't create the microphone: {e}"))?;
     let live = mic
-        .live_writer(pattie::Format::DEVICE)
+        .live_writer(pattie::AudioFormat::DEVICE)
         .map_err(|e| e.to_string())?;
     if !correct {
         live.hold_correction(Some(0.0));

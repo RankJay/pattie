@@ -155,7 +155,7 @@ in the core.
 every index and size the app can touch is checked, since a hostile app controls
 every byte of the Ring.
 - **One ABI header, versioned (1.0).** `core/include/pattie_abi.h` is the contract between SDK
-and driver. The SDK mirrors it in `crates/pattie/src/abi.rs`, and a test checks
+and driver. The SDK mirrors it in `crates/sdk/src/abi.rs`, and a test checks
 every constant, size and offset match. Hello negotiates: the driver accepts any SDK
 of its major and replies with its own version, and each connection speaks the
 lower minor, so an app with a newer SDK still works on an older driver. A minor
@@ -194,10 +194,10 @@ core/
   tests/                    host tests for the core (Rust harness via bindgen + cc)
   fuzz/                     libFuzzer + AddressSanitizer target for the core (Fuzzing the core)
 crates/
-  pattie/                   the Rust SDK (public API: Device, Writer, Reader, Playout, Converter, Stats, Error,
-                            stable_id); backends in src/windows.rs and src/linux.rs + src/linux/;
-                            src/core_host.rs runs the C core in-process (Linux, and the
-                            contract suite's test backend on every OS)
+  sdk/                      the Rust SDK, package `pattie` (public API: Device, Writer, Reader, Playout,
+                            Converter, Stats, Error, stable_id); the Backends in src/backend/;
+                            src/backend/in_process/ runs the C core in-process (Linux, and the
+                            contract suite's Fake backend on every OS)
   pattie-cli/               test tool: mic, speaker, measure, install, uninstall
   pattie-install/           puts the driver on a machine or takes it off: the engine behind
                             `pattie-cli install` and the MSI's custom action
@@ -423,7 +423,7 @@ cargo install cargo-llvm-cov --locked
 Then:
 
 ```bash
-CC="/c/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/Llvm/x64/bin/clang-cl.exe" cargo llvm-cov --workspace --include-ffi --summary-only --ignore-filename-regex 'pattie[\\/]src[\\/]windows\.rs|pattie-cli[\\/]src[\\/](main|measure)\.rs|pattie-install[\\/]src[\\/]setup\.rs|pattie-msi[\\/]src[\\/]msi\.rs|core_host[\\/]test_backend'
+CC="/c/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/Llvm/x64/bin/clang-cl.exe" cargo llvm-cov --workspace --include-ffi --summary-only --ignore-filename-regex 'sdk[\\/]src[\\/]backend[\\/]windows\.rs|pattie-cli[\\/]src[\\/](main|measure)\.rs|pattie-install[\\/]src[\\/]setup\.rs|pattie-msi[\\/]src[\\/]msi\.rs|backend[\\/]fake\.rs'
 ```
 
 Add `--show-missing-lines` to list the lines each file misses. Left out of the
@@ -433,12 +433,12 @@ test VM):
 
 | Left out | Why | Where its logic is tested |
 | --- | --- | --- |
-| `crates/pattie/src/windows.rs` | The IOCTL transport to the real driver | VM; the not-installed path has a test |
+| `crates/sdk/src/backend/windows.rs` | The Windows Backend: IOCTLs to the real driver | VM; the not-installed path has a test |
 | `crates/pattie-cli/src/main.rs` | The mic/speaker loops on a live Device | Parsing: `cli.rs` |
 | `crates/pattie-cli/src/measure.rs` | WASAPI streams on a live endpoint | Pairing and statistics: `latency.rs` |
 | `crates/pattie-install/src/setup.rs` | SetupAPI calls that change the machine | INF parsing and the outcome (exit codes, reboot): `lib.rs`; VM for the rest |
 | `crates/pattie-msi/src/msi.rs` | The MSI's custom-action entry points (Windows Installer calls) | What each action returns: `lib.rs`; the authoring: `tests/authoring.rs`; VM (R3) for the rest |
-| `crates/pattie/src/core_host/test_backend.rs` | Test scaffolding (the contract suite's nodes), never shipped | The contract tests it serves |
+| `crates/sdk/src/backend/fake.rs` | Test scaffolding (the contract suite's nodes), never shipped | The contract tests it serves |
 
 ### Property tests
 
@@ -518,7 +518,7 @@ confirm a test fails), as listed under Property tests.
 Miri runs the Rust tests in an interpreter that checks every memory access, and
 fails on undefined behaviour the compiled tests can pass straight through: reading
 past an allocation, a misaligned or dangling pointer, a data race between threads.
-It runs on the Ring's own tests (`crates/pattie/src/ring.rs`), which play the
+It runs on the Ring's own tests (`crates/sdk/src/ring/`), which play the
 driver's side in Rust with the C core's counter protocol, two of them on a second
 thread. The SDK's other tests reach the Ring through the Core host's C core, and Miri
 can't run C. Once:
@@ -527,7 +527,7 @@ can't run C. Once:
 rustup toolchain install nightly --profile minimal --component miri,rust-src
 ```
 
-Then, after any change to `ring.rs` (each runs in seconds):
+Then, after any change to `ring/` (each runs in seconds):
 
 ```bash
 cargo +nightly miri test -p pattie --lib
@@ -645,9 +645,9 @@ Where they live, from widest to narrowest:
 | --- | --- | --- |
 | Root `Cargo.toml`, `[workspace.lints]` | every crate (each opts in with `[lints] workspace = true`) | The `unsafe` rules below; no `dbg!`, `todo!`, `unimplemented!`; no pointer casts that hide a type or alignment change (`ptr_as_ptr`, `cast_ptr_alignment`, `transmute_ptr_to_ptr`); rustdoc links and HTML must be valid |
 | `clippy.toml` | every crate | Methods banned by name, each with its reason: `std::process::exit` (skips destructors, so a live Device isn't removed cleanly) and `std::thread::sleep` (a 1 ms sleep can last ~15.6 ms and starve an audio loop: use the SDK's `Writer::write_paced` or `Reader::read_paced`, which wake on the Device's doorbell). Also: the `unsafe fn` contract rule covers private functions, and tests may unwrap |
-| Top of `crates/pattie/src/lib.rs` | the SDK only | It runs inside other people's apps: no `unwrap`/`expect`/`panic!`, no printing, no silently narrowing casts, and every public item is documented and has `Debug` |
-| `#![forbid(unsafe_code)]` at the top of a module | `cli.rs`, `latency.rs`, `error.rs`, `identity.rs`, `transport.rs` | The compiler guarantees these hold no `unsafe`, so a reviewer can skip them for memory safety |
-| `core/tests/conformance/build.rs`, `crates/pattie/build.rs`, `pattie.vcxproj` | the C core (and the driver) | Warnings are errors, plus implicit narrowing and sign changes: `-Wconversion -Wsign-conversion` under clang, C4242/C4244/C4365 under MSVC |
+| Top of `crates/sdk/src/lib.rs` | the SDK only | It runs inside other people's apps: no `unwrap`/`expect`/`panic!`, no printing, no silently narrowing casts, and every public item is documented and has `Debug` |
+| `#![forbid(unsafe_code)]` at the top of a module | `cli.rs`, `latency.rs`, `error/`, `stable_id.rs`, `backend/traits.rs`, `audio/` | The compiler guarantees these hold no `unsafe`, so a reviewer can skip them for memory safety |
+| `core/tests/conformance/build.rs`, `crates/sdk/build.rs`, `pattie.vcxproj` | the C core (and the driver) | Warnings are errors, plus implicit narrowing and sign changes: `-Wconversion -Wsign-conversion` under clang, C4242/C4244/C4365 under MSVC |
 
 To make an exception in one place, use `#[expect(clippy::…, reason = "…")]` on that
 item or statement, never a crate-wide `allow`: the reason is written down, and the
@@ -664,7 +664,7 @@ other side. The rules here:
 saying why it's correct (clippy fails the build otherwise:
 `undocumented_unsafe_blocks`, `multiple_unsafe_ops_per_block`);
 - wrap it in a safe function or type (handles freed in `Drop`), so callers never see it;
-- shared memory with the kernel (`crates/pattie/src/ring.rs`) is the one place that
+- shared memory with the kernel (`crates/sdk/src/ring/`) is the one place that
 deserves the most care; it follows the Ring protocol exactly, and Miri checks it (above).
 
 ### Style

@@ -14,18 +14,18 @@ def floats(values: list[float]) -> bytes:
     return array.array("f", values).tobytes()
 
 
-async def pull(backend: _testing.TestBackend, device_id: int, until: asyncio.Event) -> int:
+async def pull(backend: _testing.FakeBackend, device_id: int, until: asyncio.Event) -> int:
     """The system's part, as a task on the same loop: it only runs if the
     microphone's waits leave the loop free."""
     taken = 0
     while not until.is_set():
-        got = backend.driver_read(device_id, 480)
+        got = backend.system_read(device_id, 480)
         taken += len(got or b"") // 4
         await asyncio.sleep(0.005)
     return taken
 
 
-def test_an_async_write_leaves_the_loop_free(backend: _testing.TestBackend) -> None:
+def test_an_async_write_leaves_the_loop_free(backend: _testing.FakeBackend) -> None:
     async def main() -> None:
         async with AsyncMicrophone("Agent Mic", _backend=backend) as mic:
             done = asyncio.Event()
@@ -39,7 +39,7 @@ def test_an_async_write_leaves_the_loop_free(backend: _testing.TestBackend) -> N
     asyncio.run(main())
 
 
-def test_cancelling_a_write_stops_it_soon(backend: _testing.TestBackend) -> None:
+def test_cancelling_a_write_stops_it_soon(backend: _testing.FakeBackend) -> None:
     async def main() -> None:
         async with AsyncMicrophone("Agent Mic", _backend=backend) as mic:
             # Nobody pulls, so this write could never finish.
@@ -54,11 +54,11 @@ def test_cancelling_a_write_stops_it_soon(backend: _testing.TestBackend) -> None
     asyncio.run(main())
 
 
-def test_an_async_speaker_yields_what_was_played(backend: _testing.TestBackend) -> None:
+def test_an_async_speaker_yields_what_was_played(backend: _testing.FakeBackend) -> None:
     async def main() -> bytes:
         async with AsyncSpeaker("Agent Speaker", _backend=backend) as speaker:
             loop = asyncio.get_running_loop()
-            loop.call_later(0.05, backend.driver_write, speaker.id, floats([0.25] * 480))
+            loop.call_later(0.05, backend.system_write, speaker.id, floats([0.25] * 480))
             async for chunk in speaker:
                 return chunk
         return b""
@@ -68,7 +68,7 @@ def test_an_async_speaker_yields_what_was_played(backend: _testing.TestBackend) 
     assert array.array("f", heard).tolist() == pytest.approx([0.25] * 480)
 
 
-def test_an_async_playout_waits_idle_without_blocking(backend: _testing.TestBackend) -> None:
+def test_an_async_playout_waits_idle_without_blocking(backend: _testing.FakeBackend) -> None:
     async def main() -> None:
         async with AsyncMicrophone("Agent Mic", _backend=backend) as mic:
             done = asyncio.Event()
@@ -83,7 +83,7 @@ def test_an_async_playout_waits_idle_without_blocking(backend: _testing.TestBack
     asyncio.run(main())
 
 
-def test_asyncio_timeout_gives_up_on_a_wait_soon(backend: _testing.TestBackend) -> None:
+def test_asyncio_timeout_gives_up_on_a_wait_soon(backend: _testing.FakeBackend) -> None:
     async def main() -> None:
         async with AsyncMicrophone("Agent Mic", _backend=backend) as mic:
             mic.write_nowait(floats([0.5] * 480))  # nobody pulls, so it never plays out
@@ -97,7 +97,7 @@ def test_asyncio_timeout_gives_up_on_a_wait_soon(backend: _testing.TestBackend) 
 
 
 def test_an_async_live_writer_relays_audio_without_waiting(
-    backend: _testing.TestBackend,
+    backend: _testing.FakeBackend,
 ) -> None:
     async def main() -> None:
         async with AsyncMicrophone("Agent Mic", _backend=backend) as mic:
@@ -114,11 +114,11 @@ def test_an_async_live_writer_relays_audio_without_waiting(
     asyncio.run(main())
 
 
-def test_an_async_read_timed_says_when_it_was_played(backend: _testing.TestBackend) -> None:
+def test_an_async_read_timed_says_when_it_was_played(backend: _testing.FakeBackend) -> None:
     async def main() -> tuple[bytes, float | None, float]:
         async with AsyncSpeaker("Agent Speaker", _backend=backend) as speaker:
             loop = asyncio.get_running_loop()
-            loop.call_later(0.05, backend.driver_write, speaker.id, floats([0.25] * 480))
+            loop.call_later(0.05, backend.system_write, speaker.id, floats([0.25] * 480))
             data, first_at = await speaker.read_timed()
             return data, first_at, time.perf_counter()
 
