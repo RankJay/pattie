@@ -1,0 +1,8 @@
+# Line endings. Git stores every text file with LF and checks it out with LF on
+# every OS, whatever core.autocrlf says on the machine.
+* text=auto eol=lf
+
+# The driver's INF is the one exception: it is checked out with CRLF. Release builds
+# on Windows have always packaged it with CRLF (core.autocrlf is on there), and the
+# shipped driver package should not change because of a line-ending setting.
+*.inf text eol=crlf

@@ -76,7 +76,9 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable  # installs rustup where it is missing
+      - name: Rust toolchain (the version in rust-toolchain.toml)
+        run: rustup toolchain install
       - name: Point bindgen at libclang (Windows)
         if: matrix.os == 'windows'
         shell: pwsh

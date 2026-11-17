@@ -27,9 +27,9 @@ jobs:
     runs-on: windows-2025-vs2026
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
+      - uses: dtolnay/rust-toolchain@stable  # installs rustup where it is missing
+      - name: Rust toolchain (the version in rust-toolchain.toml)
+        run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
       # The workspace includes the Python binding; PyO3's build needs Python 3.14+.
       - uses: actions/setup-python@v5
@@ -69,9 +69,9 @@ jobs:
       CC: ${{ matrix.cc }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
+      - uses: dtolnay/rust-toolchain@stable  # installs rustup where it is missing
+      - name: Rust toolchain (the version in rust-toolchain.toml)
+        run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.cc }}
@@ -82,6 +82,7 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y -qq clang libclang-dev
       - name: Point bindgen at libclang
         run: echo "LIBCLANG_PATH=$(dirname "$(printf '%s\n' /usr/lib/llvm-*/lib/libclang.so* | sort -V | tail -1)")" >> "$GITHUB_ENV"
+      - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo doc --workspace --no-deps
         env:
@@ -93,7 +94,9 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable  # installs rustup where it is missing
+      - name: Rust toolchain (the version in rust-toolchain.toml)
+        run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
       - name: Install PipeWire, WirePlumber and libclang
         run: |
@@ -132,7 +135,9 @@ jobs:
         working-directory: bindings/python
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable  # installs rustup where it is missing
+      - name: Rust toolchain (the version in rust-toolchain.toml)
+        run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
         with:
           key: python
@@ -162,7 +167,9 @@ jobs:
         working-directory: integrations/pipecat
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable  # installs rustup where it is missing
+      - name: Rust toolchain (the version in rust-toolchain.toml)
+        run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
         with:
           key: pipecat
@@ -221,7 +228,9 @@ jobs:
       # built, then Windows Installer's ICE validation. Only a build check: the
       # payload's catalog is a placeholder (no signing in CI), so the MSI isn't
       # kept. Release MSIs are built by hand from Partner Center's output.
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable  # installs rustup where it is missing
+      - name: Rust toolchain (the version in rust-toolchain.toml)
+        run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
       - name: Install WiX v6
         shell: pwsh
@@ -244,6 +253,9 @@ jobs:
   miri:
     name: Miri (the Ring's unsafe code)
     runs-on: ubuntu-24.04
+    # Miri needs nightly. This overrides rust-toolchain.toml for the whole job.
+    env:
+      RUSTUP_TOOLCHAIN: nightly
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly

@@ -1,0 +1,5 @@
+# How `cargo fmt` lays out Rust code. Every value here is rustfmt's default for the
+# 2024 edition; it is written down so the rules are visible and do not depend on
+# which edition a crate declares.
+style_edition = "2024"
+max_width = 100

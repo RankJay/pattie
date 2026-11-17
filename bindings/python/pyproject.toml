@@ -54,14 +54,12 @@ cache-keys = [
 testpaths = ["tests"]
 
 [tool.ruff]
-target-version = "py314"
-line-length = 99
+# The shared rules are in the repo's root ruff.toml; only this package's own are here.
+extend = "../../ruff.toml"
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "SIM", "RUF", "PT", "ASYNC", "PL"]
-ignore = [
-    "PLR2004", # tests compare against literal frame counts on purpose
-    "N818",    # the exception names are the SDK's error names (DuplicateName, ...)
+extend-ignore = [
+    "N818", # the exception names are the SDK's error names (DuplicateName, ...)
 ]
 
 [tool.ruff.lint.isort]
