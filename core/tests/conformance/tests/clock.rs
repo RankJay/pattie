@@ -1,6 +1,6 @@
 //! Seam C: the clock (ADR 0007, ADR 0008).
 
-use pattie_core_tests::ffi::{
+use pattie_conformance::ffi::{
     pattie_clock_frames, pattie_clock_next_pass, pattie_clock_ns, pattie_clock_ticks_for,
 };
 

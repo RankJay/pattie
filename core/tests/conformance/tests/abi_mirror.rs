@@ -2,7 +2,7 @@
 //! as bindgen reads it. Any drift between driver and SDK fails here.
 
 use pattie::abi as rust;
-use pattie_core_tests::ffi as c;
+use pattie_conformance::ffi as c;
 use std::mem::{offset_of, size_of};
 
 #[test]

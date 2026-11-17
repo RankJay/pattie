@@ -281,7 +281,7 @@ jobs:
           command -v clang >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq clang; }
           mkdir -p target/fuzz/corpus
           clang -fsanitize=fuzzer,address -g -O1 -std=c17 -Wall -Wextra -Werror -Wconversion -Wsign-conversion \
-            -Icore/include -Icore/src core/src/pattie_core.c core/src/pattie_ring.c core/src/pattie_clock.c \
-            core/src/pattie_pcm16.c core/tests/fuzz/hostile_apps.c -o target/fuzz/hostile_apps
+            -Icore/include -Icore/src core/src/commands.c core/src/ring.c core/src/clock.c \
+            core/src/pcm16.c core/tests/fuzz/hostile_apps.c -o target/fuzz/hostile_apps
       - name: Run it
         run: target/fuzz/hostile_apps -max_total_time=60 -max_len=4096 -rss_limit_mb=2048 target/fuzz/corpus

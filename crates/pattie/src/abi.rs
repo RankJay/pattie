@@ -132,7 +132,7 @@ pub struct RingClock {
 }
 
 /// Reads a clock pair as `(frames, ns)`: the seqlock's reader side, matching the
-/// core's writer (`pattie_ring.c`). `None` if nothing was published yet, or the
+/// core's writer (`core/src/ring.c`). `None` if nothing was published yet, or the
 /// pair stayed mid-write for as long as it's worth waiting (a writer takes
 /// nanoseconds; one stuck odd has died or been tampered with).
 ///

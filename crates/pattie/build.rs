@@ -14,7 +14,7 @@ fn main() {
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("set by cargo"));
     let include = manifest.join("../../core/include");
     let core = manifest.join("../../core/src");
-    let shim = manifest.join("src/core_host/shim.c");
+    let alloc = manifest.join("src/sys/alloc.c");
 
     let mut build = cc::Build::new();
     build
@@ -27,8 +27,8 @@ fn main() {
         // as in the core's other builds (GCC and Clang; MSVC has no equivalent).
         .flag_if_supported("-Wconversion")
         .flag_if_supported("-Wsign-conversion")
-        .file(&shim);
-    println!("cargo:rerun-if-changed={}", shim.display());
+        .file(&alloc);
+    println!("cargo:rerun-if-changed={}", alloc.display());
     for dir in [&include, &core] {
         // Watching the folder too picks up newly added source files.
         println!("cargo:rerun-if-changed={}", dir.display());

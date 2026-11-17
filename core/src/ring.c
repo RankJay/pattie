@@ -1,5 +1,6 @@
+/* A Device's Ring: attach, read, write, skip stale audio, publish Clock points (ADR 0007). */
 #include "pattie_core.h"
-#include "pattie_port.h"
+#include "atomic.h"
 
 _Static_assert(sizeof(pattie_ring_header) == 192, "Ring header is three cache lines");
 _Static_assert(PATTIE_RING_MAX_BYTES == sizeof(pattie_ring_header) +
@@ -13,7 +14,7 @@ _Static_assert(PATTIE_RING_MAX_BYTES == sizeof(pattie_ring_header) +
  * all-zero bits, which is exactly 0.0f.
  */
 _Static_assert(sizeof(float) == sizeof(uint32_t), "samples are 32-bit");
-typedef uint32_t pattie_sample_bits;
+typedef uint32_t sample_bits;
 
 pattie_status pattie_ring_attach(pattie_ring *ring, void *memory, size_t memory_len)
 {
@@ -68,24 +69,24 @@ pattie_status pattie_ring_attach(pattie_ring *ring, void *memory, size_t memory_
  * all the stores before it: a reader that sees the new pair saw `seq` go odd
  * first, and one that sees `seq` even again saw the whole pair.
  */
-static void pattie_publish_clock(pattie_ring *ring, pattie_ring_clock *clock, uint64_t frames,
+static void publish_clock(pattie_ring *ring, pattie_ring_clock *clock, uint64_t frames,
                              uint64_t now_ns)
 {
     ring->clock_seq += 2u; /* our own copy: the app can't skew it */
-    pattie_store_release_u64(&clock->seq, ring->clock_seq - 1u);
-    pattie_store_release_u64(&clock->frames, frames);
-    pattie_store_release_u64(&clock->ns, now_ns);
-    pattie_store_release_u64(&clock->seq, ring->clock_seq);
+    store_release_u64(&clock->seq, ring->clock_seq - 1u);
+    store_release_u64(&clock->frames, frames);
+    store_release_u64(&clock->ns, now_ns);
+    store_release_u64(&clock->seq, ring->clock_seq);
 }
 
 void pattie_ring_publish_read_clock(pattie_ring *ring, uint64_t now_ns)
 {
-    pattie_publish_clock(ring, &ring->shared->reader_clock, ring->read_frames, now_ns);
+    publish_clock(ring, &ring->shared->reader_clock, ring->read_frames, now_ns);
 }
 
 void pattie_ring_publish_write_clock(pattie_ring *ring, uint64_t now_ns)
 {
-    pattie_publish_clock(ring, &ring->shared->writer_clock, ring->write_frames, now_ns);
+    publish_clock(ring, &ring->shared->writer_clock, ring->write_frames, now_ns);
 }
 
 /*
@@ -93,9 +94,9 @@ void pattie_ring_publish_write_clock(pattie_ring *ring, uint64_t now_ns)
  * app-controlled: never trust it further than this. An overrun skips ahead to
  * the oldest intact frame (ADR 0007).
  */
-static uint32_t pattie_ring_readable(pattie_ring *ring, uint32_t count)
+static uint32_t ring_readable(pattie_ring *ring, uint32_t count)
 {
-    uint64_t written = pattie_load_acquire_u64(&ring->shared->write_frames);
+    uint64_t written = load_acquire_u64(&ring->shared->write_frames);
     uint64_t available;
 
     if (written < ring->read_frames) {
@@ -112,18 +113,18 @@ static uint32_t pattie_ring_readable(pattie_ring *ring, uint32_t count)
 }
 
 /* Publishes a read of `taken` frames out of `count` asked for; the rest were silence. */
-static void pattie_ring_read_done(pattie_ring *ring, uint32_t taken, uint32_t count)
+static void ring_read_done(pattie_ring *ring, uint32_t taken, uint32_t count)
 {
     ring->read_frames += taken;
     ring->gap_frames += count - taken;
-    pattie_store_release_u64(&ring->shared->gap_frames, ring->gap_frames);
-    pattie_store_release_u64(&ring->shared->read_frames, ring->read_frames);
+    store_release_u64(&ring->shared->gap_frames, ring->gap_frames);
+    store_release_u64(&ring->shared->read_frames, ring->read_frames);
 }
 
 /* How many of `count` frames fit now. The reader counter is app-controlled: clamp it. */
-static uint32_t pattie_ring_writable(pattie_ring *ring, uint32_t count)
+static uint32_t ring_writable(pattie_ring *ring, uint32_t count)
 {
-    uint64_t read = pattie_load_acquire_u64(&ring->shared->read_frames);
+    uint64_t read = load_acquire_u64(&ring->shared->read_frames);
     uint64_t unread = 0;
     uint64_t room;
 
@@ -138,12 +139,12 @@ static uint32_t pattie_ring_writable(pattie_ring *ring, uint32_t count)
 }
 
 /* Publishes a write of `stored` frames out of `count` offered; the rest were dropped. */
-static void pattie_ring_write_done(pattie_ring *ring, uint32_t stored, uint32_t count)
+static void ring_write_done(pattie_ring *ring, uint32_t stored, uint32_t count)
 {
     ring->write_frames += stored;
     ring->overflow_frames += count - stored; /* no room: the newest frames are dropped */
-    pattie_store_release_u64(&ring->shared->overflow_frames, ring->overflow_frames);
-    pattie_store_release_u64(&ring->shared->write_frames, ring->write_frames);
+    store_release_u64(&ring->shared->overflow_frames, ring->overflow_frames);
+    store_release_u64(&ring->shared->write_frames, ring->write_frames);
 }
 
 uint32_t pattie_ring_channels(const pattie_ring *ring)
@@ -157,7 +158,7 @@ uint32_t pattie_ring_sample_rate(const pattie_ring *ring)
 }
 
 /* The first sample of Ring frame `position` (a counter value). */
-static size_t pattie_ring_sample(const pattie_ring *ring, uint64_t position)
+static size_t ring_sample(const pattie_ring *ring, uint64_t position)
 {
     return (size_t)(position % ring->capacity_frames) * ring->channels;
 }
@@ -168,13 +169,13 @@ static size_t pattie_ring_sample(const pattie_ring *ring, uint64_t position)
  */
 void pattie_ring_read(pattie_ring *ring, float *dst, uint32_t count)
 {
-    uint32_t n = pattie_ring_readable(ring, count);
+    uint32_t n = ring_readable(ring, count);
     uint32_t channels = ring->channels;
-    const pattie_sample_bits *frames = (const pattie_sample_bits *)ring->frames;
-    pattie_sample_bits *out = (pattie_sample_bits *)dst;
+    const sample_bits *frames = (const sample_bits *)ring->frames;
+    sample_bits *out = (sample_bits *)dst;
 
     for (uint32_t i = 0; i < n; i++) {
-        size_t from = pattie_ring_sample(ring, ring->read_frames + i);
+        size_t from = ring_sample(ring, ring->read_frames + i);
         for (uint32_t c = 0; c < channels; c++) {
             out[(size_t)i * channels + c] = frames[from + c];
         }
@@ -182,17 +183,17 @@ void pattie_ring_read(pattie_ring *ring, float *dst, uint32_t count)
     for (size_t i = (size_t)n * channels; i < (size_t)count * channels; i++) {
         out[i] = 0; /* the app fell behind: listeners hear silence */
     }
-    pattie_ring_read_done(ring, n, count);
+    ring_read_done(ring, n, count);
 }
 
 void pattie_ring_read_pcm16(pattie_ring *ring, int16_t *dst, uint32_t count)
 {
-    uint32_t n = pattie_ring_readable(ring, count);
+    uint32_t n = ring_readable(ring, count);
     uint32_t channels = ring->channels;
-    const pattie_sample_bits *frames = (const pattie_sample_bits *)ring->frames;
+    const sample_bits *frames = (const sample_bits *)ring->frames;
 
     for (uint32_t i = 0; i < n; i++) {
-        size_t from = pattie_ring_sample(ring, ring->read_frames + i);
+        size_t from = ring_sample(ring, ring->read_frames + i);
         for (uint32_t c = 0; c < channels; c++) {
             dst[(size_t)i * channels + c] = pattie_pcm16_from_sample(frames[from + c]);
         }
@@ -200,44 +201,44 @@ void pattie_ring_read_pcm16(pattie_ring *ring, int16_t *dst, uint32_t count)
     for (size_t i = (size_t)n * channels; i < (size_t)count * channels; i++) {
         dst[i] = 0;
     }
-    pattie_ring_read_done(ring, n, count);
+    ring_read_done(ring, n, count);
 }
 
 void pattie_ring_write(pattie_ring *ring, const float *src, uint32_t count)
 {
-    uint32_t n = pattie_ring_writable(ring, count);
+    uint32_t n = ring_writable(ring, count);
     uint32_t channels = ring->channels;
-    pattie_sample_bits *frames = (pattie_sample_bits *)ring->frames;
-    const pattie_sample_bits *in = (const pattie_sample_bits *)src;
+    sample_bits *frames = (sample_bits *)ring->frames;
+    const sample_bits *in = (const sample_bits *)src;
 
     for (uint32_t i = 0; i < n; i++) {
-        size_t to = pattie_ring_sample(ring, ring->write_frames + i);
+        size_t to = ring_sample(ring, ring->write_frames + i);
         for (uint32_t c = 0; c < channels; c++) {
             frames[to + c] = in[(size_t)i * channels + c];
         }
     }
-    pattie_ring_write_done(ring, n, count);
+    ring_write_done(ring, n, count);
 }
 
 void pattie_ring_write_pcm16(pattie_ring *ring, const int16_t *src, uint32_t count)
 {
-    uint32_t n = pattie_ring_writable(ring, count);
+    uint32_t n = ring_writable(ring, count);
     uint32_t channels = ring->channels;
-    pattie_sample_bits *frames = (pattie_sample_bits *)ring->frames;
+    sample_bits *frames = (sample_bits *)ring->frames;
 
     for (uint32_t i = 0; i < n; i++) {
-        size_t to = pattie_ring_sample(ring, ring->write_frames + i);
+        size_t to = ring_sample(ring, ring->write_frames + i);
         for (uint32_t c = 0; c < channels; c++) {
             frames[to + c] = pattie_sample_from_pcm16(src[(size_t)i * channels + c]);
         }
     }
-    pattie_ring_write_done(ring, n, count);
+    ring_write_done(ring, n, count);
 }
 
 uint64_t pattie_ring_skip_stale(pattie_ring *ring, uint32_t keep_frames)
 {
     /* The writer counter is app-controlled: same rules as pattie_ring_read. */
-    uint64_t written = pattie_load_acquire_u64(&ring->shared->write_frames);
+    uint64_t written = load_acquire_u64(&ring->shared->write_frames);
     uint64_t keep = keep_frames < ring->capacity_frames ? keep_frames : ring->capacity_frames;
     uint64_t skipped;
 
@@ -247,7 +248,7 @@ uint64_t pattie_ring_skip_stale(pattie_ring *ring, uint32_t keep_frames)
     /* Audio written while nobody was recording: skip all but the newest `keep`. */
     skipped = written - keep - ring->read_frames;
     ring->read_frames = written - keep;
-    pattie_store_release_u64(&ring->shared->read_frames, ring->read_frames);
+    store_release_u64(&ring->shared->read_frames, ring->read_frames);
     return skipped;
 }
 

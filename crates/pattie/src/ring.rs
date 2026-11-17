@@ -245,7 +245,7 @@ impl Drop for RingMemory {
 }
 
 /// The Ring on its own, with the driver's side played in Rust by the same counter
-/// protocol as the C core (`pattie_ring.c`: acquire the other side's counter,
+/// protocol as the C core (`core/src/ring.c`: acquire the other side's counter,
 /// touch only the frames it allows, release your own). These run under Miri
 /// (README, Miri), which checks every unsafe access here for undefined behaviour
 /// and the two-thread tests for data races; the SDK's other tests reach the Ring

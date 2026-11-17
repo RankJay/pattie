@@ -85,10 +85,10 @@
   </ItemDefinitionGroup>
 
   <ItemGroup Label="Pure core (ADR 0002), compiled unchanged">
-    <ClCompile Include="..\..\..\core\src\pattie_core.c" />
-    <ClCompile Include="..\..\..\core\src\pattie_ring.c" />
-    <ClCompile Include="..\..\..\core\src\pattie_clock.c" />
-    <ClCompile Include="..\..\..\core\src\pattie_pcm16.c" />
+    <ClCompile Include="..\..\..\core\src\commands.c" />
+    <ClCompile Include="..\..\..\core\src\ring.c" />
+    <ClCompile Include="..\..\..\core\src\clock.c" />
+    <ClCompile Include="..\..\..\core\src\pcm16.c" />
   </ItemGroup>
 
   <ItemGroup Label="Shell">

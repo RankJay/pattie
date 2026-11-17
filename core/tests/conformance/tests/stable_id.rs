@@ -4,8 +4,8 @@
 //! 0012). This checks the copy against the core, so the two can't drift apart.
 
 use pattie::Kind;
-use pattie_core_tests::ffi::{PATTIE_KIND_MICROPHONE, PATTIE_KIND_SPEAKER};
-use pattie_core_tests::stable_id as core_stable_id;
+use pattie_conformance::ffi::{PATTIE_KIND_MICROPHONE, PATTIE_KIND_SPEAKER};
+use pattie_conformance::stable_id as core_stable_id;
 
 /// The SDK's ID, back as the hash the core computes.
 fn sdk_hash(kind: Kind, name: &str, rate: u32, channels: u16) -> u64 {

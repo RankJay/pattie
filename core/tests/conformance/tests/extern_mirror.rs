@@ -1,13 +1,12 @@
 //! Seam S2 for the Linux backend's calls (ADR 0012, ADR 0018): the SDK declares
-//! the C core's functions by hand (crates/pattie/src/core_host/core_ffi/
-//! core_externs.rs), so apps build without libclang. This includes that same file
+//! the C core's functions by hand (crates/pattie/src/sys/core_functions.rs), so apps build without libclang. This includes that same file
 //! next to bindgen's reading of pattie_core.h and checks every declaration
 //! against it. A mismatch doesn't compile: the types below differ, and rustc's
 //! `clashing_extern_declarations` lint, denied here, names the function.
 
 #![deny(clashing_extern_declarations)]
 
-use pattie_core_tests::ffi as c;
+use pattie_conformance::ffi as c;
 
 mod sdk {
     use super::c;
@@ -15,12 +14,12 @@ mod sdk {
 
     // The SDK's opaque types, here as the header's own, so a function that takes
     // the wrong one of the three is caught too.
-    type PattieCore = c::pattie_core;
-    type PattieOwner = c::pattie_owner;
-    type PattieRing = c::pattie_ring;
-    type PattieDeviceInfo = c::pattie_device_info;
+    type RawCore = c::pattie_core;
+    type RawOwner = c::pattie_owner;
+    type RawRing = c::pattie_ring;
+    type DeviceInfo = c::pattie_device_info;
 
-    include!("../../../../crates/pattie/src/core_host/core_ffi/core_externs.rs");
+    include!("../../../../crates/pattie/src/sys/core_functions.rs");
 
     /// Compiles only if both are the same type.
     fn same<T>(_: T, _: T) {}
@@ -70,25 +69,22 @@ mod sdk {
     }
 }
 
-/// The structs the SDK declares by hand (core_types.rs) have the header's layout.
+/// The structs the SDK declares by hand (device_info.rs) have the header's layout.
 mod sdk_types {
     use super::c;
     use std::mem::{offset_of, size_of};
 
-    include!("../../../../crates/pattie/src/core_host/core_ffi/core_types.rs");
+    include!("../../../../crates/pattie/src/sys/device_info.rs");
 
     #[test]
     fn every_struct_the_sdk_declares_matches_the_header() {
-        assert_eq!(
-            size_of::<PattieDeviceInfo>(),
-            size_of::<c::pattie_device_info>()
-        );
+        assert_eq!(size_of::<DeviceInfo>(), size_of::<c::pattie_device_info>());
         assert_eq!(
             [
-                offset_of!(PattieDeviceInfo, kind),
-                offset_of!(PattieDeviceInfo, name_len),
-                offset_of!(PattieDeviceInfo, name),
-                offset_of!(PattieDeviceInfo, stable_id),
+                offset_of!(DeviceInfo, kind),
+                offset_of!(DeviceInfo, name_len),
+                offset_of!(DeviceInfo, name),
+                offset_of!(DeviceInfo, stable_id),
             ],
             [
                 offset_of!(c::pattie_device_info, kind),
@@ -97,7 +93,7 @@ mod sdk_types {
                 offset_of!(c::pattie_device_info, stable_id),
             ]
         );
-        let sdk = PattieDeviceInfo {
+        let sdk = DeviceInfo {
             kind: 0,
             name_len: 0,
             name: [0; 63],

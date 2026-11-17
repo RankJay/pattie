@@ -1,3 +1,4 @@
+/* The Core's Commands, the Device table they change, closing an Owner, Stable IDs (ADR 0002). */
 #include "pattie_core.h"
 
 /* No libc in the kernel core: copy bytes by hand. Safe for unaligned buffers. */

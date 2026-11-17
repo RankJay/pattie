@@ -1,3 +1,4 @@
+/* Clock arithmetic for the system side: ticks to frames and ns, the next Pass (ADR 0022). */
 #include "pattie_core.h"
 
 uint64_t pattie_clock_frames(uint64_t start_ticks, uint64_t now_ticks,

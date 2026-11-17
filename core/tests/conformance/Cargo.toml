@@ -1,5 +1,5 @@
 [package]
-name = "pattie-core-tests"
+name = "pattie-conformance"
 version = "0.0.0"
 edition = "2024"
 publish = false

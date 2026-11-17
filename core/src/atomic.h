@@ -6,8 +6,8 @@
  * MSVC (and clang-cl): the Windows driver and the Windows host tests.
  * GCC and Clang: the Linux backend, which embeds the core (ADR 0018).
  */
-#ifndef PATTIE_PORT_H
-#define PATTIE_PORT_H
+#ifndef CORE_ATOMIC_H
+#define CORE_ATOMIC_H
 
 #include <stdint.h>
 
@@ -16,25 +16,25 @@
 
 #if defined(_M_X64)
 /* x64 keeps loads and stores in order (TSO); only stop compiler reordering. */
-static __inline uint64_t pattie_load_acquire_u64(const volatile uint64_t *p)
+static __inline uint64_t load_acquire_u64(const volatile uint64_t *p)
 {
     uint64_t v = *p;
     _ReadWriteBarrier();
     return v;
 }
 
-static __inline void pattie_store_release_u64(volatile uint64_t *p, uint64_t v)
+static __inline void store_release_u64(volatile uint64_t *p, uint64_t v)
 {
     _ReadWriteBarrier();
     *p = v;
 }
 #elif defined(_M_ARM64)
-static __inline uint64_t pattie_load_acquire_u64(const volatile uint64_t *p)
+static __inline uint64_t load_acquire_u64(const volatile uint64_t *p)
 {
     return __ldar64((unsigned __int64 volatile *)p);
 }
 
-static __inline void pattie_store_release_u64(volatile uint64_t *p, uint64_t v)
+static __inline void store_release_u64(volatile uint64_t *p, uint64_t v)
 {
     __stlr64((unsigned __int64 volatile *)p, v);
 }
@@ -48,12 +48,12 @@ static __inline void pattie_store_release_u64(volatile uint64_t *p, uint64_t v)
 _Static_assert(__atomic_always_lock_free(sizeof(uint64_t), 0),
                "Pattie core needs lock-free 64-bit atomics");
 
-static inline uint64_t pattie_load_acquire_u64(const volatile uint64_t *p)
+static inline uint64_t load_acquire_u64(const volatile uint64_t *p)
 {
     return __atomic_load_n(p, __ATOMIC_ACQUIRE);
 }
 
-static inline void pattie_store_release_u64(volatile uint64_t *p, uint64_t v)
+static inline void store_release_u64(volatile uint64_t *p, uint64_t v)
 {
     __atomic_store_n(p, v, __ATOMIC_RELEASE);
 }
@@ -62,4 +62,4 @@ static inline void pattie_store_release_u64(volatile uint64_t *p, uint64_t v)
 #error "Pattie core needs MSVC, GCC or Clang"
 #endif
 
-#endif /* PATTIE_PORT_H */
+#endif /* CORE_ATOMIC_H */

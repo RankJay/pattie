@@ -1,51 +1,18 @@
 //! The embedded C core (ADR 0018): the same rules the Windows driver runs, here in
-//! the app's own process. `shim.c` allocates its state, so `pattie_core` and
+//! the app's own process. `sys/alloc.c` allocates its state, so `pattie_core` and
 //! `pattie_owner` stay opaque on this side.
 
 use crate::Kind;
+use crate::sys::*;
 use std::ffi::c_void;
 use std::ptr::NonNull;
-
-/// `pattie_core`, opaque.
-#[repr(C)]
-pub(crate) struct PattieCore {
-    _private: [u8; 0],
-}
-
-/// `pattie_owner`, opaque.
-#[repr(C)]
-pub(crate) struct PattieOwner {
-    _private: [u8; 0],
-}
-
-/// `pattie_ring` (the driver's side of one Device's Ring), opaque.
-#[repr(C)]
-pub(crate) struct PattieRing {
-    _private: [u8; 0],
-}
 
 /// `PATTIE_MAX_DEVICES`: the most IDs `pattie_core_owner_closed` reports.
 const MAX_DEVICES: usize = crate::abi::MAX_DEVICES as usize;
 
-// The host's own allocation helpers (`shim.c`), which have no header to check
-// against.
-unsafe extern "C" {
-    fn pattie_host_core_new() -> *mut PattieCore;
-    fn pattie_host_core_free(core: *mut PattieCore);
-    fn pattie_host_owner_new() -> *mut PattieOwner;
-    fn pattie_host_owner_free(owner: *mut PattieOwner);
-}
-
-// The core's structs this side reads, and its own functions (`pattie_core.h`),
-// each in a file of its own:
-// core/tests includes the same file and checks every signature against bindgen's
-// reading of the header (`tests/ffi_mirror.rs`).
-include!("core_ffi/core_types.rs");
-include!("core_ffi/core_externs.rs");
-
 /// The core's Device table and rules. One per process (`super::process_core`), or
 /// one per test transport; always used behind a mutex, as the driver does.
-pub(crate) struct Core(NonNull<PattieCore>);
+pub(crate) struct Core(NonNull<RawCore>);
 
 // SAFETY: the core is plain C state with no thread affinity; every use goes
 // through a mutex (`super::HostTransport`), so only one thread touches it at once.
@@ -55,7 +22,7 @@ impl Core {
     /// A fresh core; `None` if the allocation failed.
     pub(crate) fn new() -> Option<Core> {
         // SAFETY: allocates and initialises a pattie_core; returns null on failure.
-        NonNull::new(unsafe { pattie_host_core_new() }).map(Core)
+        NonNull::new(unsafe { pattie_core_new() }).map(Core)
     }
 
     /// Runs one command exactly as the Windows shell does: `ring` is the app's Ring
@@ -120,14 +87,14 @@ impl Core {
     /// What the core accepted for a live Device: its kind, name and stable ID
     /// (the one hash, ADR 0015). `None` when no live Device has that ID.
     pub(crate) fn device_info(&self, device_id: u32) -> Option<(Kind, String, u64)> {
-        let mut info = PattieDeviceInfo {
+        let mut info = DeviceInfo {
             kind: 0,
             name_len: 0,
             name: [0; 63],
             stable_id: 0,
         };
         // SAFETY: the core is live; `info` is a live out-parameter of the
-        // header's layout (checked by core/tests' ffi_mirror).
+        // header's layout (checked by core/tests' extern_mirror).
         if !unsafe { pattie_core_device_info(self.0.as_ptr(), device_id, &raw mut info) } {
             return None;
         }
@@ -147,13 +114,13 @@ impl Core {
 
 impl Drop for Core {
     fn drop(&mut self) {
-        // SAFETY: allocated by pattie_host_core_new, freed once.
-        unsafe { pattie_host_core_free(self.0.as_ptr()) };
+        // SAFETY: allocated by pattie_core_new, freed once.
+        unsafe { pattie_core_free(self.0.as_ptr()) };
     }
 }
 
 /// One Owner: one connection.
-pub(crate) struct Owner(NonNull<PattieOwner>);
+pub(crate) struct Owner(NonNull<RawOwner>);
 
 // SAFETY: plain C state with no thread affinity, used only by its connection.
 unsafe impl Send for Owner {}
@@ -162,14 +129,14 @@ impl Owner {
     /// A fresh Owner; `None` if the allocation failed.
     pub(crate) fn new() -> Option<Owner> {
         // SAFETY: allocates and initialises a pattie_owner; returns null on failure.
-        NonNull::new(unsafe { pattie_host_owner_new() }).map(Owner)
+        NonNull::new(unsafe { pattie_owner_new() }).map(Owner)
     }
 }
 
 impl Drop for Owner {
     fn drop(&mut self) {
-        // SAFETY: allocated by pattie_host_owner_new, freed once.
-        unsafe { pattie_host_owner_free(self.0.as_ptr()) };
+        // SAFETY: allocated by pattie_owner_new, freed once.
+        unsafe { pattie_owner_free(self.0.as_ptr()) };
     }
 }
 
@@ -177,7 +144,7 @@ impl Drop for Owner {
 /// through. It stays valid until that Device is removed from the core; whoever
 /// holds it must stop using it first (`super::Node` is dropped before removal).
 /// The core's other Devices never touch this Ring, so the callback needs no lock.
-pub(crate) struct RingRef(NonNull<PattieRing>);
+pub(crate) struct RingRef(NonNull<RawRing>);
 
 // SAFETY: the Ring is used by one thread at a time: the Device's audio callback.
 unsafe impl Send for RingRef {}

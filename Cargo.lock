@@ -319,7 +319,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "pattie-core-tests"
+name = "pattie-conformance"
 version = "0.0.0"
 dependencies = [
  "bindgen",

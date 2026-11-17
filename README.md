@@ -442,8 +442,8 @@ test VM):
 
 ### Property tests
 
-`core/tests/conformance/tests/properties_commands.rs` and `properties_ring.rs` run with
-`cargo test`. Instead of hand-picked cases, each states a rule and checks it against
+`core/tests/conformance/tests/properties_commands/` and `properties_ring/` run with
+`cargo test`. Failures proptest saves are in `tests/proptest-regressions/`, and are run first. Instead of hand-picked cases, each states a rule and checks it against
 hundreds of random sequences (`proptest`), shrinking any failure to the smallest one:
 
 - **Commands:** random commands from several apps, well-formed or not, against a
@@ -473,7 +473,7 @@ Ring is a `malloc` of exactly the size the driver is told, so even a one-byte re
 past it is caught. Build it (Visual Studio's clang, which ships libFuzzer and ASan):
 
 ```bash
-mkdir -p target/fuzz/corpus && MSYS_NO_PATHCONV=1 "/c/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/Llvm/x64/bin/clang-cl.exe" -fsanitize=fuzzer,address /Zi /O1 /MT /W4 /WX -Wconversion -Wsign-conversion /std:c17 /Icore/include /Icore/src core/src/pattie_core.c core/src/pattie_ring.c core/src/pattie_clock.c core/src/pattie_pcm16.c core/tests/fuzz/hostile_apps.c /Fotarget/fuzz/ /Fetarget/fuzz/hostile_apps.exe
+mkdir -p target/fuzz/corpus && MSYS_NO_PATHCONV=1 "/c/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/Llvm/x64/bin/clang-cl.exe" -fsanitize=fuzzer,address /Zi /O1 /MT /W4 /WX -Wconversion -Wsign-conversion /std:c17 /Icore/include /Icore/src core/src/commands.c core/src/ring.c core/src/clock.c core/src/pcm16.c core/tests/fuzz/hostile_apps.c /Fotarget/fuzz/ /Fetarget/fuzz/hostile_apps.exe
 ```
 
 Run it for as long as you like (here 10 minutes); ASan's DLL must be on the `PATH`:

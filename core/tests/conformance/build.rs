@@ -41,7 +41,7 @@ fn main() {
     build.compile("pattie_core");
 
     bindgen::Builder::default()
-        .header(core.join("pattie_core.h").to_string_lossy())
+        .header(include.join("pattie_core.h").to_string_lossy())
         .header(probe.join("abi_probe.h").to_string_lossy())
         .clang_arg(format!("-I{}", include.display()))
         .allowlist_item("(pattie|PATTIE)_.*")

@@ -48,6 +48,8 @@ mod mmcss;
 mod playout;
 mod ring;
 mod session;
+#[cfg(any(target_os = "linux", feature = "test-backend"))]
+mod sys;
 #[doc(hidden)]
 pub mod transport;
 #[cfg(windows)]

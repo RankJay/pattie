@@ -349,7 +349,7 @@ fn encode(encoding: Encoding, sample: f32, output: &mut Vec<u8>) {
     }
 }
 
-/// The core's float-to-PCM16 rule (`pattie_pcm16.c`), in floating point: scale
+/// The core's float-to-PCM16 rule (`core/src/pcm16.c`), in floating point: scale
 /// by 32,768, round half away from zero, clamp; NaN and subnormals are 0.
 fn pcm16(sample: f32) -> i16 {
     if sample.is_nan() || sample.is_subnormal() {
