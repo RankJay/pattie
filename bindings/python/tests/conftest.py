@@ -1,4 +1,4 @@
-"""Shared test setup: every test gets its own test backend, a stand-in for the
+"""Shared test setup: every test gets its own Fake backend, a stand-in for the
 driver, so the suite runs on any machine."""
 
 import pytest

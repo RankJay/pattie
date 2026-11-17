@@ -17,7 +17,7 @@ doctest = false
 
 [features]
 # Dev builds only (pyproject.toml, [tool.uv]): adds pattie._testing, the SDK's
-# test backend, so pytest runs without the driver. Published wheels leave it out.
+# Fake backend, so pytest runs without the driver. Published wheels leave it out.
 fake-backend = ["pattie/fake-backend"]
 
 [dependencies]

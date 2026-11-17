@@ -111,12 +111,12 @@ being updated while the Device was live (Windows): create the Device again.
 ## Developing
 
 ```bash
-uv sync                      # builds the extension, with the test backend
+uv sync                      # builds the extension, with the Fake backend
 uv run --no-sync pytest
 uv run --no-sync ruff check . && uv run --no-sync ruff format --check .
 uv run --no-sync ty check
 ```
 
-The tests use a test backend instead of the driver, so they run anywhere. The
+The tests use a Fake backend instead of the driver, so they run anywhere. The
 audio rules themselves are tested in the Rust SDK; these tests check that Python
 reaches them correctly.

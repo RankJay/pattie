@@ -71,7 +71,7 @@ uv run examples/echo_bot.py
 ## Development
 
 ```bash
-uv sync                 # builds the local pattie binding with its test backend
-uv run pytest -q        # the transport against the SDK's test backend
+uv sync                 # builds the local pattie binding with its Fake backend
+uv run pytest -q        # the transport against the SDK's Fake backend
 PATTIE_PIPEWIRE=1 uv run pytest -q tests/test_pipewire.py   # Linux, real PipeWire
 ```

@@ -2,9 +2,9 @@
 
 use super::*;
 
-/// The transport a hidden `_backend=` argument names: the test backend in test
+/// The Backend a hidden `_backend=` argument names: the Fake backend in test
 /// builds. Ordinary code leaves it out and gets the real driver.
-fn transport(
+fn named_backend(
     backend: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<Option<Arc<dyn sdk::backend::Backend>>> {
     let Some(backend) = backend else {
@@ -30,8 +30,8 @@ pub(crate) fn create(
         .name(name)
         .kind(kind)
         .format(format.rate, format.channels);
-    if let Some(transport) = transport(backend)? {
-        builder = builder.backend(transport);
+    if let Some(chosen) = named_backend(backend)? {
+        builder = builder.backend(chosen);
     }
     builder.create().map_err(to_py)
 }

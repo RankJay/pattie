@@ -90,11 +90,11 @@ exclude_re = [
     "replace > with >= in Playout::push",
     # Only waits of 49.7 days or more (INFINITE - 1 ms) differ.
     "replace - with / in Bell::wait",
-    # The default: the Windows transport's lead, which only the VM sees; host
-    # tests use the test backend's own (core_host.rs).
+    # The default: the Windows Backend's lead, which only the VM sees; host
+    # tests use the In-process core's own (backend/in_process/).
     "replace Backend::lead_frames -> u32",
     # Linux-only code inside shared files, not compiled on Windows where mutation
-    # runs (as linux.rs above): the clock's and doorbell's `linux` modules, the
+    # runs (as backend/linux/ above): the clock's and doorbell's `linux` modules, the
     # fallback clock, and the Linux core's setup.
     " (linux|elsewhere)::",
     " (process_core|InProcessBackend::for_process) ->",

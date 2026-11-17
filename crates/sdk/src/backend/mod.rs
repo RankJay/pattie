@@ -1,6 +1,6 @@
 //! How the SDK reaches a driver (ADR 0012).
 //!
-//! Public so test backends (`FakeBackend`, and the scripted driver in
+//! Public so Fake backends (`FakeBackend`, and the scripted driver in
 //! `tests/driver_replies.rs`) can implement or use it, but not part of the supported API. A
 //! connection is one Owner: one open handle.
 

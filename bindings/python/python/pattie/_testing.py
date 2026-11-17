@@ -1,4 +1,4 @@
-"""The SDK's test backend, for this package's own tests: Devices without the
+"""The SDK's Fake backend, for this package's own tests: Devices without the
 driver. It exists only in the project's test builds (uv's dev build), never in
 the published wheels."""
 

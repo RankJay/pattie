@@ -2,7 +2,7 @@
  * A Device's whole lifecycle in the shell (ADR 0010): the slot beside the core's
  * table, the core's create and remove, the stable ID's claim, the circuit device
  * (one raw child of the root per live Device), and the undo when a step fails.
- * control.c is only the transport that calls in here; the circuit is built in
+ * control.c is only the control path that calls in here; the circuit is built in
  * circuit.c and its audio interface values are written in interfaces.c. Every
  * entry point runs under the driver lock.
  *

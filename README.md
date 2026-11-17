@@ -46,7 +46,7 @@ PipeWire nodes instead of a driver.
 | --- | --- |
 | A Windows audio driver that turns "create a device named X" into a real endpoint | A capture library (use `cpal`), a DSP or echo-cancellation library |
 | A Rust SDK: create a Device, write to its mic or read from its speaker | A meeting bot or recorder |
-| A shared-memory transport between your app and the driver | A GUI app |
+| A shared-memory channel between your app and the driver | A GUI app |
 
 The same API is meant to work on Linux and macOS too. Windows is done to the v0 gate;
 Linux works (ADR 0018: PipeWire, inside the app's own process, no driver to install;

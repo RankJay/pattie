@@ -35,7 +35,7 @@ module-name = "pattie._native"
 python-source = "python"
 
 [tool.uv]
-# The project's own builds include the SDK's test backend (pattie._testing) so
+# The project's own builds include the SDK's Fake backend (pattie._testing) so
 # the tests run without the driver. Wheels for users are built by release.yml
 # with plain `maturin build`, which leaves it out.
 config-settings = { build-args = "--features fake-backend" }

@@ -5,7 +5,7 @@
  * per packet: it fills the current capture packet from the Ring, or drains the
  * current render packet into it, then tells ACX the packet is complete. Each pass
  * is scheduled from absolute time with the core clock, so nothing drifts, and the
- * reported position also comes from the core clock (Seam C).
+ * reported position also comes from the core clock (pattie_clock_*).
  */
 #include "shell.h"
 
@@ -117,7 +117,7 @@ static ULONGLONG Position(const STREAM_CONTEXT *StreamCtx)
  * started running. A pass or two behind fires at once to catch up; after a stall
  * (more passes behind than the engine's buffer holds) the core moves the start
  * forward instead, so a sleep or a suspended VM doesn't set off a burst of
- * passes, one per missed packet (Seam C, as Microsoft's ACX stream engine does).
+ * passes, one per missed packet (as Microsoft's ACX stream engine does).
  */
 static VOID ScheduleNextPass(STREAM_CONTEXT *StreamCtx)
 {

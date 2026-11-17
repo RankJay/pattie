@@ -12,7 +12,7 @@
  * Files, one concern each:
  *
  *   entry.c       DriverEntry and the root ACX device
- *   control.c     the control device, transport only: Owners, commands, Ring pinning
+ *   control.c     the control device, the control path only: Owners, commands, Ring pinning
  *   endpoint.c    a Device's whole lifecycle: slot, core, stable ID, circuit
  *                 device (create, prepare, name, tear down) and the undo
  *   circuit.c     the circuit inside it: pins and the formats Windows may use

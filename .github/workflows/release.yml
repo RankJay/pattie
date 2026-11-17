@@ -120,7 +120,7 @@ jobs:
         with:
           python-version: "3.14"
       # One abi3 wheel per platform serves every CPython from 3.14 on. The
-      # test backend stays out: plain features only.
+      # Fake backend stays out: plain features only.
       - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           working-directory: bindings/python

@@ -1,6 +1,6 @@
 //! The Ring under real concurrency (ADR 0007, ADR 0008: the threaded stress test
 //! deferred to POST-V0). The app's side (this SDK, Rust atomics) and the system's
-//! side (the C core, through the test backend) run on two threads at once,
+//! side (the C core, through the Fake backend) run on two threads at once,
 //! moving millions of numbered frames in chunks of every size, across the Ring's
 //! wrap many thousands of times, in mono and in stereo (ADR 0023). Every frame
 //! must arrive exactly once, in order, whole and unchanged: a counter published

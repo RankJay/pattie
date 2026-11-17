@@ -12,7 +12,7 @@ use std::ptr::NonNull;
 const MAX_DEVICES: usize = crate::abi::MAX_DEVICES as usize;
 
 /// The core's Device table and rules. One per process (`super::process_core`), or
-/// one per test backend; always used behind a mutex, as the driver does.
+/// one per Fake backend; always used behind a mutex, as the driver does.
 pub(crate) struct Core(NonNull<RawCore>);
 
 // SAFETY: the core is plain C state with no thread affinity; every use goes

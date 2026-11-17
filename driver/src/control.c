@@ -1,5 +1,5 @@
 /*
- * The control device: where Owners send commands (ADR 0010, ADR 0011). Transport
+ * The control device: where Owners send commands (ADR 0010, ADR 0011). The control path
  * only: a Device's lifecycle is endpoint.c's.
  *
  * One open handle is one Owner. Create Device's Ring is pinned while still in

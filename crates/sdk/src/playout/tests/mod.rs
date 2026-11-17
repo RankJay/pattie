@@ -4,7 +4,7 @@ use crate::Device;
 use crate::backend::FakeBackend;
 use std::time::Duration;
 
-/// A Microphone on a fresh test backend, a hand-driven playout on it, and the
+/// A Microphone on a fresh Fake backend, a hand-driven playout on it, and the
 /// Backend's lead.
 #[expect(
     clippy::unwrap_used,

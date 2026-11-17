@@ -1,9 +1,9 @@
-//! A test backend for the SDK contract suite (ADR 0012), on every OS:
+//! A Fake backend for the SDK contract suite (ADR 0012), on every OS:
 //! the In-process core (the embedded core, the control path, on Linux the name claims),
 //! with each node replaced by one the test drives. `system_read` and
 //! `system_write` play the system's side: PipeWire's audio callback on Linux, the
 //! Windows shell's timer elsewhere. Real PipeWire nodes are tested separately
-//! (`tests/linux_pipewire.rs`).
+//! (`tests/linux_pipewire/`).
 //!
 //! Public only so the contract suite can reach it; not part of the supported API.
 

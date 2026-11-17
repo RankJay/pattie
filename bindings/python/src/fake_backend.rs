@@ -3,7 +3,7 @@
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
-/// The SDK's test backend: Devices without the driver, and the system's side
+/// The SDK's Fake backend: Devices without the driver, and the system's side
 /// of them played by the test. Only in the project's own test builds.
 #[pyclass(module = "pattie._testing", frozen)]
 pub(crate) struct FakeBackend {
