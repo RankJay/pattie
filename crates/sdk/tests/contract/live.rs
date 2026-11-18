@@ -10,13 +10,15 @@ contract_suite!(
 fn a_live_writers_audio_reaches_the_system_after_its_buffer_fills(backend: &dyn BackendUnderTest) {
     let mic = builder(backend).name("Agent Mic").create().unwrap();
     let live = mic.live_writer(pattie::AudioFormat::DEVICE).unwrap();
-    live.push(&[0.5; 9_600]); // 200 ms from the source
+    live.push(&[0.5; 9_600]); // 200 ms from the source, before anything records
 
     let (taken, ()) = system_pulls_while(backend, &mic, Duration::from_millis(300), || {});
 
+    // It plays from its 40 ms target: the older 160 ms would only be latency,
+    // so it's dropped and counted (VM beta pass 4.4).
     let audio = taken.iter().filter(|&&s| (s - 0.5).abs() < 1e-3).count();
-    assert!(audio >= 4_800, "{audio} frames of the source's audio");
-    assert_eq!(live.stats().dropped_frames, 0);
+    assert!(audio >= 960, "{audio} frames of the source's audio");
+    assert_eq!(live.stats().dropped_frames, 9_600 - 1_920);
 }
 
 fn a_live_writer_holds_the_writer_slot_and_only_on_a_microphone(backend: &dyn BackendUnderTest) {

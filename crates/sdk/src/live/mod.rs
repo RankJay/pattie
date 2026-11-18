@@ -23,6 +23,13 @@ mod writer;
 /// enough for the network bursts a relay sees (on top of the Ring's lead).
 const TARGET_PER_SECOND: u32 = 25;
 
+/// How far above the target the queue may sit while playing, as a share of a
+/// second: 100 ms. Network jitter stays below it and is played; more is a
+/// pile-up (the source or the machine stalled, then delivered it all at once),
+/// dropped back to the target at once. The controller could only slew it away
+/// at 1 ms a second, so a 0.3 s stall would have cost minutes of latency.
+const STEP_PER_SECOND: u32 = 10;
+
 /// What a live source writes. See [`crate::Device::live_writer`].
 pub struct LiveWriter {
     shared: Arc<Shared>,
@@ -41,7 +48,8 @@ pub struct LiveStats {
     /// Frames played as silence because the source fell behind (after it
     /// first started); the buffer then fills to its target again before playing.
     pub starved_frames: u64,
-    /// Frames dropped because the queue passed one second.
+    /// Frames dropped to keep the latency at its target: a backlog when playing
+    /// starts, a pile-up past 100 ms over the target, or a queue past one second.
     pub dropped_frames: u64,
 }
 
@@ -60,6 +68,8 @@ struct State {
     controller: Controller,
     /// Frames: 40 ms.
     target: usize,
+    /// Frames: 100 ms above the target is a pile-up, not jitter.
+    step: usize,
     /// Frames: past this much queue (1 s) the source burst or stalled and caught
     /// up, and the oldest audio is dropped back to the target instead of played
     /// late.
@@ -94,6 +104,10 @@ impl Shared {
     fn pump(&self) {
         let mut state = self.lock();
         let state = &mut *state;
+        // A pile-up goes before the controller sees it: it's a step, not drift.
+        if state.playing && state.queue.len() / state.channels > state.target + state.step {
+            state.trim_to_target();
+        }
         if let Some((frames, ns)) = self.inner.ring.clock(true)
             && state.last_pass.map(|(seen, _)| seen) != Some(frames)
         {
@@ -119,6 +133,9 @@ impl Shared {
         }
         let channels = state.channels;
         if !state.playing && state.queue.len() / channels >= state.target {
+            // Whatever queued before the system started taking it (or while it
+            // refilled) would only be latency: play from the target.
+            state.trim_to_target();
             state.playing = true;
         }
         let mut audio = if state.playing {
@@ -134,6 +151,15 @@ impl Shared {
         }
         audio.resize(room * channels, 0.0);
         self.inner.ring.write(&audio);
+    }
+}
+
+impl State {
+    /// Drops the oldest whole frames down to the target, counting them.
+    fn trim_to_target(&mut self) {
+        let excess = (self.queue.len() / self.channels).saturating_sub(self.target);
+        self.queue.drain(..excess * self.channels);
+        self.dropped += excess as u64;
     }
 }
 

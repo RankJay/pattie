@@ -142,11 +142,14 @@ fn a_live_writer_converts_mono_48_khz_to_a_stereo_96_khz_microphone(
     assert_eq!(live.push_bytes(&source), 19_200, "96 kHz frames");
     let (taken, ()) = system_pulls_while(backend, &mic, Duration::from_millis(300), || {});
 
+    // It plays from its 40 ms target (3,840 frames at 96 kHz); the rest of the
+    // backlog queued before anything recorded is dropped and counted.
     let frames = taken.as_chunks::<2>().0;
     let audio = frames
         .iter()
         .filter(|[left, _]| (left - 0.5).abs() < 1e-3)
         .count();
-    assert!(audio >= 9_600, "{audio} frames of the source's audio");
+    assert!(audio >= 1_920, "{audio} frames of the source's audio");
+    assert_eq!(live.stats().dropped_frames, 19_200 - 3_840);
     assert!(frames.iter().all(|[left, right]| left == right));
 }

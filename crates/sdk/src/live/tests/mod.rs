@@ -41,6 +41,7 @@ fn setup_format(rate: u32, channels: u16) -> (FakeBackend, Device, LiveWriter, u
 /// The 48 kHz target: 40 ms.
 const TARGET_FRAMES: usize = 1_920;
 
+mod backlog;
 mod drift;
 mod queue;
 mod starved;

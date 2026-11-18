@@ -38,6 +38,7 @@ impl LiveWriter {
                     adaptive: AdaptiveResampler::new(channels),
                     controller: Controller::new(target as f64, format.rate),
                     target,
+                    step: (format.rate / STEP_PER_SECOND) as usize,
                     limit: format.rate as usize,
                     playing: false,
                     last_pass: None,
@@ -62,9 +63,7 @@ impl LiveWriter {
         state.queue.extend(samples);
         let frames = state.queue.len() / channels;
         if frames > state.limit {
-            let excess = frames - state.target;
-            state.queue.drain(..excess * channels);
-            state.dropped += excess as u64;
+            state.trim_to_target();
         }
         frames - before
     }

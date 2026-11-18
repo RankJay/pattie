@@ -40,13 +40,16 @@ def test_a_live_writers_audio_reaches_the_system_once_its_buffer_fills(
 ) -> None:
     with pattie.Microphone("Agent Mic", _backend=backend) as mic:
         live = mic.live_writer()
-        assert live.push(floats([0.5] * 9_600)) == 9_600  # 200 ms from the source
+        # 200 ms from the source, before anything records the microphone.
+        assert live.push(floats([0.5] * 9_600)) == 9_600
 
         taken = pull_for(backend, mic.id, 0.4)
 
-        assert sum(1 for s in taken if abs(s - 0.5) < 1e-3) >= 4_800
+        # It plays from its 40 ms target; the older 160 ms would only be
+        # latency, so it's dropped and counted.
+        assert sum(1 for s in taken if abs(s - 0.5) < 1e-3) >= 960
         stats = live.stats
-        assert (stats.dropped_frames, isinstance(stats.correction_ppm, float)) == (0, True)
+        assert (stats.dropped_frames, isinstance(stats.correction_ppm, float)) == (7_680, True)
 
 
 def test_a_live_writer_converts_its_format(backend: _testing.FakeBackend) -> None:
