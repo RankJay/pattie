@@ -21,24 +21,32 @@ const KAISER_BETA: f64 = 8.6;
 /// The low-pass cutoff, as a share of the lower rate's Nyquist frequency.
 const CUTOFF: f64 = 0.9;
 
+/// Partial sums the dot product keeps (taps are a multiple of it), so it runs
+/// as vector instructions.
+const LANES: usize = 8;
+
 /// A streaming polyphase windowed-sinc resampler for one channel, by the rational
 /// ratio `up / down` (the rates divided by their greatest common divisor). Output
 /// `n` sits at input position `n * down / up`; it's computed from the `taps`
 /// input samples up to that position, so state is just the last `taps - 1`
-/// inputs and the next output's index, the same however the input is split.
+/// inputs and where the next output sits, the same however the input is split.
+/// Each output's sum is computed the same way from the same inputs whatever the
+/// call it falls in, so pieces give exactly what one call gives.
 struct Resampler {
     up: u64,
     down: u64,
     taps: usize,
-    /// `up` branches of `taps` coefficients: branch `p` weights input `i - k`
-    /// with `filter[p * taps + k]`.
+    /// `up` branches of `taps` coefficients, each reversed: branch `p` weights
+    /// input `i - k` with `filter[p * taps + taps - 1 - k]`, so the sum walks the
+    /// inputs oldest first.
     filter: Vec<f32>,
-    /// The latest inputs, oldest first: at most `taps - 1` of them.
-    history: Vec<f32>,
-    /// Input samples received so far.
-    received: u64,
-    /// The index of the next output.
-    next: u64,
+    /// The inputs the next outputs need: always starts with the last `taps - 1`
+    /// (silence before the stream started), then a call's new input.
+    stretch: Vec<f32>,
+    /// Where in `stretch` the next output's newest input is.
+    at: usize,
+    /// The next output's branch: its position's remainder over `up`.
+    branch: u64,
 }
 
 impl Resampler {
@@ -79,58 +87,50 @@ impl Resampler {
                     reason = "filter coefficients are stored as f32"
                 )]
                 let coefficient = (weight / sum) as f32;
-                filter[branch * taps + k] = coefficient;
+                filter[branch * taps + taps - 1 - k] = coefficient;
             }
         }
+        debug_assert_eq!(taps % LANES, 0, "taps are a multiple of 32");
         Resampler {
             up,
             down,
             taps,
             filter,
-            history: Vec::new(),
-            received: 0,
-            next: 0,
+            stretch: vec![0.0; taps - 1],
+            at: taps - 1,
+            branch: 0,
         }
     }
 
     /// The outputs `input` completes: every output whose position is now covered.
     fn process(&mut self, input: &[f32]) -> Vec<f32> {
-        // The working stretch: kept history, then the new input. `base` is the
-        // absolute index of its first sample.
-        let mut stretch = std::mem::take(&mut self.history);
-        let base = self.received - stretch.len() as u64;
-        stretch.extend_from_slice(input);
-        self.received += input.len() as u64;
-
-        let mut output = Vec::new();
-        loop {
-            let position = self.next * self.down;
-            let index = position / self.up; // input sample this output lands on
-            if index >= self.received {
-                break;
-            }
-            let branch = usize::try_from(position % self.up).unwrap_or(0);
-            let weights = &self.filter[branch * self.taps..(branch + 1) * self.taps];
-            let mut sum = 0.0f64;
-            for (k, &weight) in weights.iter().enumerate() {
-                // Input index - k; before the stream started it's silence.
-                let Some(at) = index.checked_sub(k as u64) else {
-                    break;
-                };
-                if at < base {
-                    break;
+        let taps = self.taps;
+        self.stretch.extend_from_slice(input);
+        let mut output = Vec::with_capacity(
+            usize::try_from(input.len() as u64 * self.up / self.down + 1).unwrap_or(0),
+        );
+        while self.at < self.stretch.len() {
+            let branch = usize::try_from(self.branch).unwrap_or(0);
+            let weights = &self.filter[branch * taps..(branch + 1) * taps];
+            let inputs = &self.stretch[self.at + 1 - taps..=self.at];
+            let mut sums = [0.0f32; LANES];
+            for (x, w) in inputs.chunks_exact(LANES).zip(weights.chunks_exact(LANES)) {
+                for lane in 0..LANES {
+                    sums[lane] += x[lane] * w[lane];
                 }
-                let sample = stretch[usize::try_from(at - base).unwrap_or(usize::MAX)];
-                sum += f64::from(weight) * f64::from(sample);
             }
-            #[expect(clippy::cast_possible_truncation, reason = "samples are f32")]
-            output.push(sum as f32);
-            self.next += 1;
+            output.push(sums.iter().sum());
+            // The next output's position: `down` further, in steps of `up`.
+            self.branch += self.down;
+            while self.branch >= self.up {
+                self.branch -= self.up;
+                self.at += 1;
+            }
         }
-
-        let keep = (self.taps - 1).min(stretch.len());
-        stretch.drain(..stretch.len() - keep);
-        self.history = stretch;
+        // Keep the last `taps - 1` inputs for the outputs still to come.
+        let spent = self.stretch.len() - (taps - 1);
+        self.stretch.drain(..spent);
+        self.at -= spent;
         output
     }
 }
