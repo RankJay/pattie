@@ -2,8 +2,10 @@
  * Streaming: Windows' audio engine and the Ring, one copy per packet (ADR 0010).
  *
  * The engine picks the packet count and size. A high-resolution timer fires once
- * per packet: it fills the current capture packet from the Ring, or drains the
- * current render packet into it, then tells ACX the packet is complete. Each pass
+ * per packet: it fills the current capture packet from the Ring, or drains render
+ * packets into it (DrainRender: the current one if not yet drained, and the next
+ * one as soon as the engine reports it written, a packet early), then tells ACX
+ * the packet is complete. Each pass
  * is scheduled from absolute time with the core clock, so nothing drifts, and the
  * reported position also comes from the core clock (pattie_clock_*).
  */
@@ -29,6 +31,14 @@ typedef struct _STREAM_CONTEXT {
     ULONGLONG PausedFrames; /* position while not running */
     ULONGLONG PacketsSinceRun;
     volatile LONG CurrentPacket;
+    /*
+     * Render only. The highest packet the engine has reported written
+     * (SetRenderPacket), plus one; 0 before any. And the next packet to drain
+     * into the Ring: each is drained once, in order. Both start over with
+     * CurrentPacket (ReleaseHardware).
+     */
+    volatile LONG RenderedPackets;
+    ULONG NextDrain;
     volatile LONG64 LastPacketStart;
     volatile LONG64 CurrentPacketStart;
     /*
@@ -42,6 +52,8 @@ typedef struct _STREAM_CONTEXT {
     ULONGLONG Stalls; /* so far behind the schedule skipped ahead (pattie_clock_next_pass) */
     ULONGLONG MaxLatenessTicks; /* worst pass: fired this long after it was due */
     ULONGLONG TotalLatenessTicks;
+    ULONGLONG EarlyPasses; /* render: drained the next packet a packet early */
+    ULONGLONG OnTimePasses; /* render: the next one wasn't reported written yet */
 } STREAM_CONTEXT;
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(STREAM_CONTEXT, StreamContext)
 
@@ -99,7 +111,9 @@ static VOID TraceStreamStopped(const STREAM_CONTEXT *StreamCtx, const char *Reas
         TraceLoggingUInt64(TicksToUs(StreamCtx, StreamCtx->MaxLatenessTicks), "MaxLatenessUs"),
         TraceLoggingUInt64(TicksToUs(StreamCtx, averageLatenessTicks), "AvgLatenessUs"),
         TraceLoggingUInt64(gapFrames, "RingGapFrames"),
-        TraceLoggingUInt64(overflowFrames, "RingOverflowFrames"));
+        TraceLoggingUInt64(overflowFrames, "RingOverflowFrames"),
+        TraceLoggingUInt64(StreamCtx->EarlyPasses, "EarlyRenderPasses"),
+        TraceLoggingUInt64(StreamCtx->OnTimePasses, "OnTimeRenderPasses"));
 }
 
 static ULONGLONG Position(const STREAM_CONTEXT *StreamCtx)
@@ -145,6 +159,47 @@ static VOID ScheduleNextPass(STREAM_CONTEXT *StreamCtx)
     (void)WdfTimerStart(StreamCtx->Timer, wait);
 }
 
+/* Copies render packet `Packet` (its number, not its index) into the Ring. */
+static VOID DrainRenderPacket(STREAM_CONTEXT *StreamCtx, ULONG Packet, uint32_t Frames)
+{
+    ULONG index = Packet % StreamCtx->PacketCount;
+    const UCHAR *packet =
+        (const UCHAR *)StreamCtx->Packets[index] + (index == 0 ? StreamCtx->FirstPacketOffset : 0);
+
+    if (StreamCtx->Pcm16) {
+        pattie_ring_write_pcm16(StreamCtx->Device->Ring, (const int16_t *)packet, Frames);
+    } else {
+        pattie_ring_write(StreamCtx->Device->Ring, (const float *)packet, Frames);
+    }
+}
+
+/*
+ * A Speaker's pass at packet `Current`: drains, in order, each packet not yet
+ * drained up to the current one (it plays now, by the engine's position) and the
+ * next one if the engine has already reported it written (SetRenderPacket), which
+ * it does just after the previous pass: that packet then reaches the app a packet
+ * (10 ms) sooner than its turn. The engine writes a packet's buffer only before
+ * reporting it and after it completes, so a reported packet is whole and stays so
+ * until then. With one packet, the next shares the current one's buffer: never
+ * early. Returns how many packets past the current one the Ring now holds (0 or 1).
+ */
+static ULONG DrainRender(STREAM_CONTEXT *StreamCtx, ULONG Current, uint32_t Frames)
+{
+    ULONG rendered = (ULONG)InterlockedCompareExchange(&StreamCtx->RenderedPackets, 0, 0);
+    ULONG last = Current;
+
+    if (StreamCtx->PacketCount >= 2 && rendered > Current + 1) {
+        last = Current + 1;
+        StreamCtx->EarlyPasses++;
+    } else {
+        StreamCtx->OnTimePasses++;
+    }
+    for (; StreamCtx->NextDrain <= last; StreamCtx->NextDrain++) {
+        DrainRenderPacket(StreamCtx, StreamCtx->NextDrain, Frames);
+    }
+    return StreamCtx->NextDrain - 1 - Current;
+}
+
 static VOID EvtStreamTimer(WDFTIMER Timer)
 {
     STREAM_CONTEXT *streamCtx = TimerContext(Timer)->StreamCtx;
@@ -156,6 +211,7 @@ static VOID EvtStreamTimer(WDFTIMER Timer)
     ULONGLONG firedAt = Now();
     ULONGLONG completedAt;
     LONG completed;
+    ULONG ahead = 0;
 
     if (firedAt > streamCtx->DueTicks) {
         ULONGLONG lateness = firedAt - streamCtx->DueTicks;
@@ -174,18 +230,20 @@ static VOID EvtStreamTimer(WDFTIMER Timer)
             } else {
                 pattie_ring_read(device->Ring, (float *)packet, frames);
             }
-        } else if (streamCtx->Pcm16) {
-            pattie_ring_write_pcm16(device->Ring, (const int16_t *)packet, frames);
         } else {
-            pattie_ring_write(device->Ring, (const float *)packet, frames);
+            ahead = DrainRender(streamCtx, (ULONG)streamCtx->CurrentPacket, frames);
         }
         /* The clock pair (ADR 0022): how far this side has got, and when, in
-         * nanoseconds of the performance counter, as apps read it. */
+         * nanoseconds of the performance counter, as apps read it. A Speaker's
+         * packet drained early plays, by the engine's position, from now to a
+         * packet from now: stamped then, so "frame N played at T" keeps meaning
+         * what it did. */
         if (device->Kind == PATTIE_KIND_MICROPHONE) {
             pattie_ring_publish_read_clock(device->Ring, pattie_clock_ns(Now(), streamCtx->TickHz));
         } else {
-            pattie_ring_publish_write_clock(device->Ring,
-                                            pattie_clock_ns(Now(), streamCtx->TickHz));
+            pattie_ring_publish_write_clock(
+                device->Ring, pattie_clock_ns(Now(), streamCtx->TickHz) +
+                                  (uint64_t)ahead * frames * 1000000000u / streamCtx->SampleRate);
         }
         /* Wake the app's paced writer, reader or playout (ADR 0021). */
         (void)KeSetEvent(device->WakeEvent, IO_NO_INCREMENT, FALSE);
@@ -334,6 +392,8 @@ static NTSTATUS EvtStreamReleaseHardware(ACXSTREAM Stream)
     streamCtx->PausedFrames = 0;
     streamCtx->PacketsSinceRun = 0;
     InterlockedExchange(&streamCtx->CurrentPacket, 0);
+    InterlockedExchange(&streamCtx->RenderedPackets, 0);
+    streamCtx->NextDrain = 0;
     InterlockedExchange64(&streamCtx->LastPacketStart, 0);
     InterlockedExchange64(&streamCtx->CurrentPacketStart, 0);
     return STATUS_SUCCESS;
@@ -377,6 +437,8 @@ static NTSTATUS EvtStreamRun(ACXSTREAM Stream)
     streamCtx->Stalls = 0;
     streamCtx->MaxLatenessTicks = 0;
     streamCtx->TotalLatenessTicks = 0;
+    streamCtx->EarlyPasses = 0;
+    streamCtx->OnTimePasses = 0;
     skippedFrames = SkipStaleCapture(streamCtx); /* before the timer is armed */
     TraceLoggingWrite(TraceProvider, "StreamRun", TraceLoggingLevel(TRACE_LEVEL_INFO),
                       TraceLoggingUInt32(streamCtx->Device->DeviceId, "DeviceId"),
@@ -526,11 +588,15 @@ static NTSTATUS EvtStreamGetCapturePacket(ACXSTREAM Stream, PULONG LastCapturePa
     return STATUS_SUCCESS;
 }
 
-/* The engine must fill exactly the next packet: anything else is late or early. */
+/*
+ * The engine must fill exactly the next packet: anything else is late or early.
+ * A packet it reports may be drained a packet early (DrainRender).
+ */
 static NTSTATUS EvtStreamSetRenderPacket(ACXSTREAM Stream, ULONG Packet, ULONG Flags,
                                          ULONG EosPacketLength)
 {
-    ULONG current = (ULONG)InterlockedCompareExchange(&StreamContext(Stream)->CurrentPacket, 0, 0);
+    STREAM_CONTEXT *streamCtx = StreamContext(Stream);
+    ULONG current = (ULONG)InterlockedCompareExchange(&streamCtx->CurrentPacket, 0, 0);
 
     UNREFERENCED_PARAMETER(Flags);
     UNREFERENCED_PARAMETER(EosPacketLength);
@@ -541,6 +607,7 @@ static NTSTATUS EvtStreamSetRenderPacket(ACXSTREAM Stream, ULONG Packet, ULONG F
     if (Packet > current + 1) {
         return STATUS_DATA_OVERRUN;
     }
+    InterlockedExchange(&streamCtx->RenderedPackets, (LONG)(Packet + 1));
     return STATUS_SUCCESS;
 }
 
