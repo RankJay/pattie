@@ -14,6 +14,14 @@ pub trait Backend: Send + Sync {
     fn lead_frames(&self) -> u32 {
         960
     }
+
+    /// Whether the lead may follow the system's pull as its passes show it,
+    /// with `lead_frames` only the most: for a system whose pull changes (PipeWire's
+    /// quantum), where `lead_frames` must cover the largest. Windows pulls
+    /// one fixed packet: no.
+    fn lead_follows_pull(&self) -> bool {
+        false
+    }
 }
 
 /// One open handle on the driver. Dropping it closes the handle, and the driver

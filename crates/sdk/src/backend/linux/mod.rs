@@ -12,7 +12,9 @@ use std::sync::Arc;
 
 /// PipeWire's graph pulls a whole cycle at once: 1,024 frames (21.3 ms) by
 /// default, up to 2,048 at its default maximum. Leading by 960 left every
-/// 1,024-frame pull 64 frames short (WSL, 2026-11-08).
+/// 1,024-frame pull 64 frames short (WSL, 2026-11-08). The most: the lead
+/// follows the quantum actually pulled (`Backend::lead_follows_pull`), so a
+/// 256-frame graph isn't held 2,048 frames behind.
 const LEAD_FRAMES: u32 = 2_048;
 
 /// The default backend on Linux: the process's core and real PipeWire nodes.

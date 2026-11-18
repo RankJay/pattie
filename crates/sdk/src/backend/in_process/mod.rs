@@ -41,6 +41,8 @@ pub(crate) struct InProcessBackend {
     namespace: Arc<str>,
     /// The Backend's lead (`Backend::lead_frames`).
     lead_frames: u32,
+    /// `Backend::lead_follows_pull`: the real PipeWire nodes only.
+    follows_pull: bool,
 }
 
 /// The process's one core: names, IDs and the Device limit apply across all the
@@ -70,6 +72,7 @@ impl InProcessBackend {
             nodes,
             namespace: "pattie".into(),
             lead_frames,
+            follows_pull: true,
         })
     }
 
@@ -85,6 +88,7 @@ impl InProcessBackend {
             nodes,
             namespace: namespace.into(),
             lead_frames,
+            follows_pull: false,
         })
     }
 }

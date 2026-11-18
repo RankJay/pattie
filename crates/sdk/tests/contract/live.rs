@@ -14,11 +14,13 @@ fn a_live_writers_audio_reaches_the_system_after_its_buffer_fills(backend: &dyn 
 
     let (taken, ()) = system_pulls_while(backend, &mic, Duration::from_millis(300), || {});
 
-    // It plays from its 40 ms target: the older 160 ms would only be latency,
-    // so it's dropped and counted (VM beta pass 4.4).
+    // It plays from its target: the older audio would only be latency, so it's
+    // dropped and counted (VM beta pass 4.4). The target is 40 ms (1,920 frames),
+    // or the Backend's lead and a quarter where that's more (Linux: 2,560).
     let audio = taken.iter().filter(|&&s| (s - 0.5).abs() < 1e-3).count();
     assert!(audio >= 960, "{audio} frames of the source's audio");
-    assert_eq!(live.stats().dropped_frames, 9_600 - 1_920);
+    let kept = 9_600 - live.stats().dropped_frames;
+    assert!((1_920..=2_560).contains(&kept), "kept {kept} frames");
 }
 
 fn a_live_writer_holds_the_writer_slot_and_only_on_a_microphone(backend: &dyn BackendUnderTest) {

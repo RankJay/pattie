@@ -20,7 +20,8 @@ use std::thread::JoinHandle;
 mod writer;
 
 /// The latency a `LiveWriter` holds, as a share of a second: 40 ms of queue,
-/// enough for the network bursts a relay sees (on top of the Ring's lead).
+/// enough for the network bursts a relay sees (on top of the Ring's lead); or
+/// the lead and a quarter where that's more (Linux: 2,048 frames, 53 ms).
 const TARGET_PER_SECOND: u32 = 25;
 
 /// How far above the target the queue may sit while playing, as a share of a
@@ -66,7 +67,7 @@ struct State {
     channels: usize,
     adaptive: AdaptiveResampler,
     controller: Controller,
-    /// Frames: 40 ms.
+    /// Frames: 40 ms, or the lead and a quarter where that's more.
     target: usize,
     /// Frames: 100 ms above the target is a pile-up, not jitter.
     step: usize,

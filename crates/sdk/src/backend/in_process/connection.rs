@@ -16,6 +16,10 @@ impl Backend for InProcessBackend {
     fn lead_frames(&self) -> u32 {
         self.lead_frames
     }
+
+    fn lead_follows_pull(&self) -> bool {
+        self.follows_pull
+    }
 }
 
 /// One CoreOwner, and the nodes of the Devices it created.

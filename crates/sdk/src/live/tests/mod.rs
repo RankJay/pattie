@@ -38,8 +38,11 @@ fn setup_format(rate: u32, channels: u16) -> (FakeBackend, Device, LiveWriter, u
     (backend, mic, live, lead)
 }
 
-/// The 48 kHz target: 40 ms.
-const TARGET_FRAMES: usize = 1_920;
+/// The frames `live` holds its queue at: 40 ms at 48 kHz (1,920) where the
+/// Backend's lead is below it (Windows), more on Linux (the lead and a quarter).
+fn target(live: &LiveWriter) -> usize {
+    live.shared.lock().target
+}
 
 mod backlog;
 mod drift;

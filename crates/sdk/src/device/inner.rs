@@ -17,7 +17,25 @@ impl Inner {
     /// How much a paced writer may add now: what tops the Ring up to the lead
     /// (ADR 0020), so it never holds more than the system's next pull or two.
     pub(crate) fn room_below_lead(&self) -> usize {
-        usize::try_from(self.lead_frames.saturating_sub(self.ring.buffered())).unwrap_or(usize::MAX)
+        usize::try_from(self.lead().saturating_sub(self.ring.buffered())).unwrap_or(usize::MAX)
+    }
+
+    /// The lead now: the Backend's, or where it lets the lead follow the
+    /// system's pull, that pull and a quarter (at most the Backend's). Each call
+    /// shows the watch the system's latest pass: the paced writers call it once
+    /// a pass, after the doorbell.
+    fn lead(&self) -> u64 {
+        let Some(watch) = &self.pull else {
+            return self.lead_frames;
+        };
+        let mut watch = watch.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some((frames, _)) = self.ring.clock(true) {
+            // The Gap counter after the clock: the core stores a pass's Gap
+            // before its clock, so this includes that pass's.
+            let (gap, _) = self.ring.counts();
+            watch.see(frames, gap);
+        }
+        watch.lead(self.lead_frames)
     }
 
     /// Claims the app side of the Ring for a `kind` Device's writer or reader.

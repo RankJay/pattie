@@ -27,7 +27,12 @@ impl LiveWriter {
         let converter = Mutex::new(Converter::new(input, format)?);
         inner.take_access(Kind::Microphone)?;
         let channels = usize::from(format.channels);
-        let target = (format.rate / TARGET_PER_SECOND) as usize;
+        // Each pass takes up to the lead from the queue, so a target below it
+        // starves: on Linux at the start (before PipeWire's pull is known, the
+        // lead is its 2,048-frame most) and at every pass of a 2,048-frame pull.
+        // At least the lead and a quarter, then; Windows' 960 is far below 40 ms.
+        let lead = usize::try_from(inner.lead_frames).unwrap_or(usize::MAX);
+        let target = ((format.rate / TARGET_PER_SECOND) as usize).max(lead + lead.div_ceil(4));
         Ok(LiveWriter {
             converter,
             shared: Arc::new(Shared {

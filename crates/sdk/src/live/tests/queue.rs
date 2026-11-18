@@ -12,8 +12,8 @@ fn a_queue_past_one_second_drops_its_oldest_audio_back_to_the_target() {
     live.push(&newer);
 
     let stats = live.stats();
-    assert_eq!(stats.queued_frames, TARGET_FRAMES as u64);
-    assert_eq!(stats.dropped_frames, 50_000 - TARGET_FRAMES as u64);
+    assert_eq!(stats.queued_frames, target(&live) as u64);
+    assert_eq!(stats.dropped_frames, 50_000 - target(&live) as u64);
     assert!(
         live.shared.lock().queue.iter().all(|&s| s == 0.9),
         "the newest stays"
@@ -30,8 +30,8 @@ fn a_queue_of_exactly_one_second_keeps_it_all_and_one_frame_more_drops() {
     let past = live.stats();
 
     assert_eq!((full.queued_frames, full.dropped_frames), (48_000, 0));
-    assert_eq!(past.queued_frames, TARGET_FRAMES as u64);
-    assert_eq!(past.dropped_frames, 48_001 - TARGET_FRAMES as u64);
+    assert_eq!(past.queued_frames, target(&live) as u64);
+    assert_eq!(past.dropped_frames, 48_001 - target(&live) as u64);
 }
 #[test]
 fn a_stereo_queue_past_one_second_drops_whole_frames_back_to_the_target() {
@@ -43,10 +43,18 @@ fn a_stereo_queue_past_one_second_drops_whole_frames_back_to_the_target() {
     live.push(&newer);
 
     let stats = live.stats();
-    assert_eq!(stats.queued_frames, 1_764, "40 ms at 44.1 kHz");
-    assert_eq!(stats.dropped_frames, 50_000 - 1_764);
+    let target = target(&live);
+    assert_eq!(
+        stats.queued_frames, target as u64,
+        "40 ms at 44.1 kHz on Windows"
+    );
+    assert_eq!(stats.dropped_frames, 50_000 - target as u64);
     let queue: Vec<f32> = live.shared.lock().queue.iter().copied().collect();
-    assert_eq!(queue, [0.9, -0.9].repeat(1_764), "the newest, whole frames");
+    assert_eq!(
+        queue,
+        [0.9, -0.9].repeat(target),
+        "the newest, whole frames"
+    );
 }
 
 #[test]

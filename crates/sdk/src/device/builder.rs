@@ -74,6 +74,9 @@ impl DeviceBuilder {
                     encoding: Encoding::F32,
                 },
                 lead_frames,
+                pull: backend
+                    .lead_follows_pull()
+                    .then(|| Mutex::new(pull::PullWatch::default())),
                 access_taken: AtomicBool::new(false),
             }),
         })

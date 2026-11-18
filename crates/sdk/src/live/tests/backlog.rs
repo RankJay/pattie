@@ -12,7 +12,7 @@ use super::*;
     reason = "a test helper: a failure should stop the test loudly"
 )]
 fn play_steadily(backend: &FakeBackend, mic: &Device, live: &LiveWriter) {
-    live.push(&[0.5; TARGET_FRAMES]);
+    live.push(&vec![0.5; target(live)]);
     live.shared.pump();
     for pass in 1..=10u64 {
         live.push(&[0.5; 480]);
@@ -33,8 +33,8 @@ fn audio_queued_before_the_system_starts_is_trimmed_to_the_target_when_it_starts
     live.shared.pump(); // the system's first pass: playing starts
 
     let stats = live.stats();
-    assert_eq!(stats.dropped_frames, 8_000 - TARGET_FRAMES as u64);
-    assert!(stats.queued_frames <= TARGET_FRAMES as u64, "{stats:?}");
+    assert_eq!(stats.dropped_frames, 8_000 - target(&live) as u64);
+    assert!(stats.queued_frames <= target(&live) as u64, "{stats:?}");
     assert!(
         live.shared.lock().queue.iter().all(|&s| s == 0.9),
         "the newest audio stays"
@@ -42,12 +42,12 @@ fn audio_queued_before_the_system_starts_is_trimmed_to_the_target_when_it_starts
 }
 
 /// `play_steadily`, then `burst` extra frames at once, then ten more passes at
-/// pace: the stats after.
+/// pace: the stats after, and the writer's target.
 #[expect(
     clippy::unwrap_used,
     reason = "a test helper: a failure should stop the test loudly"
 )]
-fn burst_while_playing(burst: usize) -> LiveStats {
+fn burst_while_playing(burst: usize) -> (LiveStats, usize) {
     let (backend, mic, live) = setup();
     play_steadily(&backend, &mic, &live);
     live.push(&vec![0.5; burst]);
@@ -58,22 +58,23 @@ fn burst_while_playing(burst: usize) -> LiveStats {
             .unwrap();
         live.shared.pump();
     }
-    live.stats()
+    (live.stats(), target(&live))
 }
 
 #[test]
 fn a_burst_after_a_stall_is_trimmed_back_to_the_target_without_moving_the_correction() {
-    let calm = burst_while_playing(0);
+    let (calm, _) = burst_while_playing(0);
     // The machine stalled for 0.3 s; the source then delivers it all at once.
-    let stalled = burst_while_playing(14_400);
+    let (stalled, target) = burst_while_playing(14_400);
 
     // Back at the target, not 0.3 s over it, and the controller never saw the
     // step: it corrects as in the same run without the stall.
-    assert!(stalled.dropped_frames > 14_400 - 960, "{stalled:?}");
+    // The pile-up goes, down to the target: at least the burst less the target.
     assert!(
-        stalled.queued_frames <= TARGET_FRAMES as u64 + 480,
+        stalled.dropped_frames > 14_400 - target as u64,
         "{stalled:?}"
     );
+    assert!(stalled.queued_frames <= target as u64 + 480, "{stalled:?}");
     assert!(
         (stalled.correction_ppm - calm.correction_ppm).abs() < 50.0,
         "{stalled:?} vs {calm:?}"
@@ -93,5 +94,5 @@ fn network_jitter_above_the_target_is_kept_and_played() {
 
     let stats = live.stats();
     assert_eq!(stats.dropped_frames, 0, "{stats:?}");
-    assert!(stats.queued_frames > TARGET_FRAMES as u64, "{stats:?}");
+    assert!(stats.queued_frames > target(&live) as u64, "{stats:?}");
 }

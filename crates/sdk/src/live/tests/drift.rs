@@ -31,20 +31,25 @@ fn a_source_200_ppm_fast_holds_its_latency_with_clean_audio() {
         // The latency as the controller holds it: after the pass, before the
         // feeder takes the next packet's input.
         if pass >= 4 * 60 * 100 {
-            let error = live.stats().queued_frames as f64 - TARGET_FRAMES as f64;
+            let error = live.stats().queued_frames as f64 - target(&live) as f64;
             worst = worst.max(error.abs());
         }
         live.shared.pump();
     }
 
     let stats = live.stats();
-    let steepest = heard
+    // From the second second on: where the start trimmed a push, playing begins
+    // mid-wave, a step from the silence before it that isn't the resampler's.
+    let steepest = heard[48_000..]
         .windows(2)
         .map(|w| (w[1] - w[0]).abs())
         .fold(0.0, f32::max);
     assert!(worst < 48.0, "latency off by {worst:.0} frames");
     assert!((stats.correction_ppm - 200.0).abs() < 20.0, "{stats:?}");
-    assert_eq!((stats.starved_frames, stats.dropped_frames), (0, 0));
+    assert_eq!(stats.starved_frames, 0);
+    // Only what the push that reached the target carried past it, when playing
+    // started (none where the target is a whole number of pushes, as on Windows).
+    assert!(stats.dropped_frames < 480, "{stats:?}");
     // The tone's steepest step is 0.5 * 2 pi * 1 kHz / 48 kHz = 0.0654.
     assert!(steepest < 0.0655 * 1.001, "a jump of {steepest}");
 }
@@ -53,7 +58,7 @@ fn a_source_200_ppm_fast_holds_its_latency_with_clean_audio() {
 fn a_held_correction_is_the_one_in_use() {
     let (backend, mic, live) = setup();
     live.hold_correction(Some(150.0));
-    live.push(&[0.5; TARGET_FRAMES * 4]);
+    live.push(&vec![0.5; target(&live) * 4]);
     live.shared.pump();
     for pass in 1..=4u64 {
         backend
@@ -90,8 +95,9 @@ fn a_stereo_source_at_44_1_khz_200_ppm_fast_holds_40_ms_in_lockstep() {
                 .unwrap(),
         );
         if pass >= 4 * 60 * 100 {
-            // 40 ms at 44.1 kHz is 1,764 frames; 1 ms is 44.1.
-            let error = live.stats().queued_frames as f64 - 1_764.0;
+            // The target: 40 ms at 44.1 kHz is 1,764 frames (more on Linux); 1 ms
+            // is 44.1.
+            let error = live.stats().queued_frames as f64 - target(&live) as f64;
             worst = worst.max(error.abs());
         }
         live.shared.pump();
@@ -99,13 +105,15 @@ fn a_stereo_source_at_44_1_khz_200_ppm_fast_holds_40_ms_in_lockstep() {
 
     let stats = live.stats();
     let left: Vec<f32> = heard.iter().step_by(2).copied().collect();
-    let steepest = left
+    // From the second second on, as in the 48 kHz test.
+    let steepest = left[44_100..]
         .windows(2)
         .map(|w| (w[1] - w[0]).abs())
         .fold(0.0, f32::max);
     assert!(worst < 44.1, "latency off by {worst:.0} frames");
     assert!((stats.correction_ppm - 200.0).abs() < 20.0, "{stats:?}");
-    assert_eq!((stats.starved_frames, stats.dropped_frames), (0, 0));
+    assert_eq!(stats.starved_frames, 0);
+    assert!(stats.dropped_frames < 441, "only the start's: {stats:?}");
     // The tone's steepest step is 0.5 * 2 pi * 1 kHz / 44.1 kHz = 0.0712.
     assert!(steepest < 0.0713 * 1.001, "a jump of {steepest}");
     assert!(

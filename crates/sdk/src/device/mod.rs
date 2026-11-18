@@ -12,12 +12,13 @@ use crate::ring::RingMemory;
 use crate::{AudioFormat, Encoding};
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 mod builder;
 mod clock;
 mod inner;
+mod pull;
 mod reader;
 mod stats;
 mod writer;
@@ -75,6 +76,9 @@ pub(crate) struct Inner {
     /// How far ahead `Writer::write_paced` keeps the Ring filled (the Backend's
     /// lead, in this Device's frames).
     pub(crate) lead_frames: u64,
+    /// The system's pull, where the Backend lets the lead follow it
+    /// (`Backend::lead_follows_pull`); `None` keeps the lead at `lead_frames`.
+    pub(crate) pull: Option<Mutex<pull::PullWatch>>,
     /// The Ring has one app-side party: a single Writer or Reader at a time.
     access_taken: AtomicBool,
 }

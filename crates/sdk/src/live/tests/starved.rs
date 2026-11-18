@@ -25,7 +25,7 @@ fn it_plays_silence_until_the_buffer_holds_its_target_then_the_audio() {
 #[test]
 fn the_starved_count_is_the_silence_the_app_hears() {
     let (backend, mic, live, lead) = setup_with_lead();
-    live.push(&[0.5; TARGET_FRAMES]);
+    live.push(&vec![0.5; target(&live)]);
     live.shared.pump();
     // The system pulls 10 ms at a time and nothing more arrives, until the
     // queue runs short in the middle of a pull.
@@ -47,7 +47,7 @@ fn the_starved_count_is_the_silence_the_app_hears() {
 #[test]
 fn a_stereo_starved_count_is_the_silent_frames_the_app_hears() {
     let (backend, mic, live, lead) = setup_format(48_000, 2);
-    live.push(&[0.5; TARGET_FRAMES * 2]);
+    live.push(&vec![0.5; target(&live) * 2]);
     live.shared.pump();
     for _ in 0..20 {
         backend.system_read(mic.id(), 480).unwrap();
@@ -71,7 +71,7 @@ fn a_stereo_starved_count_is_the_silent_frames_the_app_hears() {
 #[test]
 fn a_source_that_falls_behind_plays_counted_silence_then_fills_up_again() {
     let (backend, mic, live) = setup();
-    live.push(&[0.5; TARGET_FRAMES]);
+    live.push(&vec![0.5; target(&live)]);
     live.shared.pump();
     for _ in 0..6 {
         // The system pulls 10 ms at a time; nothing more arrives.
