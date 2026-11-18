@@ -3,10 +3,12 @@
 import array
 import asyncio
 import time
+from typing import cast
 
 import pytest
 
 from pattie import _testing
+from pattie._native import Microphone
 from pattie.aio import AsyncMicrophone, AsyncSpeaker
 
 
@@ -37,6 +39,45 @@ def test_an_async_write_leaves_the_loop_free(backend: _testing.FakeBackend) -> N
             assert await puller >= 24_000
 
     asyncio.run(main())
+
+
+class _RecordingMicrophone:
+    """The native Microphone, with the length of every write() it is handed."""
+
+    def __init__(self, mic: Microphone) -> None:
+        self._mic = mic
+        self.lengths: list[int] = []
+
+    def write(self, data: memoryview, timeout: float) -> int:
+        self.lengths.append(len(data))
+        return self._mic.write(data, timeout)
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._mic, name)
+
+
+def test_a_long_async_write_hands_each_wait_a_bounded_piece(
+    backend: _testing.FakeBackend,
+) -> None:
+    """Each 100 ms wait copies only what it can play, not the whole remainder:
+    a long buffer costs time in proportion to its length, not its square."""
+
+    async def main() -> list[int]:
+        async with AsyncMicrophone("Agent Mic", _backend=backend) as mic:
+            recording = _RecordingMicrophone(mic._mic)
+            mic._mic = cast("Microphone", recording)
+            done = asyncio.Event()
+            puller = asyncio.create_task(pull(backend, mic.id, done))
+            assert await mic.write(floats([0.5] * 96_000)) == 96_000  # 2 s
+            done.set()
+            await puller
+            mic._mic = recording._mic
+            return recording.lengths
+
+    lengths = asyncio.run(main())
+
+    assert len(lengths) > 1
+    assert max(lengths) <= 9_600 * 4  # 200 ms of 48 kHz mono float
 
 
 def test_cancelling_a_write_stops_it_soon(backend: _testing.FakeBackend) -> None:

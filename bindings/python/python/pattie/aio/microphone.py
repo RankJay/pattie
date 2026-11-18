@@ -40,6 +40,10 @@ class AsyncMicrophone:
         self._format = format or device
         self._input = Converter(self._format, device)
         self._frame_bytes = _SAMPLE_BYTES * channels
+        # What one wait is handed: twice what it can play in its 100 ms, so it
+        # still ends by its timeout, never by running dry. Handing it the whole
+        # remainder instead would copy all of it on every wait (quadratic).
+        self._piece_bytes = self._frame_bytes * round(rate * 2 * _PIECE_SECONDS)
         self._mic = Microphone(
             name, rate=rate, channels=channels, strict=strict, _backend=_backend
         )
@@ -78,8 +82,9 @@ class AsyncMicrophone:
         samples = memoryview(self._input.convert(data))
         written = 0
         while written * self._frame_bytes < len(samples):
-            rest = samples[written * self._frame_bytes :]
-            written += await asyncio.to_thread(self._mic.write, rest, _PIECE_SECONDS)
+            start = written * self._frame_bytes
+            piece = samples[start : start + self._piece_bytes]
+            written += await asyncio.to_thread(self._mic.write, piece, _PIECE_SECONDS)
         return written
 
     def write_nowait(self, data: Buffer) -> int:
