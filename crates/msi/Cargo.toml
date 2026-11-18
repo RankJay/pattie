@@ -1,0 +1,26 @@
+[package]
+name = "pattie-msi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+description = "The MSI's custom actions (ADR 0024): a DLL that puts the driver on or takes it off through pattie-install, inside the installer's transaction"
+
+[lib]
+# The DLL the MSI calls (cdylib); rlib too, so `cargo test` can reach the
+# result mapping.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pattie-install.workspace = true
+
+[target."cfg(windows)".dependencies]
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_System_ApplicationInstallationAndServicing", "Win32_System_DataExchange"] }
+
+[dev-dependencies]
+# The installer authoring test reads pattie.wxs (tests/authoring/).
+roxmltree = "0.20"
+
+[lints]
+workspace = true

@@ -18,13 +18,13 @@ Linux it uses PipeWire, which most desktops already run.
 import pattie
 
 # 24 kHz 16-bit PCM in, the way most speech models send it.
-with pattie.Microphone("Agent Mic", format=pattie.Format(24_000, "pcm16")) as mic:
+with pattie.Microphone("Agent Mic", format=pattie.AudioFormat(24_000, "pcm16")) as mic:
     mic.write(pcm_audio)  # waits as the audio plays; nothing is dropped
     mic.wait_for_playout()
 ```
 
 ```python
-with pattie.Speaker("Agent Speaker", format=pattie.Format(16_000, "pcm16")) as speaker:
+with pattie.Speaker("Agent Speaker", format=pattie.AudioFormat(16_000, "pcm16")) as speaker:
     for chunk in speaker:  # what other apps play, as it plays
         transcriber.feed(chunk)
 ```
@@ -40,7 +40,7 @@ event loop keeps running, and a call can be cancelled:
 ```python
 from pattie.aio import AsyncMicrophone
 
-async with AsyncMicrophone("Agent Mic", format=pattie.Format(24_000, "pcm16")) as mic:
+async with AsyncMicrophone("Agent Mic", format=pattie.AudioFormat(24_000, "pcm16")) as mic:
     await mic.write(pcm_audio)
     async with asyncio.timeout(5):
         await mic.wait_for_playout()
@@ -70,7 +70,7 @@ it. Over hours that adds up to seconds of delay, or gaps. A `LiveWriter` holds
 it at about 40 ms and keeps it there by resampling a few parts per million:
 
 ```python
-relay = mic.live_writer(pattie.Format(16_000, "pcm16"))
+relay = mic.live_writer(pattie.AudioFormat(16_000, "pcm16"))
 relay.push(chunk)  # as each chunk arrives; never waits
 relay.stats.correction_ppm  # how far off the source's clock is
 ```
@@ -82,7 +82,7 @@ Times are `time.perf_counter()` seconds, so they compare directly with your own.
 ```python
 data, played_at = speaker.read_timed(timeout=1)  # when its first frame played
 mic.next_play_time  # when the next frame written will be heard
-mic.clock  # Clock(frames, at): how far listeners had got, and when
+mic.clock  # ClockPoint(frames, at): how far listeners had got, and when
 ```
 
 `read_timed` gives an echo canceller its reference; `next_play_time` keeps audio
@@ -111,12 +111,12 @@ being updated while the Device was live (Windows): create the Device again.
 ## Developing
 
 ```bash
-uv sync                      # builds the extension, with the test backend
+uv sync                      # builds the extension, with the Fake backend
 uv run --no-sync pytest
 uv run --no-sync ruff check . && uv run --no-sync ruff format --check .
 uv run --no-sync ty check
 ```
 
-The tests use a test backend instead of the driver, so they run anywhere. The
+The tests use a Fake backend instead of the driver, so they run anywhere. The
 audio rules themselves are tested in the Rust SDK; these tests check that Python
 reaches them correctly.

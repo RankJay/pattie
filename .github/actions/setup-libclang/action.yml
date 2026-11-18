@@ -1,0 +1,22 @@
+# bindgen (the conformance tests) needs libclang. Sets LIBCLANG_PATH for later steps.
+name: setup-libclang
+description: Find or install libclang and point bindgen at it (LIBCLANG_PATH)
+runs:
+  using: composite
+  steps:
+    - name: Point bindgen at Visual Studio's libclang
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        # .cargo/config.toml names the Community edition; the runner has another.
+        $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -prerelease -property installationPath
+        $dir = Join-Path $vs 'VC\Tools\Llvm\x64\bin'
+        if (-not (Test-Path (Join-Path $dir 'libclang.dll'))) { $dir = 'C:\Program Files\LLVM\bin' }
+        "LIBCLANG_PATH=$dir" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+    # act maps the Windows job onto an Ubuntu image (-P), so runner.os is Linux there too.
+    - name: Install clang and libclang, and point bindgen at it
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo apt-get update -qq && sudo apt-get install -y -qq clang libclang-dev
+        echo "LIBCLANG_PATH=$(dirname "$(printf '%s\n' /usr/lib/llvm-*/lib/libclang.so* | sort -V | tail -1)")" >> "$GITHUB_ENV"

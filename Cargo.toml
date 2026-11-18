@@ -1,19 +1,30 @@
 [workspace]
-members = ["crates/pattie", "crates/pattie-cli", "crates/pattie-install", "crates/pattie-msi", "core/tests", "bindings/python"]
+members = ["crates/sdk", "crates/cli", "crates/install", "crates/msi", "core/tests/conformance", "bindings/python"]
 resolver = "3"
 
+# Facts every package shares, in one place (each package says `x.workspace = true`).
 [workspace.package]
+version = "0.1.0"
 edition = "2024"
+license = "Apache-2.0"
+rust-version = "1.97"  # the pinned toolchain (rust-toolchain.toml); no older one is tested
+
+# Dependencies more than one package uses: the version is written here once.
+[workspace.dependencies]
+pattie = { path = "crates/sdk" }
+pattie-install = { path = "crates/install" }
+cc = "1.11.0"
+windows = "0.62.2"
 
 # Lint rules for every crate (each opts in with `[lints] workspace = true`).
 # `cargo clippy --workspace --all-targets -- -D warnings` turns warnings into errors.
 [workspace.lints.rust]
-unsafe_op_in_unsafe_fn = "deny"     # unsafe calls stay in explicit blocks, even in unsafe fns
+unsafe_op_in_unsafe_fn = "deny"  # unsafe calls stay in explicit blocks, even in unsafe fns
 unused_unsafe = "deny"
 
 [workspace.lints.clippy]
-undocumented_unsafe_blocks = "deny" # every `unsafe { }` carries a `// SAFETY:` comment
-missing_safety_doc = "deny"         # every `unsafe fn` documents its contract
+undocumented_unsafe_blocks = "deny"  # every `unsafe { }` carries a `// SAFETY:` comment
+missing_safety_doc = "deny"  # every `unsafe fn` documents its contract
 unnecessary_safety_comment = "warn"
 dbg_macro = "deny"
 todo = "deny"

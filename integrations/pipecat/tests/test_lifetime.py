@@ -14,7 +14,7 @@ from pipecat.tests.utils import SleepFrame, run_test
 from pipecat_pattie import PattieTransport, PattieTransportParams
 
 
-def both(backend: _testing.TestBackend, **params: Any) -> PattieTransport:
+def both(backend: _testing.FakeBackend, **params: Any) -> PattieTransport:
     return PattieTransport(
         PattieTransportParams(
             audio_in_enabled=True,
@@ -33,14 +33,14 @@ async def run_briefly(transport: PattieTransport) -> None:
 
 
 async def test_the_devices_exist_before_the_bot_runs_and_go_when_it_ends(
-    backend: _testing.TestBackend,
+    backend: _testing.FakeBackend,
 ) -> None:
     transport = both(backend)
     assert transport.microphone is not None
     assert transport.speaker is not None
     mic_id, speaker_id = transport.microphone.id, transport.speaker.id
     # Listed already, so a meeting app can be pointed at them first.
-    assert backend.driver_read(mic_id, 1) is not None
+    assert backend.system_read(mic_id, 1) is not None
 
     system = SystemPull(backend, mic_id)
     await run_briefly(transport)
@@ -48,12 +48,12 @@ async def test_the_devices_exist_before_the_bot_runs_and_go_when_it_ends(
 
     assert transport.microphone.closed
     assert transport.speaker.closed
-    assert backend.driver_read(mic_id, 1) is None
-    assert backend.driver_write(speaker_id, b"\0\0\0\0") is False
+    assert backend.system_read(mic_id, 1) is None
+    assert backend.system_write(speaker_id, b"\0\0\0\0") is False
 
 
 async def test_running_again_creates_the_devices_again_under_the_same_names(
-    backend: _testing.TestBackend,
+    backend: _testing.FakeBackend,
 ) -> None:
     transport = both(backend)
     assert transport.microphone is not None
@@ -97,7 +97,7 @@ async def test_running_again_creates_the_devices_again_under_the_same_names(
     assert (again.rate, again.channels) == (first.rate, first.channels)
 
 
-def test_only_the_enabled_sides_get_a_device(backend: _testing.TestBackend) -> None:
+def test_only_the_enabled_sides_get_a_device(backend: _testing.FakeBackend) -> None:
     speaking = PattieTransport(PattieTransportParams(audio_out_enabled=True), _backend=backend)
     listening = PattieTransport(PattieTransportParams(audio_in_enabled=True), _backend=backend)
 
@@ -107,7 +107,7 @@ def test_only_the_enabled_sides_get_a_device(backend: _testing.TestBackend) -> N
     assert listening.microphone is None
 
 
-def test_by_default_the_bot_has_both_at_48_khz_mono(backend: _testing.TestBackend) -> None:
+def test_by_default_the_bot_has_both_at_48_khz_mono(backend: _testing.FakeBackend) -> None:
     transport = PattieTransport(_backend=backend)
 
     assert transport.microphone is not None
@@ -115,14 +115,14 @@ def test_by_default_the_bot_has_both_at_48_khz_mono(backend: _testing.TestBacken
     assert (transport.microphone.rate, transport.microphone.channels) == (48_000, 1)
 
 
-def test_the_devices_format_is_a_parameter(backend: _testing.TestBackend) -> None:
+def test_the_devices_format_is_a_parameter(backend: _testing.FakeBackend) -> None:
     transport = both(backend, device_rate=44_100, device_channels=2)
 
     assert transport.speaker is not None
     assert (transport.speaker.rate, transport.speaker.channels) == (44_100, 2)
 
 
-def test_a_name_already_in_use_raises_patties_own_error(backend: _testing.TestBackend) -> None:
+def test_a_name_already_in_use_raises_patties_own_error(backend: _testing.FakeBackend) -> None:
     first = both(backend)
 
     with pytest.raises(pattie.DuplicateName, match="pick another name"):

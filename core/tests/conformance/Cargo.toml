@@ -1,0 +1,21 @@
+[package]
+name = "pattie-conformance"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Host-side tests for the pure C driver core (ADR 0002, ADR 0008)"
+
+[dependencies]
+
+[build-dependencies]
+bindgen = "0.73.2"
+cc.workspace = true
+
+[dev-dependencies]
+pattie.workspace = true
+proptest = "1"
+
+[lints]
+workspace = true

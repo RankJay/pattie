@@ -2,11 +2,17 @@
 
 import array
 import asyncio
+import contextlib
+import threading
 import time
+from collections.abc import AsyncGenerator
+from concurrent.futures import ThreadPoolExecutor
+from typing import cast
 
 import pytest
 
 from pattie import _testing
+from pattie._native import Microphone
 from pattie.aio import AsyncMicrophone, AsyncSpeaker
 
 
@@ -14,18 +20,18 @@ def floats(values: list[float]) -> bytes:
     return array.array("f", values).tobytes()
 
 
-async def pull(backend: _testing.TestBackend, device_id: int, until: asyncio.Event) -> int:
+async def pull(backend: _testing.FakeBackend, device_id: int, until: asyncio.Event) -> int:
     """The system's part, as a task on the same loop: it only runs if the
     microphone's waits leave the loop free."""
     taken = 0
     while not until.is_set():
-        got = backend.driver_read(device_id, 480)
+        got = backend.system_read(device_id, 480)
         taken += len(got or b"") // 4
         await asyncio.sleep(0.005)
     return taken
 
 
-def test_an_async_write_leaves_the_loop_free(backend: _testing.TestBackend) -> None:
+def test_an_async_write_leaves_the_loop_free(backend: _testing.FakeBackend) -> None:
     async def main() -> None:
         async with AsyncMicrophone("Agent Mic", _backend=backend) as mic:
             done = asyncio.Event()
@@ -39,7 +45,46 @@ def test_an_async_write_leaves_the_loop_free(backend: _testing.TestBackend) -> N
     asyncio.run(main())
 
 
-def test_cancelling_a_write_stops_it_soon(backend: _testing.TestBackend) -> None:
+class _RecordingMicrophone:
+    """The native Microphone, with the length of every write() it is handed."""
+
+    def __init__(self, mic: Microphone) -> None:
+        self._mic = mic
+        self.lengths: list[int] = []
+
+    def write(self, data: memoryview, timeout: float) -> int:
+        self.lengths.append(len(data))
+        return self._mic.write(data, timeout)
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._mic, name)
+
+
+def test_a_long_async_write_hands_each_wait_a_bounded_piece(
+    backend: _testing.FakeBackend,
+) -> None:
+    """Each 100 ms wait copies only what it can play, not the whole remainder:
+    a long buffer costs time in proportion to its length, not its square."""
+
+    async def main() -> list[int]:
+        async with AsyncMicrophone("Agent Mic", _backend=backend) as mic:
+            recording = _RecordingMicrophone(mic._mic)
+            mic._mic = cast("Microphone", recording)
+            done = asyncio.Event()
+            puller = asyncio.create_task(pull(backend, mic.id, done))
+            assert await mic.write(floats([0.5] * 96_000)) == 96_000  # 2 s
+            done.set()
+            await puller
+            mic._mic = recording._mic
+            return recording.lengths
+
+    lengths = asyncio.run(main())
+
+    assert len(lengths) > 1
+    assert max(lengths) <= 9_600 * 4  # 200 ms of 48 kHz mono float
+
+
+def test_cancelling_a_write_stops_it_soon(backend: _testing.FakeBackend) -> None:
     async def main() -> None:
         async with AsyncMicrophone("Agent Mic", _backend=backend) as mic:
             # Nobody pulls, so this write could never finish.
@@ -54,11 +99,11 @@ def test_cancelling_a_write_stops_it_soon(backend: _testing.TestBackend) -> None
     asyncio.run(main())
 
 
-def test_an_async_speaker_yields_what_was_played(backend: _testing.TestBackend) -> None:
+def test_an_async_speaker_yields_what_was_played(backend: _testing.FakeBackend) -> None:
     async def main() -> bytes:
         async with AsyncSpeaker("Agent Speaker", _backend=backend) as speaker:
             loop = asyncio.get_running_loop()
-            loop.call_later(0.05, backend.driver_write, speaker.id, floats([0.25] * 480))
+            loop.call_later(0.05, backend.system_write, speaker.id, floats([0.25] * 480))
             async for chunk in speaker:
                 return chunk
         return b""
@@ -68,7 +113,7 @@ def test_an_async_speaker_yields_what_was_played(backend: _testing.TestBackend) 
     assert array.array("f", heard).tolist() == pytest.approx([0.25] * 480)
 
 
-def test_an_async_playout_waits_idle_without_blocking(backend: _testing.TestBackend) -> None:
+def test_an_async_playout_waits_idle_without_blocking(backend: _testing.FakeBackend) -> None:
     async def main() -> None:
         async with AsyncMicrophone("Agent Mic", _backend=backend) as mic:
             done = asyncio.Event()
@@ -83,7 +128,7 @@ def test_an_async_playout_waits_idle_without_blocking(backend: _testing.TestBack
     asyncio.run(main())
 
 
-def test_asyncio_timeout_gives_up_on_a_wait_soon(backend: _testing.TestBackend) -> None:
+def test_asyncio_timeout_gives_up_on_a_wait_soon(backend: _testing.FakeBackend) -> None:
     async def main() -> None:
         async with AsyncMicrophone("Agent Mic", _backend=backend) as mic:
             mic.write_nowait(floats([0.5] * 480))  # nobody pulls, so it never plays out
@@ -97,7 +142,7 @@ def test_asyncio_timeout_gives_up_on_a_wait_soon(backend: _testing.TestBackend) 
 
 
 def test_an_async_live_writer_relays_audio_without_waiting(
-    backend: _testing.TestBackend,
+    backend: _testing.FakeBackend,
 ) -> None:
     async def main() -> None:
         async with AsyncMicrophone("Agent Mic", _backend=backend) as mic:
@@ -114,11 +159,11 @@ def test_an_async_live_writer_relays_audio_without_waiting(
     asyncio.run(main())
 
 
-def test_an_async_read_timed_says_when_it_was_played(backend: _testing.TestBackend) -> None:
+def test_an_async_read_timed_says_when_it_was_played(backend: _testing.FakeBackend) -> None:
     async def main() -> tuple[bytes, float | None, float]:
         async with AsyncSpeaker("Agent Speaker", _backend=backend) as speaker:
             loop = asyncio.get_running_loop()
-            loop.call_later(0.05, backend.driver_write, speaker.id, floats([0.25] * 480))
+            loop.call_later(0.05, backend.system_write, speaker.id, floats([0.25] * 480))
             data, first_at = await speaker.read_timed()
             return data, first_at, time.perf_counter()
 
@@ -127,3 +172,66 @@ def test_an_async_read_timed_says_when_it_was_played(backend: _testing.TestBacke
     assert len(data) == 480 * 4
     assert first_at is not None
     assert after - 1 < first_at < after
+
+
+@contextlib.asynccontextmanager
+async def busy_default_pool() -> AsyncGenerator[None]:
+    """The app's own blocking work keeps its default thread pool full."""
+    loop = asyncio.get_running_loop()
+    pool = ThreadPoolExecutor(max_workers=2)
+    loop.set_default_executor(pool)
+    release = threading.Event()
+    # Each job ends by itself after 3 s, so a call starved by them fails its
+    # test's timeout instead of hanging the run.
+    blockers = [loop.run_in_executor(None, release.wait, 3) for _ in range(4)]
+    try:
+        yield
+    finally:
+        release.set()
+        await asyncio.gather(*blockers)
+        pool.shutdown()
+
+
+def test_a_busy_thread_pool_doesnt_starve_an_async_speaker(
+    backend: _testing.FakeBackend,
+) -> None:
+    async def main() -> bytes:
+        async with busy_default_pool(), AsyncSpeaker("Agent Speaker", _backend=backend) as speaker:
+            loop = asyncio.get_running_loop()
+            loop.call_later(0.05, backend.system_write, speaker.id, floats([0.25] * 480))
+            async with asyncio.timeout(2):
+                return await speaker.read()
+
+    assert len(asyncio.run(main())) == 480 * 4
+
+
+def test_a_busy_thread_pool_doesnt_starve_an_async_write_or_wait(
+    backend: _testing.FakeBackend,
+) -> None:
+    async def main() -> None:
+        async with busy_default_pool(), AsyncMicrophone("Agent Mic", _backend=backend) as mic:
+            done = asyncio.Event()
+            puller = asyncio.create_task(pull(backend, mic.id, done))
+            async with asyncio.timeout(3):
+                assert await mic.write(floats([0.5] * 4_800)) == 4_800
+                await mic.wait_for_playout()
+            done.set()
+            await puller
+
+    asyncio.run(main())
+
+
+def test_a_busy_thread_pool_doesnt_starve_an_async_playout(
+    backend: _testing.FakeBackend,
+) -> None:
+    async def main() -> None:
+        async with busy_default_pool(), AsyncMicrophone("Agent Mic", _backend=backend) as mic:
+            done = asyncio.Event()
+            puller = asyncio.create_task(pull(backend, mic.id, done))
+            async with mic.playout() as playout, asyncio.timeout(3):
+                playout.push(floats([0.5] * 4_800))
+                await playout.wait_idle()
+            done.set()
+            await puller
+
+    asyncio.run(main())

@@ -1,0 +1,10 @@
+# TOML formatting (tombi, ci.yml): layout only. Schemas are off so no key or array is
+# re-sorted, and the comments beside each group stay where they are.
+toml-version = "v1.0.0"
+
+[format.rules]
+indent-width = 4
+string-quote-style = "preserve"
+
+[schema]
+enabled = false

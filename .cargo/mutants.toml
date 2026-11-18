@@ -3,22 +3,30 @@
 # Coverage): code that only does something against a live driver, endpoint or
 # machine setup, checked in the test VM. And test code itself.
 exclude_globs = [
-    "crates/pattie/src/windows.rs",
-    "crates/pattie-cli/src/main.rs",
-    "crates/pattie-cli/src/measure.rs",
-    "crates/pattie-install/src/setup.rs",
-    "crates/pattie-msi/src/msi.rs",
+    "crates/sdk/src/backend/windows.rs",
+    "crates/cli/src/main.rs",
+    "crates/cli/src/commands/**",
+    "crates/install/src/setup/**",
+    "crates/msi/src/installer_api.rs",
+    "crates/msi/src/installer_api/**",
     # The Linux backend: not compiled on Windows, where mutation runs (locally and
     # nightly.yml), so every mutant there would read as missed. Its tests run on
     # Linux (ci.yml), the PipeWire parts against a real PipeWire.
-    "crates/pattie/src/linux.rs",
-    "crates/pattie/src/linux/**",
-    "crates/pattie/src/core_host/claim.rs",
+    "crates/sdk/src/backend/linux/mod.rs",
+    "crates/sdk/src/backend/linux/**",
+    "crates/sdk/src/backend/in_process/name_claim.rs",
+    "crates/sdk/src/os/*/linux.rs",
     # Test scaffolding (the contract suite's nodes), never shipped; coverage
     # leaves it out too.
-    "crates/pattie/src/core_host/test_backend.rs",
-    "testing/**",
+    "crates/sdk/src/backend/fake.rs",
     "core/tests/**",
+    # Test code in its own files under src/ (`tests.rs`, `tests/`): cargo-mutants
+    # names it without `tests::`, so the ` tests::` pattern below no longer catches it.
+    "crates/sdk/src/**/tests.rs",
+    "crates/sdk/src/**/tests/**",
+    "crates/install/src/**/tests.rs",
+    "crates/cli/src/**/tests.rs",
+    "crates/cli/src/**/tests/**",
     # The Python binding: its tests are Python (pytest), which cargo-mutants
     # can't run, so all ~480 of its mutants would read as missed. Mutation-test
     # it with a Python tool if it's wanted.
@@ -41,11 +49,11 @@ test_workspace = true
 exclude_re = [
     # Freeing memory or closing a handle: a leak isn't visible without an
     # allocator (or handle table) that counts.
-    "<impl Drop for (RingMemory|Core|Owner)>::drop",
-    "win::<impl Drop for Bell>::drop",
+    "<impl Drop for (RingMemory|Core|CoreOwner)>::drop",
+    "<impl Drop for Bell>::drop",
     # Test code inside src/ (the `mod tests` helpers).
     " tests::",
-    # The non-Windows stand-ins for pattie-install/src/setup.rs, which changes
+    # The non-Windows stand-ins for crates/install/src/setup/, which changes
     # the machine (VM-STEPS D.5 and R).
     "replace (install|uninstall) -> Result<Outcome, String> with Ok",
     # MMCSS "Pro Audio": its effect is only scheduling priority under load (the
@@ -62,7 +70,7 @@ exclude_re = [
     # agree, and seeing it with stereo takes 10 minutes of samples (~200 MB) in a
     # test. Pinned to its line and column; if the line moves these come back as
     # missed, so update it then.
-    "playout\\.rs:149:76: replace \\* with [+/] in Playout::push",
+    "queue\\.rs:49:76: replace \\* with [+/] in Playout::push",
     # Debug output: cosmetic, no behaviour.
     "<impl (std::)?fmt::Debug for ",
     # Equivalent: NaN becomes 0 either way (Rust's float-to-int cast saturates
@@ -74,20 +82,20 @@ exclude_re = [
     "replace \\| with \\^ in mu_law_encode",
     # Equivalent: keeping more history than taps - 1 changes nothing, since
     # `base` follows the history's length. Pinned to its line and column (as
-    # the queue cap above); line 310's mutant there is caught.
-    "convert\\.rs:309:31: replace - with [+/] in Resampler::process",
+    # the queue cap above); the next line's mutant there is caught.
+    "convert/mod\\.rs:131:31: replace - with [+/] in Resampler::process",
     # Equivalent output: an unreduced ratio only makes the filter table bigger.
     "replace gcd -> u32 with 1",
     # Equivalent: pushing nothing starts an empty reply, which ends at the next check.
     "replace > with >= in Playout::push",
     # Only waits of 49.7 days or more (INFINITE - 1 ms) differ.
-    "replace - with / in win::Bell::wait",
-    # The default: the Windows transport's lead, which only the VM sees; host
-    # tests use the test backend's own (core_host.rs).
-    "replace Transport::lead_frames -> u32",
+    "replace - with / in Bell::wait",
+    # The default: the Windows Backend's lead, which only the VM sees; host
+    # tests use the In-process core's own (backend/in_process/).
+    "replace Backend::lead_frames -> u32",
     # Linux-only code inside shared files, not compiled on Windows where mutation
-    # runs (as linux.rs above): the clock's and doorbell's `linux` modules, the
+    # runs (as backend/linux/ above): the clock's and doorbell's `linux` modules, the
     # fallback clock, and the Linux core's setup.
     " (linux|elsewhere)::",
-    " (process_core|HostTransport::for_process) ->",
+    " (process_core|InProcessBackend::for_process) ->",
 ]

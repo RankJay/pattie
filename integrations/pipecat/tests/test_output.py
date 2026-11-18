@@ -1,6 +1,7 @@
 """The output side: what the pipeline says reaches the meeting through the bot's
 microphone, at the pace a listener hears it."""
 
+import asyncio
 import time
 from typing import Any
 
@@ -12,7 +13,7 @@ from pipecat.tests.utils import SleepFrame, run_test
 from pipecat_pattie import PattieTransport, PattieTransportParams
 
 
-def speaking(backend: _testing.TestBackend, **params: Any) -> PattieTransport:
+def speaking(backend: _testing.FakeBackend, **params: Any) -> PattieTransport:
     """A transport with only its microphone, the pipeline at 24 kHz."""
     return PattieTransport(
         PattieTransportParams(
@@ -32,7 +33,7 @@ def speech(seconds: float, value: float = 0.25) -> OutputAudioRawFrame:
 
 
 async def test_speech_reaches_the_meeting_converted_to_the_microphones_format(
-    backend: _testing.TestBackend,
+    backend: _testing.FakeBackend,
 ) -> None:
     transport = speaking(backend)
     assert transport.microphone is not None
@@ -48,7 +49,7 @@ async def test_speech_reaches_the_meeting_converted_to_the_microphones_format(
 
 
 async def test_writes_take_as_long_as_the_speech_as_pipecat_expects(
-    backend: _testing.TestBackend,
+    backend: _testing.FakeBackend,
 ) -> None:
     transport = speaking(backend)
     assert transport.microphone is not None
@@ -64,8 +65,26 @@ async def test_writes_take_as_long_as_the_speech_as_pipecat_expects(
     assert elapsed > 0.9, elapsed
 
 
+async def test_with_nobody_recording_speech_still_takes_its_time_and_the_bot_stops(
+    backend: _testing.FakeBackend,
+) -> None:
+    # No meeting app has the microphone open, so nothing takes its audio. Like a
+    # real microphone nobody listens to, it drops what it's given at the pace it
+    # would have played, instead of holding the pipeline until Pipecat gives up
+    # on the transport (and then waiting on that write forever at shutdown).
+    transport = speaking(backend)
+
+    started = time.monotonic()
+    await asyncio.wait_for(run_test(transport.output(), frames_to_send=[speech(1.0)]), timeout=8)
+    elapsed = time.monotonic() - started
+
+    assert 0.9 < elapsed < 3, elapsed
+    assert transport.microphone is not None
+    assert transport.microphone.closed
+
+
 async def test_an_interruption_stops_the_speech_within_a_chunk_and_the_lead(
-    backend: _testing.TestBackend,
+    backend: _testing.FakeBackend,
 ) -> None:
     transport = speaking(backend)
     assert transport.microphone is not None

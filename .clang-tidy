@@ -1,0 +1,18 @@
+# Static checks for the Core (core/src), the C every component runs. Every check on here
+# reports nothing today, and CI keeps it that way (ci.yml). The driver has Microsoft's own
+# code analysis instead (MSBuild RunCodeAnalysis). Off, with why:
+# - easily-swappable-parameters: the Core's API takes (buffer, length) pairs by design;
+# - signed-bitwise: it flags the literal shift count in `x >> 8`, which is well defined;
+# - implicit-widening-of-multiplication-result: its one report is a compile-time
+#   _Static_assert whose product fits.
+Checks: >
+  -*,
+  clang-analyzer-*,
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-signed-bitwise,
+  -bugprone-implicit-widening-of-multiplication-result,
+  cert-*,
+  misc-redundant-expression,
+  readability-misleading-indentation
+WarningsAsErrors: '*'

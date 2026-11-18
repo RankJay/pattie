@@ -29,22 +29,16 @@ that talks to it over shared memory.
 > Nothing is published to crates.io yet.
 
 ---
+## How it works
 
-## Contents
-
-- [What it is, and isn't](#what-it-is-and-isnt)
-- [Where it stands](#where-it-stands)
-- [How it works](#how-it-works)
-- [Words we use](#words-we-use)
-- [Decisions to keep in mind](#decisions-to-keep-in-mind)
-- [Repository layout](#repository-layout)
-- [Getting started](#getting-started)
-- [Testing the driver (VM only)](#testing-the-driver-vm-only)
-- [Command reference](#command-reference)
-- [Contributing](#contributing)
-- [Not in v0](#not-in-v0)
-
----
+An app asks the driver for a Device: a name, a kind and a ring buffer (the **Ring**) in
+its own memory. The driver locks the Ring and adds an audio endpoint, so Windows and
+every app see "Microphone (Agent Mic)". After that, no system call is made per buffer: a
+timer in the driver moves 10 ms at a time between the Ring and Windows' audio engine.
+When the app drops the Device, or exits, or crashes, the endpoint goes. The rules live in
+a pure-C **core** (`core/`), tested on any PC; the Windows layer around it, the **shell**
+(`driver/`), stays thin. On Linux the SDK runs the same core inside the app, with
+PipeWire nodes instead of a driver.
 
 ## What it is, and isn't
 
@@ -52,9 +46,12 @@ that talks to it over shared memory.
 | --- | --- |
 | A Windows audio driver that turns "create a device named X" into a real endpoint | A capture library (use `cpal`), a DSP or echo-cancellation library |
 | A Rust SDK: create a Device, write to its mic or read from its speaker | A meeting bot or recorder |
-| A shared-memory transport between your app and the driver | A GUI app |
+| A shared-memory channel between your app and the driver | A GUI app |
 
-The same API is meant to work on Linux and macOS too. Windows is done to the v0 gate; Linux works (ADR 0018: PipeWire, inside the app's own process, no driver to install; Microphones and Speakers, every Device format, tested on a real PipeWire); macOS comes later.
+The same API is meant to work on Linux and macOS too. Windows is done to the v0 gate;
+Linux works (ADR 0018: PipeWire, inside the app's own process, no driver to install;
+Microphones and Speakers, every Device format, tested on a real PipeWire); macOS comes
+later.
 
 ## Where it stands
 
@@ -73,59 +70,6 @@ Measured in a VMware Windows 11 guest (test-signed driver, Driver Verifier on):
 | Added latency | ✅ ~28 ms (speaker), ~40 ms (mic): a third to a quarter of VB-CABLE's ~109 ms on the same VM. The original goal, under 10 ms, is still ahead (it needs smaller engine periods than Windows' default) |
 | Attestation-signed install, Secure Boot on | ⏳ the v0 gate, next |
 
-## How it works
-
-```mermaid
-flowchart LR
-    subgraph App["Your app (user mode)"]
-        SDK["pattie SDK<br/>(Rust)"]
-    end
-    subgraph Kernel["Windows kernel"]
-        Shell["Driver shell<br/>(ACX/KMDF, C)"]
-        Core["Driver core<br/>(pure C)"]
-    end
-    Engine["Windows audio engine"]
-    Zoom["Zoom, Teams, OBS…"]
-
-    SDK -- "control: create / remove Device<br/>(IOCTL on \\.\Pattie)" --> Shell
-    SDK <-- "audio: the Ring<br/>(shared memory, no syscalls)" --> Core
-    Shell --- Core
-    Shell <-- "endpoint per Device" --> Engine
-    Engine <--> Zoom
-```
-
-1. **The root device.** Windows only runs a driver when a device needs it, and virtual
-
-   hardware has no plug to announce one. So installation creates one permanent
-    "always plugged in" device, `Root\Pattie`. Windows loads `pattie.sys` for it, and
-    the driver opens its control door, `\\.\Pattie`.
-2. **Creating a Device.** The SDK allocates a ring buffer (the **Ring**) in the app's
-
-   memory and sends a create command with the name, kind and the Ring. The driver
-    locks the Ring's pages, then adds a child device under the root. Windows turns
-    that child into an audio endpoint: "Microphone (Agent Mic)".
-3. **Streaming.** No syscalls per buffer. The app writes samples into the Ring and a
-
-   timer in the driver moves 10 ms at a time between the Ring and Windows' audio
-    engine. If the app falls behind, the driver plays silence and counts a **Gap**; if
-    the Ring is full, the extra is dropped and counted as **Overflow**. Both show up in
-    `Device::stats()`.
-4. **Removing.** Dropping the `Device` (or the app exiting, or crashing) closes its
-
-   handle, and the driver removes the child, so the endpoint disappears.
-
-The driver is split in two on purpose:
-
-- **The core** (`core/src/`) is plain C with no Windows headers: the Device table, the
-name rules, the Ring protocol and format conversion. It's compiled into the driver
-unchanged, and into host-side tests, so all of its logic is tested on any PC
-without loading a driver.
-- **The shell** (`platforms/windows/driver/src/`) is the thin ACX/KMDF layer around it:
-devices, streams, the timer and tracing. It's checked in the test VM.
-
-Everything that can live in user space (validation, buffering policy, later drift
-correction) lives in the SDK, where a bug can't crash the machine.
-
 ## Words we use
 
 | Word | Meaning |
@@ -138,82 +82,11 @@ correction) lives in the SDK, where a bug can't crash the machine.
 | **Overflow** | Frames the app wrote that didn't fit in the Ring (dropped). |
 | **Root device** | The one permanent device, `Root\Pattie`, that makes Windows load the driver. |
 | **Endpoint** | What Windows and apps see: "Microphone (Agent Mic)". One per Device. |
-| **Core / shell** | The pure-C, host-tested logic / the Windows-specific kernel layer around it. |
-
-## Decisions to keep in mind
-
-The project keeps Architecture Decision Records for each of these; here is what they
-mean in practice when you touch the code.
-
-- **ACX on KMDF, kernel in C.** Microsoft's current audio driver model. C, not Rust,
-in the kernel for v0: the audio class extensions are C APIs, and a Rust kernel
-rewrite waits until the protocol is stable.
-- **Pure core, thin shell.** Logic goes in `core/`, testable on the host; the shell only
-adapts Windows to it. If you're adding an `if` to the shell, ask whether it belongs
-in the core.
-- **The app allocates the Ring; the driver locks it.** The driver never trusts it:
-every index and size the app can touch is checked, since a hostile app controls
-every byte of the Ring.
-- **One ABI header, versioned (1.0).** `core/include/pattie_abi.h` is the contract between SDK
-and driver. The SDK mirrors it in `crates/pattie/src/abi.rs`, and a test checks
-every constant, size and offset match. Hello negotiates: the driver accepts any SDK
-of its major and replies with its own version, and each connection speaks the
-lower minor, so an app with a newer SDK still works on an older driver. A minor
-only adds; the spare bytes in the header are reserved for formats and timestamps
-(ADR 0017).
-- **One format per Device, fixed at creation:** 44.1, 48 or 96 kHz with 1 to 8
-channels (48 kHz mono by default), float; at most 8 Devices, names up to 63
-characters, case-sensitive. Windows may open the endpoint as float or 16-bit PCM;
-the driver converts, the app always sees float. Writers and readers count in
-frames, and a write must end on a whole frame (ADR 0023).
-- **Same name and format, same endpoint.** A Device gets an ID derived from its
-kind, name and format (`pattie::stable_id`), so the system reuses the endpoint and
-keeps the user's settings for it: the circuit device's instance ID on Windows, the
-PipeWire `node.name` on Linux. Another format is another endpoint, because Windows
-keeps a saved format per endpoint (ADR 0015).
-- **Any interactive user's app may create a Device, without elevation.** Sandboxed
-Store apps may not. Abuse protections are post-v0.
-- **One interactive user at a time.** A Device is an ordinary system-wide endpoint,
-so on a machine shared by several signed-in users (fast user switching, Remote
-Desktop) every session lists it, and another user who picks one user's Speaker
-sends that app their audio. v0 is supported on single-user machines (ADR 0011
-amendment).
-- **Installing is a separate admin step,** done once: `pattie-cli install`. The SDK
-never installs anything and returns `Error::DriverNotInstalled` if the driver isn't
-there.
-- **Tracing stays in production builds.** ETW (TraceLogging, provider
-`Pattie.Driver`) costs nothing until someone records it.
-
-## Repository layout
-
-```
-core/
-  include/pattie_abi.h      the SDK ↔ driver contract (the only shared header)
-  src/                      pure C core: Device table, Ring, clock, PCM16 conversion
-                            (run by the Windows driver and, embedded, by the Linux backend)
-  tests/                    host tests for the core (Rust harness via bindgen + cc)
-  fuzz/                     libFuzzer + AddressSanitizer target for the core (Fuzzing the core)
-crates/
-  pattie/                   the Rust SDK (public API: Device, Writer, Reader, Playout, Converter, Stats, Error,
-                            stable_id); backends in src/windows.rs and src/linux.rs + src/linux/;
-                            src/core_host.rs runs the C core in-process (Linux, and the
-                            contract suite's test backend on every OS)
-  pattie-cli/               test tool: mic, speaker, measure, install, uninstall
-  pattie-install/           puts the driver on a machine or takes it off: the engine behind
-                            `pattie-cli install` and the MSI's custom action
-  pattie-msi/               the MSI's custom actions (a DLL over pattie-install)
-bindings/python/            the Python binding (`pattie` on PyPI), built with maturin
-integrations/pipecat/       the Pipecat transport (`pipecat-pattie` on PyPI)
-platforms/windows/
-  driver/                   the ACX/KMDF driver: shell sources, pattie.inf, project
-  vm/                       scripts for the test VM (package, install, probe, trace)
-  release/                  make-attestation-cab.ps1 (the .cab for Microsoft signing);
-                            make-msi.ps1, pattie.wxs, identity.wxi (the installer); winget/
-target/                     build output (driver, VM package, attestation cab, CodeQL)
-clippy.toml, deny.toml      banned methods; allowed dependencies (Lint rules, Dependency checks)
-.github/workflows/          CI, nightly checks and releases (Continuous integration)
-.cargo/mutants.toml         what mutation testing skips, with reasons
-```
+| **Device format** | A Device's sample rate and channels, fixed when it is created. Samples in a Device are 32-bit float. |
+| **Audio format** | How an app's own audio arrives: rate, channels and encoding. The Converter turns it into the Device format. |
+| **Stable ID** | Worked out from a Device's kind, name and format: the same Device always gets the same one, so Windows keeps its settings. |
+| **Core / Shell** | The pure-C, host-tested rules / the Driver's own code around them, which talks to Windows. |
+| **Driver** | What users install, `pattie.sys`: the Shell and the Core compiled together. |
 
 ## Getting started
 
@@ -239,10 +112,11 @@ cargo test --workspace
 ```
 
 This runs the core's C logic, the ABI mirror check and the SDK contract tests against
-the Core host (the C core in-process, with test-driven nodes). One test, `windows_without_driver`, expects the driver to be absent,
-so it fails on a machine where Pattie is installed; that's by design.
+the In-process core (the C core in the test's own process, with the Fake backend). One
+test, `windows_without_driver`, expects the driver to be absent, so it fails on a
+machine where Pattie is installed; that's by design.
 
-Formatting, lints and coverage: see [Before you commit](#before-you-commit).
+Formatting and lints: see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ### Build the driver
 
@@ -250,430 +124,20 @@ Use the **64-bit** MSBuild (the 32-bit one picks a validator that can't check x6
 drivers):
 
 ```bash
-"/c/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" platforms/windows/driver/pattie.vcxproj -p:Configuration=Release -p:Platform=x64
+"/c/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" driver/pattie.vcxproj -p:Configuration=Release -p:Platform=x64
 ```
 
 Add `-p:RunCodeAnalysis=true` for Microsoft's driver code analysis. Output goes to
 `target/driver/x64/Release/`. Building never signs, installs or loads anything. More in
-[platforms/windows/driver/README.md](platforms/windows/driver/README.md).
-
-## Testing the driver (VM only)
-
-> ⚠️ **Never load the driver on your own PC.** A kernel bug crashes the machine,
-> and test-signed drivers need test signing on, which weakens Secure Boot (and can
-> trip BitLocker and anti-cheat). Every load happens in a VM you can roll back.
-
-The loop:
-
-1. **Host:** build the test package. It builds the driver and CLI, and test-signs them
-
-   with a throwaway certificate that only exists in memory:
-2. Copy `target\vm-package` into the guest as `C:\vm-package`.
-3. **Guest, once:** `prepare-vm.ps1` turns test signing on (Secure Boot must be off in
-
-   the VM's settings), then reboot. Take a snapshot.
-4. **Guest, every build:** go back to that snapshot, then install:
-   ```
-    powershell -ExecutionPolicy Bypass -File .\install-in-vm.ps1 -Verifier
-   ```
-
-    and reboot (Driver Verifier needs it).
-5. **Guest:** run `.\pattie-cli.exe mic "Agent Mic"`. It appears in Settings → Sound;
-
-   record it with Sound Recorder and you hear a tone. Press Enter and it's gone.
-
-Snapshots are the undo button: if the guest crashes, go back and try the next build.
-
-- **Crashes:** the guest writes a small minidump. Read it on the host with
-`platforms/windows/vm/analyze-minidump.ps1`, which is deliberately light. Don't open
-the full `MEMORY.DMP` with `!analyze -v`: it can fill a 32 GB RAM on host.
-- **No live kernel debugger:** with one attached, VMware guests bugcheck at boot
-(`NMI_HARDWARE_FAILURE`) on hosts running Windows' own hypervisor. It's a known
-VMware issue.
-- **Tracing:** `trace-run.ps1 <name> [-Cpu]` in the guest records the driver's events;
-`analyze-trace.ps1 <file>.etl` on the host summarises them.
-
-## Command reference
-
-### `pattie-cli`
-
-| Command | What it does |
-| --- | --- |
-| `pattie-cli mic "<name>" [--tone <hz>]` | Creates a mic and streams a sine tone into it (440 Hz by default) until Enter |
-| `pattie-cli speaker "<name>"` | Creates a speaker and shows a level meter of what's played to it |
-| `pattie-cli measure mic\|speaker "<name>" [--seconds 60]` | Opens the endpoint the way Zoom does (WASAPI) and reports latency, glitches, Gap and Overflow |
-| `pattie-cli measure drift "<name>" [--seconds 3600] [--ppm 50] [--uncorrected]` | Feeds a live source that many ppm off the device through a `LiveWriter` and logs its latency every 10 s as CSV: drift compensation over hours (ADR 0022) |
-| `pattie-cli install <package folder or pattie.inf>` | **Admin.** Creates the root device if missing and installs the driver. Safe to repeat. |
-| `pattie-cli uninstall` | **Admin.** Removes the root device, leftover endpoints and the driver package |
-
-### Scripts
-
-| Script | Where | What it does |
-| --- | --- | --- |
-| `platforms/windows/vm/make-test-package.ps1` | host | Builds and test-signs everything into `target\vm-package` |
-| `platforms/windows/release/make-attestation-cab.ps1 -Version a.b.c.d` | host | Builds the release driver and packs the `.cab` for Microsoft's attestation signing (signs nothing itself) |
-| `platforms/windows/vm/analyze-minidump.ps1 <dmp>` | host | A crash's bug check and the driver's frames, kept under 1 GB of memory |
-| `platforms/windows/vm/analyze-trace.ps1 <etl>` | host | The driver's events and DPC/ISR summary from a recording |
-| `prepare-vm.ps1` | guest | Test signing on, small crash dumps, kernel debugging off; refuses outside VMware |
-| `install-in-vm.ps1 [-Verifier] [-Signed <folder>]` | guest | Installs the test-signed driver, or with `-Signed` the Microsoft-signed one (needs Secure Boot on) |
-| `probe-endpoint.ps1` | guest | Opens each Pattie audio interface the way Windows' audio service does |
-| `trace-run.ps1 <name> [-Cpu]` | guest | Records the driver's ETW events (and CPU/audio with `-Cpu`) until Enter |
-| `cpu-load.ps1` | guest | Keeps every core busy, for tests under load |
-| `many-mics.ps1` | guest | Runs several `pattie-cli mic` processes at once |
-
-### Releasing a signed driver
-
-1. `make-attestation-cab.ps1 -Version 0.1.0.0` (raise the version every submission).
-2. Sign the `.cab` with the company's EV code-signing certificate.
-3. Submit it in Partner Center (Hardware → Submit new hardware), Windows 11 x64.
-4. Download the signed files and install them with
-
-   `pattie-cli install <folder>` on a clean machine, Secure Boot on.
-
-## Contributing
-
-### How work is done here
-
-- **Tests first.** Behaviour lands in small slices: write the failing test, make it
-pass, and for anything subtle check that breaking the code breaks the test.
-- **Logic in the core, Windows in the shell.** New rules about Devices, names or the
-Ring go in `core/src/` with a host test in `core/tests/`. The shell stays thin.
-- **The ABI is a contract.** Change `pattie_abi.h` and `abi.rs` together; the
-`abi_mirror` test fails if they drift. Within major 1, only add (a new minor),
-and use the reserved spare bytes only for what ADR 0017 placed there.
-- **Check driver changes against Microsoft's samples** (the ACX samples and SdcaVad in
-`Windows-driver-samples`) before taking them to the VM. Most hard-won fixes came
-from matching what those samples do.
-
-### Before you commit
-
-Run each check yourself, in this order. Each must finish with no warnings.
-
-```bash
-cargo fmt --all -- --check
-```
-
-```bash
-cargo clippy --workspace --all-targets -- -D warnings
-```
-
-```bash
-cargo test --workspace
-```
-
-If you changed dependencies (`Cargo.toml` or `Cargo.lock`), check them
-(Dependency checks, below):
-
-```bash
-cargo deny check
-```
-
-If you touched the driver, build it too (warnings are errors there), with Microsoft's
-code analysis:
-
-```bash
-"/c/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" platforms/windows/driver/pattie.vcxproj -p:Configuration=Release -p:Platform=x64 -p:RunCodeAnalysis=true
-```
-
-### Continuous integration
-
-Three workflows in `.github/workflows/` run on GitHub's hosted runners (Windows
-Server 2025 with Visual Studio 2026, and Ubuntu 24.04):
-
-| Workflow | When | What |
-| --- | --- | --- |
-| `ci.yml` | every push to `main`/`master`, every pull request | fmt, clippy, docs and tests on Windows and on Linux (GCC and Clang); the Linux backend's tests on a headless PipeWire (all but the restart test); cargo-deny; the driver build with Microsoft's code analysis; Miri on the Ring; a 60 s fuzz run |
-| `nightly.yml` | daily at 03:17 UTC, or by hand | CodeQL with Microsoft's driver queries (fails on any result without a suppression; SARIF uploaded); cargo-mutants (Windows); coverage summary (Linux, with the Clang matching rustc's LLVM); a 10 min fuzz run keeping its corpus |
-| `release.yml` | a tag `v<a.b.c.d>` (the driver version), or by hand | the unsigned driver package, the attestation cab, and `pattie-cli` for Windows and Linux, attached to a **draft** Release |
-
-Still by hand: anything that loads the driver (the VM steps, the gate run), signing
-the cab with the EV certificate and submitting it, the real-desktop Linux checks
-(Zoom, browsers), and the PipeWire restart test.
-
-The runners' own WDK isn't reliable, so CI builds the driver against the WDK and SDK
-NuGet packages (`platforms/windows/driver/packages.config`, version 10.0.28000.2526,
-matching the installed kit). Local builds keep using the installed WDK; to build the
-way CI does:
-
-```bash
-nuget restore platforms/windows/driver/packages.config -PackagesDirectory target/nuget
-```
-
-```bash
-"/c/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" platforms/windows/driver/pattie.vcxproj -p:Configuration=Release -p:Platform=x64 -p:RunCodeAnalysis=true -p:PattieWdkNuGet=true
-```
-
-`make-attestation-cab.ps1 -WdkNuGet` does the same for the cab, and finds MSBuild
-with `vswhere`, so it works with any Visual Studio edition.
-
-### Coverage
-
-`cargo-llvm-cov` prints a per-file table of the lines, regions and branches the tests
-run, **the C core included**: for this the core is compiled with Visual Studio's
-clang (`CC`), whose LLVM version must match rustc's (`rustc -vV`). Two tools, once:
-
-```bash
-rustup component add llvm-tools-preview
-```
-
-```bash
-cargo install cargo-llvm-cov --locked
-```
-
-Then:
-
-```bash
-CC="/c/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/Llvm/x64/bin/clang-cl.exe" cargo llvm-cov --workspace --include-ffi --summary-only --ignore-filename-regex 'pattie[\\/]src[\\/]windows\.rs|pattie-cli[\\/]src[\\/](main|measure)\.rs|pattie-install[\\/]src[\\/]setup\.rs|pattie-msi[\\/]src[\\/]msi\.rs|core_host[\\/]test_backend'
-```
-
-Add `--show-missing-lines` to list the lines each file misses. Left out of the
-figures, because they only do something against a live driver, endpoint or machine
-setup (their logic was moved into tested modules first; the rest is checked in the
-test VM):
-
-| Left out | Why | Where its logic is tested |
-| --- | --- | --- |
-| `crates/pattie/src/windows.rs` | The IOCTL transport to the real driver | VM; the not-installed path has a test |
-| `crates/pattie-cli/src/main.rs` | The mic/speaker loops on a live Device | Parsing: `cli.rs` |
-| `crates/pattie-cli/src/measure.rs` | WASAPI streams on a live endpoint | Pairing and statistics: `latency.rs` |
-| `crates/pattie-install/src/setup.rs` | SetupAPI calls that change the machine | INF parsing and the outcome (exit codes, reboot): `lib.rs`; VM for the rest |
-| `crates/pattie-msi/src/msi.rs` | The MSI's custom-action entry points (Windows Installer calls) | What each action returns: `lib.rs`; the authoring: `tests/authoring.rs`; VM (R3) for the rest |
-| `crates/pattie/src/core_host/test_backend.rs` | Test scaffolding (the contract suite's nodes), never shipped | The contract tests it serves |
-
-### Property tests
-
-`core/tests/tests/properties_commands.rs` and `properties_ring.rs` run with
-`cargo test`. Instead of hand-picked cases, each states a rule and checks it against
-hundreds of random sequences (`proptest`), shrinking any failure to the smallest one:
-
-- **Commands:** random commands from several apps, well-formed or not, against a
-  model of the rules. After every step the status and the whole live Device table
-  must match the model: IDs never reused, at most 8 Devices, no duplicate name of a
-  kind, each Device owned by its app.
-- **Microphone:** an app overrunning its Ring while the driver reads (float or
-  PCM16) and skips stale audio: every frame delivered must be the model's.
-- **Speaker:** the driver writes, an honest app reads: same.
-- **Hostile Ring:** the app rewrites the header's counters and capacity between
-  driver calls. The driver must take and store exactly what the header allows,
-  count every other frame as Gap or Overflow, only move its own counters forward,
-  and never write past the Ring (guard words after it must stay intact).
-
-Each was checked by injecting bugs into the core: a duplicate check ignoring kind,
-removing another app's Device, accepting an older major ABI version, agreeing on a
-minor the driver doesn't speak, a reused ID, a missed
-overrun, trusting a writer one frame backwards, an undercounted Gap, a write past
-the end. All are caught.
-
-### Fuzzing the core
-
-`core/fuzz/fuzz_core.c` feeds random bytes to the core as a script of hostile apps
-(raw requests, Rings of every wrong size, header rewrites, closes, streaming), with
-AddressSanitizer stopping at the first out-of-bounds or use-after-free access. Every
-Ring is a `malloc` of exactly the size the driver is told, so even a one-byte read
-past it is caught. Build it (Visual Studio's clang, which ships libFuzzer and ASan):
-
-```bash
-mkdir -p target/fuzz/corpus && MSYS_NO_PATHCONV=1 "/c/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/Llvm/x64/bin/clang-cl.exe" -fsanitize=fuzzer,address /Zi /O1 /MT /W4 /WX -Wconversion -Wsign-conversion /std:c17 /Icore/include /Icore/src core/src/pattie_core.c core/src/pattie_ring.c core/src/pattie_clock.c core/src/pattie_pcm16.c core/fuzz/fuzz_core.c /Fotarget/fuzz/ /Fetarget/fuzz/fuzz_core.exe
-```
-
-Run it for as long as you like (here 10 minutes); ASan's DLL must be on the `PATH`:
-
-```bash
-PATH="/c/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/Llvm/x64/lib/clang/22/lib/windows:$PATH" target/fuzz/fuzz_core.exe -max_total_time=600 -max_len=4096 target/fuzz/corpus
-```
-
-- `/MT` matters: with `/MD` the program links the static C runtime's `malloc`
-  anyway and ASan can't see the Rings. `22` in the path is clang's major version.
-- It uses about 1 GB of memory at most (libFuzzer stops at 2 GB).
-- `target/fuzz/corpus` keeps the inputs that reached new code, so each run starts
-  where the last left off. On a finding it writes `crash-<hash>` with the input and
-  ASan's report names the line; rerun one input with
-  `target/fuzz/fuzz_core.exe crash-<hash>`. Turn each finding into a test in
-  `core/tests/` before fixing it.
-- Checked: an injected read past the end of the Ring was caught in a few seconds.
-
-### Mutation testing
-
-`cargo-mutants` makes small deliberate bugs in the Rust code (a flipped comparison,
-a function returning a default) and runs the tests against each. A bug no test
-catches is a gap coverage can't show: the line ran, but nothing checked its result.
-It skips what coverage skips (`.cargo/mutants.toml`). Once:
-
-```bash
-cargo install cargo-mutants --locked
-```
-
-Then, occasionally rather than before every commit (a full run takes a few minutes):
-
-```bash
-cargo mutants -j 4 --output target
-```
-
-`target/mutants.out/missed.txt` lists the bugs no test caught. The C core can't be
-mutated this way; its key checks get the same treatment by hand (delete the check,
-confirm a test fails), as listed under Property tests.
-
-### Miri
-
-Miri runs the Rust tests in an interpreter that checks every memory access, and
-fails on undefined behaviour the compiled tests can pass straight through: reading
-past an allocation, a misaligned or dangling pointer, a data race between threads.
-It runs on the Ring's own tests (`crates/pattie/src/ring.rs`), which play the
-driver's side in Rust with the C core's counter protocol, two of them on a second
-thread. The SDK's other tests reach the Ring through the Core host's C core, and Miri
-can't run C. Once:
-
-```bash
-rustup toolchain install nightly --profile minimal --component miri,rust-src
-```
-
-Then, after any change to `ring.rs` (each runs in seconds):
-
-```bash
-cargo +nightly miri test -p pattie --lib
-```
-
-```bash
-MIRIFLAGS="-Zmiri-many-seeds=0..32" cargo +nightly miri test -p pattie --lib ring::
-```
-
-The second tries 32 thread schedules, for the races only some schedules show.
-`-Zmiri-strict-provenance` and `-Zmiri-tree-borrows` (stricter pointer rules) pass
-too. Checked: a missing `Release` on the write counter, a frame address one past
-its slot and a misaligned counter all pass the normal tests, and Miri reports each.
-
-### Dependency checks
-
-`cargo deny check` (`deny.toml`) fails on a dependency with a known vulnerability,
-an unmaintained or yanked release (the RustSec database, fetched on each run), a
-licence outside the allowed list, a wildcard version, or a source other than
-crates.io. One duplicate is allowed by name: `syn` 2 and 3, an upstream split
-between the CLI's `windows` crate and bindgen, which only test builds use. Once:
-
-```bash
-cargo install cargo-deny --locked
-```
-
-### CodeQL on the driver
-
-Microsoft's driver queries (`microsoft/windows-drivers`, the "recommended" suite: 106
-checks for kernel and C bugs, a superset of what driver certification requires)
-run over everything the driver build compiles, the core included. Once, from
-Microsoft's current table (Learn: "Run CodeQL analysis on Windows driver code"):
-CodeQL CLI 2.25.5 unpacked to `D:\Tools\codeql-home\codeql`, then
-
-```bash
-/d/Tools/codeql-home/codeql/codeql.exe pack download microsoft/windows-drivers@1.10.0 microsoft/cpp-queries@0.0.5
-```
-
-After a driver change, build the database from a full rebuild, then analyze it
-(a few minutes in all):
-
-```bash
-MSYS_NO_PATHCONV=1 /d/Tools/codeql-home/codeql/codeql.exe database create target/codeql/db --language=cpp --source-root=. --overwrite --command="\"C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\amd64\MSBuild.exe\" platforms\windows\driver\pattie.vcxproj -t:Rebuild -p:Configuration=Release -p:Platform=x64"
-```
-
-```bash
-MSYS_NO_PATHCONV=1 /d/Tools/codeql-home/codeql/codeql.exe database analyze target/codeql/db microsoft/windows-drivers:windows-driver-suites/recommended.qls microsoft/cpp-queries:AlertSuppression.ql --format=sarifv2.1.0 --output=target/codeql/pattie.sarif
-```
-
-Want: no result without a suppression in `target/codeql/pattie.sarif` (Visual
-Studio's or VS Code's SARIF viewer shows them). A false positive is suppressed in
-place with `/* codeql[rule-id] */` on the line above, after a comment saying why.
-There is one: the padding check on the packet array in `stream.c`, which doesn't know
-`ExAllocatePool2` zeroes memory.
-
-### Linux (WSL2)
-
-The core, the SDK and the CLI also build and test on Linux, where the Linux backend
-is being built (ADR 0018). On this PC that's the WSL2 "Ubuntu" distribution. Once,
-inside it:
-
-```bash
-sudo apt-get install build-essential clang libclang-dev pkg-config pipewire pipewire-pulse wireplumber
-```
-
-```bash
-curl --proto =https --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --component clippy,rustfmt
-```
-
-Then from the checkout (`cd /mnt/d/Projects/pattie`), with Linux build output
-kept apart from Windows' `target/` and bindgen pointed at Ubuntu's libclang:
-
-```bash
-CARGO_TARGET_DIR=~/pattie-target LIBCLANG_PATH=/usr/lib/llvm-21/lib cargo test --workspace
-```
-
-The same with `clippy --workspace --all-targets -- -D warnings`, and with `CC=clang`
-(and its own `CARGO_TARGET_DIR`) to build the core with Clang instead of GCC. One
-test, `windows_without_driver`, runs only on Windows.
-
-The Linux backend's tests against a real PipeWire (a Microphone recorded with
-`pw-record`, a Speaker fed by `pw-play`) are opt-in, as they need PipeWire running:
-
-```bash
-CARGO_TARGET_DIR=~/pattie-target LIBCLANG_PATH=/usr/lib/llvm-21/lib cargo test -p pattie --test linux_pipewire -- --ignored --test-threads=1
-```
-
-One of them, `a_device_comes_back_by_itself_after_pipewire_restarts`, restarts your
-user's PipeWire service to check that a Device returns on its own (brief Goal 4).
-In WSL that's harmless; on a desktop it briefly interrupts all audio.
-
-What an app on Linux needs (ADR 0018):
-
-- **PipeWire as the sound server.** Where PulseAudio is (Ubuntu 22.04 and Mint 21
-  by default), creating a Device fails with `Error::PulseAudioInUse`: apps would
-  never see it. PipeWire is the default since Ubuntu 22.10 and Fedora 34.
-- **In a Flatpak, one permission**, or creating a Device fails with
-  `Error::FlatpakNeedsPipeWire`:
-
-  ```yaml
-  finish-args:
-    - --filesystem=xdg-run/pipewire-0:ro
-  ```
-
-  One gap: names are held across apps with abstract Unix sockets, which live in
-  the network namespace. A Flatpak without network access (`--share=network`)
-  has a namespace of its own, so it can't see other apps' names, and two apps
-  could then create Devices with the same name.
-
-### Lint rules
-
-Where they live, from widest to narrowest:
-
-| Where | Applies to | What it enforces |
-| --- | --- | --- |
-| Root `Cargo.toml`, `[workspace.lints]` | every crate (each opts in with `[lints] workspace = true`) | The `unsafe` rules below; no `dbg!`, `todo!`, `unimplemented!`; no pointer casts that hide a type or alignment change (`ptr_as_ptr`, `cast_ptr_alignment`, `transmute_ptr_to_ptr`); rustdoc links and HTML must be valid |
-| `clippy.toml` | every crate | Methods banned by name, each with its reason: `std::process::exit` (skips destructors, so a live Device isn't removed cleanly) and `std::thread::sleep` (a 1 ms sleep can last ~15.6 ms and starve an audio loop: use the SDK's `Writer::write_paced` or `Reader::read_paced`, which wake on the Device's doorbell). Also: the `unsafe fn` contract rule covers private functions, and tests may unwrap |
-| Top of `crates/pattie/src/lib.rs` | the SDK only | It runs inside other people's apps: no `unwrap`/`expect`/`panic!`, no printing, no silently narrowing casts, and every public item is documented and has `Debug` |
-| `#![forbid(unsafe_code)]` at the top of a module | `cli.rs`, `latency.rs`, `error.rs`, `identity.rs`, `transport.rs` | The compiler guarantees these hold no `unsafe`, so a reviewer can skip them for memory safety |
-| `core/tests/build.rs`, `crates/pattie/build.rs`, `pattie.vcxproj` | the C core (and the driver) | Warnings are errors, plus implicit narrowing and sign changes: `-Wconversion -Wsign-conversion` under clang, C4242/C4244/C4365 under MSVC |
-
-To make an exception in one place, use `#[expect(clippy::…, reason = "…")]` on that
-item or statement, never a crate-wide `allow`: the reason is written down, and the
-build fails when the exception is no longer needed. The one file-wide exception is
-`measure.rs`, whose WASAPI blocks are each one COM call sequence
-(`multiple_unsafe_ops_per_block`, with its reason at the top of the file).
-
-### `unsafe` code
-
-Calling Windows from Rust is always `unsafe`: Windows is C, and Rust can't check the
-other side. The rules here:
-
-- keep each `unsafe` block to **one** unsafe operation, with a `// SAFETY:` comment
-saying why it's correct (clippy fails the build otherwise:
-`undocumented_unsafe_blocks`, `multiple_unsafe_ops_per_block`);
-- wrap it in a safe function or type (handles freed in `Drop`), so callers never see it;
-- shared memory with the kernel (`crates/pattie/src/ring.rs`) is the one place that
-deserves the most care; it follows the Ring protocol exactly, and Miri checks it (above).
-
-### Style
-
-- Rust: `rustfmt` defaults, clippy clean.
-- C: C17, warnings as errors, no floating point in the driver (the core converts audio
-with integer arithmetic on the bit patterns), no allocation on the streaming path.
-- Comments say *why*, not what. Docs live next to what they describe: this file for
-the project, `platforms/windows/driver/README.md` for the driver.
+[driver/README.md](driver/README.md).
+
+## More
+
+- [CONTRIBUTING.md](CONTRIBUTING.md): how work is done here, the checks before a commit,
+  the repository layout, the lint rules.
+- [SECURITY.md](SECURITY.md): how to report a vulnerability.
+- [driver/README.md](driver/README.md): the driver, and testing it in a VM.
+- [bindings/python/](bindings/python/README.md), [integrations/pipecat/](integrations/pipecat/README.md): Python, Pipecat.
 
 ## Not in v0
 
@@ -683,11 +147,7 @@ goal, still ahead), 24-bit and rates beyond 44.1 / 48 / 96 kHz, more than 8
 channels, installer self-heal (the SDK reconnecting by itself after a driver
 update), the macOS backend, bindings for C, Node and Swift.
 
-Built since the v0 scope was set: 44.1, 48 and 96 kHz with 1 to 8 channels, drift
-compensation and frame timestamps, barge-in playout, the Linux backend, the
-Python binding, a Pipecat transport (`integrations/pipecat`), and a Windows MSI
-installer with in-place driver upgrades (`platforms/windows/release`, ADR 0024).
-
 ## License
 
-Privately owned.
+Licensed under the [Apache License, Version 2.0](LICENSE). See [NOTICE](NOTICE) for the
+copyright.

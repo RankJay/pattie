@@ -1,0 +1,3 @@
+# Formatted by hand and frozen at ABI 1.0: whitespace changes would still churn every
+# reader's copy of the one header apps, the driver and the SDK share.
+core/include/pattie_abi.h

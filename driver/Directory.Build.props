@@ -1,0 +1,17 @@
+<!--
+  Opt-in: build against the WDK and SDK NuGet packages instead of an installed
+  WDK (CI; GitHub's Windows images don't reliably ship the WDK). Restore them first
+  (packages.config), then build with -p:PattieWdkNuGet=true. Without the flag
+  this file does nothing and the installed WDK is used, as before.
+-->
+<Project>
+  <PropertyGroup>
+    <PattieKitVersion>10.0.28000.2526</PattieKitVersion>
+    <PattieNuGetDir>$(MSBuildThisFileDirectory)..\target\nuget\</PattieNuGetDir>
+  </PropertyGroup>
+  <ImportGroup Condition="'$(PattieWdkNuGet)' == 'true'">
+    <Import Project="$(PattieNuGetDir)Microsoft.Windows.SDK.CPP.$(PattieKitVersion)\build\native\Microsoft.Windows.SDK.cpp.props" />
+    <Import Project="$(PattieNuGetDir)Microsoft.Windows.SDK.CPP.x64.$(PattieKitVersion)\build\native\Microsoft.Windows.SDK.cpp.x64.props" />
+    <Import Project="$(PattieNuGetDir)Microsoft.Windows.WDK.x64.$(PattieKitVersion)\build\native\Microsoft.Windows.WDK.x64.props" />
+  </ImportGroup>
+</Project>

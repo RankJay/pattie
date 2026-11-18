@@ -1,0 +1,10 @@
+# The WDK and SDK from NuGet, into target/nuget: the runner's own WDK isn't reliable
+# (actions/runner-images#13071, #14263).
+name: restore-wdk
+description: Restore the WDK and SDK NuGet packages the driver builds with
+runs:
+  using: composite
+  steps:
+    - name: Restore the WDK and SDK from NuGet
+      shell: pwsh
+      run: nuget restore driver/packages.config -PackagesDirectory target/nuget -NonInteractive

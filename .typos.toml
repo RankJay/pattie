@@ -1,0 +1,13 @@
+# Spelling check (typos, ci.yml). Every word allowed here is spelled the way another
+# system spells it, or is part of a name that cannot change in a restructure.
+[default.extend-identifiers]
+PUNICODE_STRING = "PUNICODE_STRING"  # Windows' pointer-to-UNICODE_STRING type
+
+[default.extend-words]
+Pn = "Pn"  # "PnP", Plug and Play, as Windows writes it
+BA = "BA"  # the SDDL alias for built-in administrators in the Control device's ACL
+replys = "replys"  # a test name: "the reply's own frames"
+datas = "datas"  # PipeWire's `struct spa_buffer` field (spa/buffer/buffer.h)
+
+[files]
+extend-exclude = ["LICENSE", "NOTICE", "*.lock"]

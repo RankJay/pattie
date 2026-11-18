@@ -1,12 +1,14 @@
 [package]
 name = "pattie-python"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
 publish = false
 description = "Python binding of the Pattie SDK (ADR 0019), built with maturin as the pattie package"
 
 [lib]
-name = "_pattie"
+name = "_native"
 crate-type = ["cdylib"]
 # A Python extension can't link a Rust test binary on its own: tests are the
 # pytest suite in tests/, run against the built module.
@@ -15,11 +17,11 @@ doctest = false
 
 [features]
 # Dev builds only (pyproject.toml, [tool.uv]): adds pattie._testing, the SDK's
-# test backend, so pytest runs without the driver. Published wheels leave it out.
-test-backend = ["pattie/test-backend"]
+# Fake backend, so pytest runs without the driver. Published wheels leave it out.
+fake-backend = ["pattie/fake-backend"]
 
 [dependencies]
-pattie = { path = "../../crates/pattie" }
+pattie.workspace = true
 # abi3-py314: one wheel for CPython 3.14 and every later version.
 # generate-import-lib: Windows builds need no Python install to link.
 pyo3 = { version = "0.30", features = ["abi3-py314", "extension-module", "generate-import-lib"] }

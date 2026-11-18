@@ -23,12 +23,12 @@ def as_floats(data: bytes) -> list[float]:
     return array.array("f", data).tolist()
 
 
-def pull_for(backend: _testing.TestBackend, device_id: int, seconds: float) -> list[float]:
+def pull_for(backend: _testing.FakeBackend, device_id: int, seconds: float) -> list[float]:
     """Plays the system's part for `seconds`: takes 10 ms of audio every 10 ms."""
     taken: list[float] = []
     until = time.monotonic() + seconds
     while time.monotonic() < until:
-        got = backend.driver_read(device_id, 480)
+        got = backend.system_read(device_id, 480)
         if got is not None:
             taken.extend(as_floats(got))
         time.sleep(TEN_MS)
@@ -36,29 +36,38 @@ def pull_for(backend: _testing.TestBackend, device_id: int, seconds: float) -> l
 
 
 def test_a_live_writers_audio_reaches_the_system_once_its_buffer_fills(
-    backend: _testing.TestBackend,
+    backend: _testing.FakeBackend,
 ) -> None:
     with pattie.Microphone("Agent Mic", _backend=backend) as mic:
         live = mic.live_writer()
-        assert live.push(floats([0.5] * 9_600)) == 9_600  # 200 ms from the source
+        # 200 ms from the source, before anything records the microphone.
+        assert live.push(floats([0.5] * 9_600)) == 9_600
 
         taken = pull_for(backend, mic.id, 0.4)
 
-        assert sum(1 for s in taken if abs(s - 0.5) < 1e-3) >= 4_800
+        # It plays from its target: 40 ms (1,920 frames), or the Backend's lead
+        # and a quarter where that's more (Linux: 2,560). The older audio would
+        # only be latency, so it's dropped and counted.
+        lead = backend.lead_frames
+        target = max(1_920, lead + -(-lead // 4))
+        assert sum(1 for s in taken if abs(s - 0.5) < 1e-3) >= 960
         stats = live.stats
-        assert (stats.dropped_frames, isinstance(stats.correction_ppm, float)) == (0, True)
+        assert (stats.dropped_frames, isinstance(stats.correction_ppm, float)) == (
+            9_600 - target,
+            True,
+        )
 
 
-def test_a_live_writer_converts_its_format(backend: _testing.TestBackend) -> None:
+def test_a_live_writer_converts_its_format(backend: _testing.FakeBackend) -> None:
     with pattie.Microphone("Agent Mic", _backend=backend) as mic:
-        live = mic.live_writer(pattie.Format(24_000, "pcm16"))
+        live = mic.live_writer(pattie.AudioFormat(24_000, "pcm16"))
 
         # 240 samples at 24 kHz: 480 frames at 48 kHz.
         assert live.push(array.array("h", [1_000] * 240).tobytes()) == 480
 
 
 def test_a_live_writer_past_one_second_drops_its_oldest_audio(
-    backend: _testing.TestBackend,
+    backend: _testing.FakeBackend,
 ) -> None:
     with pattie.Microphone("Agent Mic", _backend=backend) as mic:
         live = mic.live_writer()
@@ -70,7 +79,7 @@ def test_a_live_writer_past_one_second_drops_its_oldest_audio(
 
 
 def test_a_live_writer_holds_the_writer_and_closing_the_mic_ends_it(
-    backend: _testing.TestBackend,
+    backend: _testing.FakeBackend,
 ) -> None:
     mic = pattie.Microphone("Agent Mic", _backend=backend)
     live = mic.live_writer()
@@ -79,20 +88,20 @@ def test_a_live_writer_holds_the_writer_and_closing_the_mic_ends_it(
 
     mic.close()
 
-    assert backend.driver_read(mic.id, 480) is None, "the Device is still live"
+    assert backend.system_read(mic.id, 480) is None, "the Device is still live"
     with pytest.raises(ValueError, match="closed"):
         live.push(floats([0.1] * 10))
 
 
 def test_a_microphones_clock_says_how_far_and_when_the_system_took(
-    backend: _testing.TestBackend,
+    backend: _testing.FakeBackend,
 ) -> None:
     with pattie.Microphone("Agent Mic", _backend=backend) as mic:
         mic.write_nowait(floats([0.5] * 960))
         before_any = (mic.clock, mic.next_play_time)
 
         start = time.perf_counter()
-        backend.driver_read(mic.id, 480)
+        backend.system_read(mic.id, 480)
         end = time.perf_counter()
         clock, next_at = mic.clock, mic.next_play_time
 
@@ -106,13 +115,13 @@ def test_a_microphones_clock_says_how_far_and_when_the_system_took(
 
 
 def test_read_timed_says_when_the_first_frame_read_was_played(
-    backend: _testing.TestBackend,
+    backend: _testing.FakeBackend,
 ) -> None:
     with pattie.Speaker("Agent Speaker", _backend=backend) as speaker:
         assert speaker.read_timed(timeout=0) == (b"", None)
 
         start = time.perf_counter()
-        backend.driver_write(speaker.id, floats([0.25] * 480))
+        backend.system_write(speaker.id, floats([0.25] * 480))
         end = time.perf_counter()
         data, first_at = speaker.read_timed(timeout=1)
 
@@ -127,7 +136,7 @@ def test_read_timed_says_when_the_first_frame_read_was_played(
 
 
 def test_a_read_timed_from_another_thread_wakes_when_audio_is_played(
-    backend: _testing.TestBackend,
+    backend: _testing.FakeBackend,
 ) -> None:
     with pattie.Speaker("Agent Speaker", _backend=backend) as speaker:
         result: list[tuple[bytes, float | None]] = []
@@ -135,7 +144,7 @@ def test_a_read_timed_from_another_thread_wakes_when_audio_is_played(
         reader.start()
         time.sleep(0.05)
 
-        backend.driver_write(speaker.id, floats([0.5] * 480))
+        backend.system_write(speaker.id, floats([0.5] * 480))
         reader.join(timeout=2)
 
     assert not reader.is_alive()

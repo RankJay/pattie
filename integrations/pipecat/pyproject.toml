@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "A Pipecat transport for Pattie: a bot's own virtual microphone and speaker, which meeting apps see as real devices"
 readme = "README.md"
 requires-python = ">=3.14"
-license = "MIT OR Apache-2.0"
+license = "Apache-2.0"
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.14",
@@ -22,13 +22,13 @@ dependencies = ["pipecat-ai>=1.16,<2", "pattie>=0.1"]
 [dependency-groups]
 dev = ["pytest>=9", "pytest-asyncio>=1", "ruff>=0.14", "ty>=0.0.1a30"]
 
+[tool.uv]
+config-settings-package = { pattie = { build-args = "--features fake-backend" } }
+
 [tool.uv.sources]
-# The binding from this repository, built with its test backend
+# The binding from this repository, built with its Fake backend
 # (pattie._testing) so these tests run without the driver.
 pattie = { path = "../../bindings/python", editable = true }
-
-[tool.uv]
-config-settings-package = { pattie = { build-args = "--features test-backend" } }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/pipecat_pattie"]
@@ -38,12 +38,8 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 
 [tool.ruff]
-target-version = "py314"
-line-length = 99
-
-[tool.ruff.lint]
-select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "SIM", "RUF", "PT", "ASYNC", "PL"]
-ignore = ["PLR2004"]
+# The shared rules are in the repo's root ruff.toml.
+extend = "../../ruff.toml"
 
 [tool.ty.environment]
 python-version = "3.14"

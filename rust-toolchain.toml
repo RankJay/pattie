@@ -1,0 +1,8 @@
+# The Rust toolchain every build uses, here and in CI. rustup reads this file and
+# installs this exact version, so a new stable release cannot change lints or
+# formatting in the middle of other work. Change the version here, nowhere else.
+# Jobs that need nightly (Miri) say so with RUSTUP_TOOLCHAIN in the workflow.
+[toolchain]
+channel = "1.97.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

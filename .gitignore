@@ -4,6 +4,7 @@
 .ai/
 .agents/
 .claude/
+docs/
 
 # Python binding: uv's virtual environment and build output
 bindings/python/.venv/

@@ -1,4 +1,4 @@
-# Every push and pull request: the checks README "Before you commit" lists, on
+# Every push and pull request: the checks CONTRIBUTING.md "Before you commit" lists, on
 # Windows and Linux, plus what's fast enough to run every time (real-PipeWire
 # tests, Miri, a fuzzer smoke run, the driver build). Slower checks: nightly.yml.
 name: CI
@@ -26,31 +26,18 @@ jobs:
     name: Rust (Windows)
     runs-on: windows-2025-vs2026
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master; installs rustup where it is missing
         with:
-          components: clippy, rustfmt
-      - uses: Swatinem/rust-cache@v2
+          toolchain: stable
+      - name: Rust toolchain (the version in rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       # The workspace includes the Python binding; PyO3's build needs Python 3.14+.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.14"
-      - name: Point bindgen at Visual Studio's libclang
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          # .cargo/config.toml names the Community edition; the runner has another.
-          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -prerelease -property installationPath
-          $dir = Join-Path $vs 'VC\Tools\Llvm\x64\bin'
-          if (-not (Test-Path (Join-Path $dir 'libclang.dll'))) { $dir = 'C:\Program Files\LLVM\bin' }
-          "LIBCLANG_PATH=$dir" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
-      # act cannot start a Windows container while Docker is in Linux mode, so the
-      # Windows job is mapped onto an Ubuntu image (-P). runner.os is then Linux.
-      - name: Point bindgen at libclang
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq clang libclang-dev
-          echo "LIBCLANG_PATH=$(dirname "$(printf '%s\n' /usr/lib/llvm-*/lib/libclang.so* | sort -V | tail -1)")" >> "$GITHUB_ENV"
+      - uses: ./.github/actions/setup-libclang
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo doc --workspace --no-deps
@@ -68,20 +55,20 @@ jobs:
     env:
       CC: ${{ matrix.cc }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master; installs rustup where it is missing
         with:
-          components: clippy
-      - uses: Swatinem/rust-cache@v2
+          toolchain: stable
+      - name: Rust toolchain (the version in rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: ${{ matrix.cc }}
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.14"
-      - name: Install clang and libclang (bindgen)
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq clang libclang-dev
-      - name: Point bindgen at libclang
-        run: echo "LIBCLANG_PATH=$(dirname "$(printf '%s\n' /usr/lib/llvm-*/lib/libclang.so* | sort -V | tail -1)")" >> "$GITHUB_ENV"
+      - uses: ./.github/actions/setup-libclang
+      - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo doc --workspace --no-deps
         env:
@@ -92,29 +79,23 @@ jobs:
     name: Linux backend on real PipeWire
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Install PipeWire, WirePlumber and libclang
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq clang libclang-dev pipewire pipewire-bin wireplumber dbus
-          echo "LIBCLANG_PATH=$(dirname "$(printf '%s\n' /usr/lib/llvm-*/lib/libclang.so* | sort -V | tail -1)")" >> "$GITHUB_ENV"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master; installs rustup where it is missing
+        with:
+          toolchain: stable
+      - name: Rust toolchain (the version in rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: ./.github/actions/setup-libclang
       - name: Build the tests
         run: cargo test -p pattie --test linux_pipewire --no-run
       - name: Run them against a headless PipeWire
-        # No systemd user session on the runner: start PipeWire and WirePlumber by
-        # hand. The restart test needs `systemctl --user`, so it stays manual.
-        run: |
-          export XDG_RUNTIME_DIR="$RUNNER_TEMP/xdg"
-          mkdir -m 700 "$XDG_RUNTIME_DIR"
-          dbus-run-session -- bash -euo pipefail -c '
-            pipewire & sleep 1
-            wireplumber & sleep 2
-            wpctl status
-            cargo test -p pattie --test linux_pipewire -- --ignored --test-threads=1 \
-              --skip a_device_comes_back_by_itself_after_pipewire_restarts
-          '
+        # The restart test needs `systemctl --user`, so it stays manual.
+        uses: ./.github/actions/headless-pipewire
+        with:
+          run: >-
+            cargo test -p pattie --test linux_pipewire -- --ignored --test-threads=1
+            --skip a_device_comes_back_by_itself_after_pipewire_restarts
 
   python:
     name: Python binding (${{ matrix.os }})
@@ -131,15 +112,19 @@ jobs:
       run:
         working-directory: bindings/python
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master; installs rustup where it is missing
+        with:
+          toolchain: stable
+      - name: Rust toolchain (the version in rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: python
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           python-version: "3.14"
-      # Builds the extension with the SDK's test backend (pyproject's [tool.uv]).
+      # Builds the extension with the SDK's Fake backend (pyproject's [tool.uv]).
       - run: uv sync --locked
       - run: uv run --no-sync ruff format --check .
       - run: uv run --no-sync ruff check .
@@ -161,15 +146,19 @@ jobs:
       run:
         working-directory: integrations/pipecat
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master; installs rustup where it is missing
+        with:
+          toolchain: stable
+      - name: Rust toolchain (the version in rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: pipecat
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           python-version: "3.14"
-      # Builds the local binding with its test backend (pyproject's [tool.uv]).
+      # Builds the local binding with its Fake backend (pyproject's [tool.uv]).
       - run: uv sync --locked
       - run: uv run --no-sync ruff format --check .
       - run: uv run --no-sync ruff check .
@@ -177,16 +166,10 @@ jobs:
       - run: uv run --no-sync pytest -q
       - name: Against a real, headless PipeWire
         if: matrix.os == 'linux'
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq pipewire pipewire-bin wireplumber dbus
-          export XDG_RUNTIME_DIR="$RUNNER_TEMP/xdg"
-          mkdir -m 700 "$XDG_RUNTIME_DIR"
-          dbus-run-session -- bash -euo pipefail -c '
-            pipewire & sleep 1
-            wireplumber & sleep 2
-            PATTIE_PIPEWIRE=1 uv run --no-sync pytest -q tests/test_pipewire.py
-          '
+        uses: ./.github/actions/headless-pipewire
+        with:
+          working-directory: integrations/pipecat
+          run: PATTIE_PIPEWIRE=1 uv run --no-sync pytest -q tests/test_pipewire.py
       # The pin allows any 1.x: catch a newer Pipecat that breaks the transport.
       - name: Against the newest Pipecat 1.x
         if: matrix.os == 'linux'
@@ -198,31 +181,33 @@ jobs:
     name: Dependencies (cargo-deny)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: EmbarkStudios/cargo-deny-action@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: EmbarkStudios/cargo-deny-action@70f81531115945ba6eb6b941ec9d39d063438eb9 # v2.1.2
 
   driver:
     name: Driver build and code analysis
     runs-on: windows-2025-vs2026
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The 64-bit MSBuild: with the 32-bit one (the action's default) the NuGet
       # kit picks its x86 tools and fails (stampinf, Prefast, InfVerif; checked
       # locally 2026-11-14).
-      - uses: microsoft/setup-msbuild@v2
+      - uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3.0.0
         with:
           msbuild-architecture: x64
-      - name: Restore the WDK and SDK from NuGet
-        # The runner's own WDK isn't reliable (actions/runner-images#13071, #14263).
-        run: nuget restore platforms/windows/driver/packages.config -PackagesDirectory target/nuget -NonInteractive
+      - uses: ./.github/actions/restore-wdk
       - name: Build (Release, warnings are errors, Microsoft's code analysis)
-        run: msbuild platforms/windows/driver/pattie.vcxproj -p:Configuration=Release -p:Platform=x64 -p:RunCodeAnalysis=true -p:PattieWdkNuGet=true -nologo -v:minimal
+        run: msbuild driver/pattie.vcxproj -p:Configuration=Release -p:Platform=x64 -p:RunCodeAnalysis=true -p:PattieWdkNuGet=true -nologo -v:minimal
       # The installer (ADR 0024) stays buildable: a test MSI from the driver just
       # built, then Windows Installer's ICE validation. Only a build check: the
       # payload's catalog is a placeholder (no signing in CI), so the MSI isn't
       # kept. Release MSIs are built by hand from Partner Center's output.
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master; installs rustup where it is missing
+        with:
+          toolchain: stable
+      - name: Rust toolchain (the version in rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Install WiX v6
         shell: pwsh
         run: |
@@ -235,7 +220,7 @@ jobs:
           New-Item -ItemType Directory -Force $payload | Out-Null
           Copy-Item target/driver/x64/Release/pattie.inf, target/driver/x64/Release/pattie.sys $payload
           Set-Content "$payload/pattie.cat" 'placeholder: CI builds the MSI only'
-          ./platforms/windows/release/make-msi.ps1 -Payload $payload
+          ./release/make-msi.ps1 -Payload $payload
           $msi = Get-ChildItem target/msi/*-test.msi | Select-Object -First 1
           if (-not $msi) { throw 'make-msi.ps1 produced no MSI' }
           wix msi validate $msi.FullName
@@ -244,32 +229,44 @@ jobs:
   miri:
     name: Miri (the Ring's unsafe code)
     runs-on: ubuntu-24.04
+    # Miri needs nightly. This overrides rust-toolchain.toml for the whole job.
+    env:
+      RUSTUP_TOOLCHAIN: nightly
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master; installs rustup where it is missing
         with:
+          toolchain: nightly
           components: miri, rust-src
       - run: cargo miri setup
       # Only the SDK's pure-Rust unit tests: on Linux the lib also holds the Linux
       # backend's tests, which call the C core, and Miri can't run C.
-      - run: "cargo miri test -p pattie --lib -- ring:: error:: identity::"
+      - run: "cargo miri test -p pattie --lib -- ring:: error:: stable_id::"
       - run: "cargo miri test -p pattie --lib -- ring::"
         env:
           MIRIFLAGS: -Zmiri-many-seeds=0..32
+
+  style:
+    name: C, spelling and TOML style
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      # Each tool's version is pinned here, so CI and a local run agree.
+      - name: C format (clang-format, .clang-format; the ABI header is left alone)
+        run: uvx clang-format@23.1.5 --dry-run --Werror $(git ls-files '*.c' '*.h')
+      - name: C static checks on the Core (clang-tidy, .clang-tidy)
+        run: uvx clang-tidy@23.1.4 core/src/*.c -- -std=c17 -Icore/include -Icore/src
+      - name: Spelling (typos, .typos.toml)
+        uses: crate-ci/typos@276087d9a4f06398b3e04825487805e2d7375888 # v1.52.2
+      - name: TOML format and lint (tombi, tombi.toml)
+        run: uvx tombi@1.11.3 format --check && uvx tombi@1.11.3 lint
 
   fuzz-smoke:
     name: Fuzz the core (60 s)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - name: Build the fuzzer (libFuzzer + AddressSanitizer)
-        # clang is on GitHub's image; installing it keeps the job portable (act's
-        # images have none).
-        run: |
-          command -v clang >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq clang; }
-          mkdir -p target/fuzz/corpus
-          clang -fsanitize=fuzzer,address -g -O1 -std=c17 -Wall -Wextra -Werror -Wconversion -Wsign-conversion \
-            -Icore/include -Icore/src core/src/pattie_core.c core/src/pattie_ring.c core/src/pattie_clock.c \
-            core/src/pattie_pcm16.c core/fuzz/fuzz_core.c -o target/fuzz/fuzz_core
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/build-fuzzer
       - name: Run it
-        run: target/fuzz/fuzz_core -max_total_time=60 -max_len=4096 -rss_limit_mb=2048 target/fuzz/corpus
+        run: target/fuzz/hostile_apps -max_total_time=60 -max_len=4096 -rss_limit_mb=2048 target/fuzz/corpus

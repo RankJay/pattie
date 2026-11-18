@@ -1,0 +1,33 @@
+[package]
+name = "pattie"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Create named virtual microphones and speakers that other apps see as real audio devices"
+publish = false
+
+[dependencies]
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Performance", "Win32_System_Threading"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libloading = "0.8"
+libc = "0.2"  # eventfd and poll for the doorbell (os/doorbell/)
+
+[features]
+# Hidden, for tests: compiles the In-process core (the C core) outside Linux, so the
+# contract suite runs against it on every OS. Off by default: Windows app builds
+# compile no C (ADR 0012).
+fake-backend = []
+
+[build-dependencies]
+cc.workspace = true  # compiles the C core for the In-process core (build.rs)
+
+[dev-dependencies]
+# The SDK's own tests run with its Fake backend.
+pattie = { path = ".", features = ["fake-backend"] }
+
+[lints]
+workspace = true

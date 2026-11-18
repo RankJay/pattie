@@ -1,0 +1,29 @@
+# Editor settings for every file in the repo. Most editors read this file on their
+# own; the rest need the EditorConfig plugin. The limits match the refactor's
+# standards: LF line ends, one final newline, no trailing spaces, spaces not tabs.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+[*.{rs,c,h}]
+max_line_length = 100
+
+[*.{py,pyi}]
+max_line_length = 99
+
+[*.ps1]
+max_line_length = 120
+
+[*.{yml,yaml,json,vcxproj,props,targets,config,wxs,wxi,svg}]
+indent_size = 2
+
+# The driver's INF is checked out with CRLF, as Windows tools have always seen it
+# (see .gitattributes).
+[*.inf]
+end_of_line = crlf

@@ -39,7 +39,7 @@ def close_promptly(close: Callable[[], None], thread: threading.Thread) -> float
     return time.monotonic() - started
 
 
-def test_close_ends_a_write_that_waits_forever(backend: _testing.TestBackend) -> None:
+def test_close_ends_a_write_that_waits_forever(backend: _testing.FakeBackend) -> None:
     mic = pattie.Microphone("Agent Mic", _backend=backend)
     # Nobody records, so without close() this would never finish.
     thread, result = run_in_thread(lambda: mic.write(floats([0.1] * 48_000)))
@@ -51,7 +51,7 @@ def test_close_ends_a_write_that_waits_forever(backend: _testing.TestBackend) ->
 
 
 def test_close_ends_a_wait_for_playout_that_waits_forever(
-    backend: _testing.TestBackend,
+    backend: _testing.FakeBackend,
 ) -> None:
     mic = pattie.Microphone("Agent Mic", _backend=backend)
     mic.write_nowait(floats([0.1] * 480))
@@ -63,7 +63,7 @@ def test_close_ends_a_wait_for_playout_that_waits_forever(
     assert result == [False]
 
 
-def test_close_ends_a_read_that_waits_forever(backend: _testing.TestBackend) -> None:
+def test_close_ends_a_read_that_waits_forever(backend: _testing.FakeBackend) -> None:
     speaker = pattie.Speaker("Agent Speaker", _backend=backend)
     thread, result = run_in_thread(lambda: speaker.read(timeout=None))
 
@@ -71,10 +71,10 @@ def test_close_ends_a_read_that_waits_forever(backend: _testing.TestBackend) -> 
 
     assert took < PROMPT, f"close() took {took:.2f} s"
     assert result == [b""]
-    assert backend.driver_write(speaker.id, floats([0.1] * 10)) is False, "still live"
+    assert backend.system_write(speaker.id, floats([0.1] * 10)) is False, "still live"
 
 
-def test_close_ends_a_read_timed_that_waits_forever(backend: _testing.TestBackend) -> None:
+def test_close_ends_a_read_timed_that_waits_forever(backend: _testing.FakeBackend) -> None:
     speaker = pattie.Speaker("Agent Speaker", _backend=backend)
     thread, result = run_in_thread(lambda: speaker.read_timed(timeout=None))
 
@@ -85,10 +85,10 @@ def test_close_ends_a_read_timed_that_waits_forever(backend: _testing.TestBacken
 
 
 def test_a_speakers_stats_and_clock_never_wait_for_a_read(
-    backend: _testing.TestBackend,
+    backend: _testing.FakeBackend,
 ) -> None:
     with pattie.Speaker("Agent Speaker", _backend=backend) as speaker:
-        backend.driver_write(speaker.id, floats([0.1] * 480))
+        backend.system_write(speaker.id, floats([0.1] * 480))
         speaker.read()
         thread, _ = run_in_thread(lambda: speaker.read(timeout=2))
 
@@ -96,7 +96,7 @@ def test_a_speakers_stats_and_clock_never_wait_for_a_read(
         stats, clock = speaker.stats, speaker.clock  # a meter, from another thread
         waited = time.monotonic() - started
 
-        backend.driver_write(speaker.id, floats([0.1] * 480))
+        backend.system_write(speaker.id, floats([0.1] * 480))
         thread.join(timeout=5)
     assert waited < 0.1, f"waited {waited:.2f} s for the read"
     assert stats.buffered_frames == 0
@@ -104,14 +104,14 @@ def test_a_speakers_stats_and_clock_never_wait_for_a_read(
     assert clock.frames == 480
 
 
-def test_a_write_still_finishes_when_listeners_take_it(backend: _testing.TestBackend) -> None:
+def test_a_write_still_finishes_when_listeners_take_it(backend: _testing.FakeBackend) -> None:
     """Waiting in pieces mustn't cut a write short: with a listener, it all goes in."""
     with pattie.Microphone("Agent Mic", _backend=backend) as mic:
         done = threading.Event()
 
         def listen() -> None:
             while not done.is_set():
-                backend.driver_read(mic.id, 480)
+                backend.system_read(mic.id, 480)
                 time.sleep(0.005)
 
         threading.Thread(target=listen, daemon=True).start()
