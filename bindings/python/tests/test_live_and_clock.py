@@ -45,11 +45,17 @@ def test_a_live_writers_audio_reaches_the_system_once_its_buffer_fills(
 
         taken = pull_for(backend, mic.id, 0.4)
 
-        # It plays from its 40 ms target; the older 160 ms would only be
-        # latency, so it's dropped and counted.
+        # It plays from its target: 40 ms (1,920 frames), or the Backend's lead
+        # and a quarter where that's more (Linux: 2,560). The older audio would
+        # only be latency, so it's dropped and counted.
+        lead = backend.lead_frames
+        target = max(1_920, lead + -(-lead // 4))
         assert sum(1 for s in taken if abs(s - 0.5) < 1e-3) >= 960
         stats = live.stats
-        assert (stats.dropped_frames, isinstance(stats.correction_ppm, float)) == (7_680, True)
+        assert (stats.dropped_frames, isinstance(stats.correction_ppm, float)) == (
+            9_600 - target,
+            True,
+        )
 
 
 def test_a_live_writer_converts_its_format(backend: _testing.FakeBackend) -> None:

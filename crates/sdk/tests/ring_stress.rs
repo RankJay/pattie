@@ -163,8 +163,12 @@ fn speaker_run(channels: u16) {
         let mut buffer = vec![0.0f32; 700 * width];
         while got.len() < SAMPLES as usize && Instant::now() < deadline {
             let want = sizes.next(700) as usize * width;
+            // Seen before the read, so an empty read after it means everything
+            // played has been read: the system's last chunks can land between a
+            // read that finds the Ring empty and its `finished`.
+            let done = finished.load(Ordering::Acquire);
             let read = rx.read(&mut buffer[..want]).unwrap();
-            if read == 0 && finished.load(Ordering::Acquire) {
+            if read == 0 && done {
                 break;
             }
             got.extend_from_slice(&buffer[..read * width]);
