@@ -9,35 +9,113 @@ mod methods;
 ///
 /// Only what's lost during the call counts. Silence before the first write, or
 /// in a pause between writes, is Gap too, but the app chose it.
+///
+/// Warnings come at most once a second: a loop that keeps losing audio (a
+/// write_nowait() into a full Ring, 50 calls a second) would otherwise log
+/// every call. What's lost in between is held and summed into the next
+/// warning, or the one close() gives, so the warnings add up to every frame lost.
 struct LossWatch {
     strict: bool,
+    held: Mutex<Held>,
 }
 
+/// Losses not yet in a warning, and when the last warning was.
+#[derive(Default)]
+struct Held {
+    gap: u64,
+    overflow: u64,
+    /// Calls that lost audio since the last warning.
+    calls: u64,
+    since: Option<Instant>,
+    last_warning: Option<Instant>,
+    /// The call that last lost audio: write() or write_nowait().
+    what: &'static str,
+}
+
+/// The least time between two warnings.
+const WARNING_EVERY: Duration = Duration::from_secs(1);
+
 impl LossWatch {
+    fn new(strict: bool) -> LossWatch {
+        LossWatch {
+            strict,
+            held: Mutex::new(Held::default()),
+        }
+    }
+
     fn check(
         &self,
         py: Python<'_>,
         before: sdk::Stats,
         after: sdk::Stats,
-        what: &str,
+        what: &'static str,
     ) -> PyResult<()> {
         let gap = after.gap_frames.saturating_sub(before.gap_frames);
         let overflow = after.overflow_frames.saturating_sub(before.overflow_frames);
         if gap == 0 && overflow == 0 {
             return Ok(());
         }
-        let message = format!(
-            "{what}: {gap} frames of Gap (listeners heard silence: the app wrote too late) and \
-             {overflow} frames of Overflow (dropped: no room)"
-        );
         if self.strict {
-            return Err(AudioLost::new_err(message));
+            return Err(AudioLost::new_err(message(what, gap, overflow)));
         }
-        py.import("logging")?
-            .call_method1("getLogger", ("pattie",))?
-            .call_method1("warning", (message,))?;
-        Ok(())
+        let now = Instant::now();
+        let mut held = lock(py, &self.held);
+        held.gap += gap;
+        held.overflow += overflow;
+        held.calls += 1;
+        held.since.get_or_insert(now);
+        held.what = what;
+        if held
+            .last_warning
+            .is_some_and(|last| now.duration_since(last) < WARNING_EVERY)
+        {
+            return Ok(()); // summed into the next warning
+        }
+        held.last_warning = Some(now);
+        let text = held.take(now);
+        drop(held);
+        warn(py, &text)
     }
+
+    /// Logs what's held back (from close(): nothing lost goes unreported).
+    fn flush(&self, py: Python<'_>) -> PyResult<()> {
+        let mut held = lock(py, &self.held);
+        if held.calls == 0 {
+            return Ok(());
+        }
+        let text = held.take(Instant::now());
+        drop(held);
+        warn(py, &text)
+    }
+}
+
+impl Held {
+    /// The warning for everything held, which it then forgets.
+    fn take(&mut self, now: Instant) -> String {
+        let mut text = message(self.what, self.gap, self.overflow);
+        if self.calls > 1 {
+            let seconds = self
+                .since
+                .map_or(0.0, |since| now.duration_since(since).as_secs_f64());
+            text.push_str(&format!(", in {} calls over {seconds:.1} s", self.calls));
+        }
+        (self.gap, self.overflow, self.calls, self.since) = (0, 0, 0, None);
+        text
+    }
+}
+
+fn message(what: &str, gap: u64, overflow: u64) -> String {
+    format!(
+        "{what}: {gap} frames of Gap (listeners heard silence: the app wrote too late) and \
+         {overflow} frames of Overflow (dropped: no room)"
+    )
+}
+
+fn warn(py: Python<'_>, text: &str) -> PyResult<()> {
+    py.import("logging")?
+        .call_method1("getLogger", ("pattie",))?
+        .call_method1("warning", (text,))?;
+    Ok(())
 }
 
 /// What a microphone handed out in place of write(): a Playout or a LiveWriter.

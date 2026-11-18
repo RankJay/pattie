@@ -30,7 +30,7 @@ impl Microphone {
             id: device.id(),
             format,
             device_format,
-            watch: LossWatch { strict },
+            watch: LossWatch::new(strict),
             closing: AtomicBool::new(false),
             writing: Mutex::new(Writing {
                 writer: None,
@@ -239,6 +239,9 @@ impl Microphone {
     fn close(&self, py: Python<'_>) {
         self.closing.store(true, Ordering::Release);
         let mut writing = lock(py, &self.writing);
+        // Losses held back from the last second's warnings, reported now. A
+        // logging error here can't stop the close.
+        let _ = self.watch.flush(py);
         let mut device = lock(py, &self.device);
         match lock(py, &self.handed).take() {
             Some(Handed::Playout(slot)) => {

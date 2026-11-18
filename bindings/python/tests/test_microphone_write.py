@@ -4,6 +4,7 @@ tested in Rust; these tests check that Python reaches them correctly."""
 
 import array
 import logging
+import re
 import threading
 
 import pytest
@@ -102,6 +103,25 @@ def test_write_nowait_drops_what_does_not_fit_and_logs_it(
         assert written < 10_000
         assert mic.stats.overflow_frames == 10_000 - written
     assert "Overflow" in caplog.text
+
+
+def test_lost_audio_is_logged_at_most_once_a_second_and_none_of_it_unreported(
+    backend: _testing.FakeBackend, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A loop that keeps overflowing logs once, not once a call; what's held
+    back is summed into the next warning, or the one close() gives."""
+    with caplog.at_level(logging.WARNING, logger="pattie"):
+        mic = pattie.Microphone("Agent Mic", _backend=backend)
+        for _ in range(50):
+            mic.write_nowait(floats([0.1] * 10_000))
+        during = len(caplog.records)
+        overflow = mic.stats.overflow_frames
+        mic.close()
+
+    logged = sum(int(n) for n in re.findall(r"(\d+) frames of Overflow", caplog.text))
+    assert during == 1
+    assert len(caplog.records) == 2
+    assert logged == overflow
 
 
 def test_strict_raises_audio_lost_instead_of_logging(backend: _testing.FakeBackend) -> None:
