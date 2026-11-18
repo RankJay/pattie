@@ -1,6 +1,5 @@
 """AsyncMicrophone: a Microphone whose writes and waits are awaitable."""
 
-import asyncio
 from collections.abc import Buffer
 from types import TracebackType
 from typing import Self
@@ -13,7 +12,7 @@ from pattie._native import (
     Microphone,
     Stats,
 )
-from pattie.aio.pieces import _PIECE_SECONDS
+from pattie.aio.pieces import _PIECE_SECONDS, _Waits
 from pattie.aio.playout import AsyncPlayout
 
 # One float sample, in bytes: a frame of the Microphone below is one per channel.
@@ -47,6 +46,7 @@ class AsyncMicrophone:
         self._mic = Microphone(
             name, rate=rate, channels=channels, strict=strict, _backend=_backend
         )
+        self._waits = _Waits()
 
     @property
     def id(self) -> int:
@@ -84,7 +84,7 @@ class AsyncMicrophone:
         while written * self._frame_bytes < len(samples):
             start = written * self._frame_bytes
             piece = samples[start : start + self._piece_bytes]
-            written += await asyncio.to_thread(self._mic.write, piece, _PIECE_SECONDS)
+            written += await self._waits.run(self._mic.write, piece, _PIECE_SECONDS)
         return written
 
     def write_nowait(self, data: Buffer) -> int:
@@ -93,7 +93,7 @@ class AsyncMicrophone:
 
     async def wait_for_playout(self) -> None:
         """Waits until listeners have taken everything written so far."""
-        while not await asyncio.to_thread(self._mic.wait_for_playout, _PIECE_SECONDS):
+        while not await self._waits.run(self._mic.wait_for_playout, _PIECE_SECONDS):
             pass
 
     def playout(self, format: AudioFormat | None = None) -> AsyncPlayout:  # noqa: A002
@@ -118,7 +118,8 @@ class AsyncMicrophone:
 
     async def aclose(self) -> None:
         """Removes the microphone. Waits for a write in progress to finish its piece."""
-        await asyncio.to_thread(self._mic.close)
+        await self._waits.run(self._mic.close)
+        self._waits.shut_down()
 
     async def __aenter__(self) -> Self:
         return self

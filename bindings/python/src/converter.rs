@@ -27,8 +27,17 @@ impl Converter {
         data: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyBytes>> {
         let bytes = audio_bytes(data)?;
-        let mut output = Vec::new();
-        lock(py, &self.inner).convert(&bytes, &mut output);
+        // Converting (resampling, above all) without the GIL: other threads, the
+        // event loop's among them, go on meanwhile. The lock is taken only here,
+        // always without the GIL, so the two can't deadlock.
+        let output = py.detach(|| {
+            let mut output = Vec::new();
+            self.inner
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .convert(&bytes, &mut output);
+            output
+        });
         Ok(PyBytes::new(py, &output))
     }
 }

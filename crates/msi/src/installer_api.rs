@@ -63,6 +63,11 @@ fn custom_action_data(install: MSIHANDLE) -> String {
             buffer.resize(length as usize + 1, 0);
             continue;
         }
+        // Any other failure: no data, which InstallDriver reports and fails on,
+        // rather than whatever the buffer holds.
+        if result != ERROR_SUCCESS {
+            return String::new();
+        }
         buffer.truncate(length as usize);
         return String::from_utf16_lossy(&buffer);
     }

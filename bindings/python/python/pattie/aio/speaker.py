@@ -1,6 +1,5 @@
 """AsyncSpeaker: a Speaker whose reads are awaitable."""
 
-import asyncio
 from collections.abc import AsyncIterator
 from types import TracebackType
 from typing import Self
@@ -11,7 +10,7 @@ from pattie._native import (
     Speaker,
     Stats,
 )
-from pattie.aio.pieces import _PIECE_SECONDS
+from pattie.aio.pieces import _PIECE_SECONDS, _Waits
 
 
 class AsyncSpeaker:
@@ -31,6 +30,7 @@ class AsyncSpeaker:
         self._speaker = Speaker(
             name, rate=rate, channels=channels, format=format, _backend=_backend
         )
+        self._waits = _Waits()
 
     @property
     def id(self) -> int:
@@ -54,7 +54,7 @@ class AsyncSpeaker:
 
     async def read(self) -> bytes:
         """Waits for other apps to play something, and returns it."""
-        while not (chunk := await asyncio.to_thread(self._speaker.read, _PIECE_SECONDS)):
+        while not (chunk := await self._waits.run(self._speaker.read, _PIECE_SECONDS)):
             pass
         return chunk
 
@@ -62,7 +62,7 @@ class AsyncSpeaker:
         """Waits for other apps to play something, and returns it with when its
         first frame was played (a ``time.perf_counter()`` time)."""
         while True:
-            data, first_at = await asyncio.to_thread(self._speaker.read_timed, _PIECE_SECONDS)
+            data, first_at = await self._waits.run(self._speaker.read_timed, _PIECE_SECONDS)
             if data:
                 return data, first_at
 
@@ -74,13 +74,14 @@ class AsyncSpeaker:
     async def __aiter__(self) -> AsyncIterator[bytes]:
         # Short waits, so the loop notices aclose() and cancellation soon.
         while not self._speaker.closed:
-            chunk = await asyncio.to_thread(self._speaker.read, _PIECE_SECONDS)
+            chunk = await self._waits.run(self._speaker.read, _PIECE_SECONDS)
             if chunk:
                 yield chunk
 
     async def aclose(self) -> None:
         """Removes the speaker."""
-        await asyncio.to_thread(self._speaker.close)
+        await self._waits.run(self._speaker.close)
+        self._waits.shut_down()
 
     async def __aenter__(self) -> Self:
         return self

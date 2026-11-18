@@ -2,7 +2,11 @@
 
 import array
 import asyncio
+import contextlib
+import threading
 import time
+from collections.abc import AsyncGenerator
+from concurrent.futures import ThreadPoolExecutor
 from typing import cast
 
 import pytest
@@ -168,3 +172,66 @@ def test_an_async_read_timed_says_when_it_was_played(backend: _testing.FakeBacke
     assert len(data) == 480 * 4
     assert first_at is not None
     assert after - 1 < first_at < after
+
+
+@contextlib.asynccontextmanager
+async def busy_default_pool() -> AsyncGenerator[None]:
+    """The app's own blocking work keeps its default thread pool full."""
+    loop = asyncio.get_running_loop()
+    pool = ThreadPoolExecutor(max_workers=2)
+    loop.set_default_executor(pool)
+    release = threading.Event()
+    # Each job ends by itself after 3 s, so a call starved by them fails its
+    # test's timeout instead of hanging the run.
+    blockers = [loop.run_in_executor(None, release.wait, 3) for _ in range(4)]
+    try:
+        yield
+    finally:
+        release.set()
+        await asyncio.gather(*blockers)
+        pool.shutdown()
+
+
+def test_a_busy_thread_pool_doesnt_starve_an_async_speaker(
+    backend: _testing.FakeBackend,
+) -> None:
+    async def main() -> bytes:
+        async with busy_default_pool(), AsyncSpeaker("Agent Speaker", _backend=backend) as speaker:
+            loop = asyncio.get_running_loop()
+            loop.call_later(0.05, backend.system_write, speaker.id, floats([0.25] * 480))
+            async with asyncio.timeout(2):
+                return await speaker.read()
+
+    assert len(asyncio.run(main())) == 480 * 4
+
+
+def test_a_busy_thread_pool_doesnt_starve_an_async_write_or_wait(
+    backend: _testing.FakeBackend,
+) -> None:
+    async def main() -> None:
+        async with busy_default_pool(), AsyncMicrophone("Agent Mic", _backend=backend) as mic:
+            done = asyncio.Event()
+            puller = asyncio.create_task(pull(backend, mic.id, done))
+            async with asyncio.timeout(3):
+                assert await mic.write(floats([0.5] * 4_800)) == 4_800
+                await mic.wait_for_playout()
+            done.set()
+            await puller
+
+    asyncio.run(main())
+
+
+def test_a_busy_thread_pool_doesnt_starve_an_async_playout(
+    backend: _testing.FakeBackend,
+) -> None:
+    async def main() -> None:
+        async with busy_default_pool(), AsyncMicrophone("Agent Mic", _backend=backend) as mic:
+            done = asyncio.Event()
+            puller = asyncio.create_task(pull(backend, mic.id, done))
+            async with mic.playout() as playout, asyncio.timeout(3):
+                playout.push(floats([0.5] * 4_800))
+                await playout.wait_idle()
+            done.set()
+            await puller
+
+    asyncio.run(main())

@@ -86,6 +86,11 @@ impl Connection for InProcessConnection {
                 .device_info(id)
                 .ok_or(Error::Protocol(abi::ERR_BAD_REQUEST))?;
             let wake = wake_of(input).ok_or(Error::Protocol(abi::ERR_BAD_REQUEST))?;
+            // The rest waits on the system (PipeWire's connect: up to 2 s per state
+            // change), so not under the lock every Device of the app needs: the core
+            // already holds this Device and its name, and only this connection,
+            // which is busy here, can remove it.
+            drop(core);
             // SAFETY: the doorbell is the SDK's own (`device::Inner`), which, like
             // the Ring, outlives this connection and so this Device's node.
             let wake = unsafe { DoorbellRinger::from_raw(wake) };

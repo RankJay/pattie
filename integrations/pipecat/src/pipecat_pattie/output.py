@@ -69,7 +69,8 @@ class PattieOutputTransport(BaseOutputTransport):
 
     async def write_audio_frame(self, frame: OutputAudioRawFrame) -> bool:
         """Writes the chunk at the pace listeners take it (``Microphone.write``
-        blocks until it's all in), so Pipecat's clock stays true."""
+        blocks until it's all in), so Pipecat's clock stays true. Converted on the
+        writer thread too, not on the event loop."""
         microphone = self._devices.microphone
         if (
             microphone is None
@@ -78,16 +79,21 @@ class PattieOutputTransport(BaseOutputTransport):
             or self._executor is None
         ):
             return False
-        audio = self._converter.convert(frame.audio)
-        await self.get_event_loop().run_in_executor(self._executor, self._write, microphone, audio)
+        await self.get_event_loop().run_in_executor(
+            self._executor, self._write, microphone, self._converter, frame.audio
+        )
         return True
 
-    def _write(self, microphone: pattie.Microphone, audio: bytes) -> None:
-        """On the writer thread: `audio` (the microphone's own float format) at
-        the pace listeners take it. While nothing records the microphone (no
+    def _write(
+        self, microphone: pattie.Microphone, converter: pattie.Converter, chunk: bytes
+    ) -> None:
+        """On the writer thread (one, so chunks convert and play in order):
+        `chunk`, converted to the microphone's own float format, at the pace
+        listeners take it. While nothing records the microphone (no
         meeting app has it open), nothing takes audio: the chunk then lasts its
         own duration and is dropped, as with a real microphone nobody listens
         to, so Pipecat's clock stays true and a write never waits for good."""
+        audio = converter.convert(chunk)
         frame_bytes = 4 * microphone.channels
         frames = len(audio) // frame_bytes
         written = 0

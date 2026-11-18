@@ -1,6 +1,5 @@
 """AsyncPlayout: a Playout whose waits are awaitable."""
 
-import asyncio
 from collections.abc import Buffer
 from types import TracebackType
 from typing import Self
@@ -9,7 +8,7 @@ from pattie._native import (
     Interrupted,
     Playout,
 )
-from pattie.aio.pieces import _PIECE_SECONDS
+from pattie.aio.pieces import _PIECE_SECONDS, _Waits
 
 
 class AsyncPlayout:
@@ -19,6 +18,7 @@ class AsyncPlayout:
 
     def __init__(self, playout: Playout) -> None:
         self._playout = playout
+        self._waits = _Waits()
 
     def push(self, data: Buffer) -> int:
         return self._playout.push(data)
@@ -32,11 +32,12 @@ class AsyncPlayout:
 
     async def wait_idle(self) -> None:
         """Waits until everything pushed has been heard."""
-        while not await asyncio.to_thread(self._playout.wait_idle, _PIECE_SECONDS):
+        while not await self._waits.run(self._playout.wait_idle, _PIECE_SECONDS):
             pass
 
     def close(self) -> None:
         self._playout.close()
+        self._waits.shut_down()
 
     async def __aenter__(self) -> Self:
         return self

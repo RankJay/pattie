@@ -131,3 +131,39 @@ fn a_node_is_named_pattie_dot_its_stable_id() {
         ]
     );
 }
+
+#[test]
+fn a_slow_node_doesnt_hold_up_the_apps_other_devices() {
+    // The node for "Slow" takes half a second to make, as PipeWire's connect does
+    // while the server is slow to answer (up to 2 s per state change). Meanwhile
+    // another Device of the same app goes away: it mustn't wait for that.
+    let slow = std::time::Duration::from_millis(500);
+    let (backend, _log, _) = stub_slow(("Slow", slow));
+    let fast = Device::builder()
+        .name("Fast")
+        .backend(backend.clone())
+        .create()
+        .unwrap();
+    let creating = std::thread::spawn(move || {
+        Device::builder()
+            .name("Slow")
+            .backend(backend)
+            .create()
+            .map(drop)
+    });
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a coarse wait for the other thread to be mid-create"
+    )]
+    std::thread::sleep(std::time::Duration::from_millis(100)); // "Slow" is mid-create
+
+    let started = std::time::Instant::now();
+    drop(fast);
+    let waited = started.elapsed();
+
+    creating.join().unwrap().unwrap();
+    assert!(
+        waited < std::time::Duration::from_millis(200),
+        "waited {waited:?}"
+    );
+}

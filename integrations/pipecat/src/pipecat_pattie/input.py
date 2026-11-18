@@ -1,6 +1,10 @@
 """PattieInputTransport: what the meeting plays to the Speaker, as frames."""
 
 import asyncio
+import contextlib
+import threading
+import time
+from collections.abc import Callable
 
 import pattie
 from pipecat.frames.frames import (
@@ -30,6 +34,11 @@ class PattieInputTransport(BaseInputTransport):
         self._devices = devices
         self._converter: pattie.Converter | None = None
         self._reader: asyncio.Task[None] | None = None
+        # The thread that reads the Speaker, and how it's told to stop.
+        self._reading: threading.Thread | None = None
+        self._stop_reading = threading.Event()
+        # Set (on the loop) once that thread has ended.
+        self._read_ended: asyncio.Event | None = None
 
     async def setup(self, setup: FrameProcessorSetup) -> None:
         await super().setup(setup)
@@ -65,26 +74,74 @@ class PattieInputTransport(BaseInputTransport):
             self._devices.close_speaker()
 
     async def _stop_reader(self) -> None:
+        self._stop_reading.set()
         if self._reader is not None:
             await self.cancel_task(self._reader)
             self._reader = None
+        # Its wait ends within one frame. Waited for on the loop, not through
+        # the thread pool, which may be the app's and busy.
+        ended, self._read_ended, self._reading = self._read_ended, None, None
+        if ended is not None:
+            await ended.wait()
 
     async def _read_speaker(self) -> None:
-        """Pushes 20 ms frames of what's played, or of silence while nothing
-        is. A wait ends as soon as the Speaker has audio (Pattie wakes on the
-        system's pass); silence is paced by the clock, not by how long a wait
-        took (Windows rounds short waits up to its 15.6 ms timer tick), so the
-        pipeline always gets real time's worth."""
+        """Pushes, in order, the 20 ms frames the reading thread hands over."""
+        frames: asyncio.Queue[bytes] = asyncio.Queue()
+        self._stop_reading.clear()
+        self._read_ended = asyncio.Event()
+        self._reading = threading.Thread(
+            target=self._read_frames,
+            args=(self.get_event_loop(), frames.put_nowait, self._read_ended.set),
+            name="pattie-speaker",
+            daemon=True,
+        )
+        self._reading.start()
+        while True:
+            audio = await frames.get()
+            await self.push_audio_frame(
+                InputAudioRawFrame(
+                    audio=audio,
+                    sample_rate=self.sample_rate,
+                    num_channels=self._params.audio_in_channels,
+                )
+            )
+
+    def _read_frames(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        hand_over: Callable[[bytes], None],
+        ended: Callable[[], None],
+    ) -> None:
+        try:
+            self._read_until_stopped(loop, hand_over)
+        finally:
+            with contextlib.suppress(RuntimeError):  # the loop closed
+                loop.call_soon_threadsafe(ended)
+
+    def _read_until_stopped(
+        self, loop: asyncio.AbstractEventLoop, hand_over: Callable[[bytes], None]
+    ) -> None:
+        """On its own thread, for as long as the transport reads: waits for what
+        the Speaker plays, converts it, and hands over 20 ms frames of it, or of
+        silence while nothing plays. Its own thread, not one of the app's pool
+        per packet: a pool the app keeps busy can't starve it (it did: 0 frames
+        in 10 s), and its waits and conversion release the GIL. A wait ends as
+        soon as the Speaker has audio (Pattie wakes on the system's pass);
+        silence is paced by the clock, not by how long a wait took (Windows
+        rounds short waits up to its 15.6 ms timer tick), so the pipeline always
+        gets real time's worth."""
         speaker, converter = self._devices.speaker, self._converter
         assert speaker is not None
         assert converter is not None
-        loop = self.get_event_loop()
         frame_bytes = round(self.sample_rate * _FRAME_SECONDS) * 2 * self._params.audio_in_channels
         pending = b""
-        silence_due = loop.time() + _FRAME_SECONDS  # when quiet first counts as silence
-        while not speaker.closed:
-            played = await asyncio.to_thread(speaker.read, _FRAME_SECONDS)
-            now = loop.time()
+        silence_due = time.monotonic() + _FRAME_SECONDS  # when quiet first counts as silence
+        while not self._stop_reading.is_set() and not speaker.closed:
+            try:
+                played = speaker.read(_FRAME_SECONDS)
+            except ValueError:  # closed meanwhile
+                return
+            now = time.monotonic()
             if played:
                 pending += converter.convert(played)
                 silence_due = now + _FRAME_SECONDS
@@ -94,10 +151,7 @@ class PattieInputTransport(BaseInputTransport):
                     silence_due += _FRAME_SECONDS
             while len(pending) >= frame_bytes:
                 audio, pending = pending[:frame_bytes], pending[frame_bytes:]
-                await self.push_audio_frame(
-                    InputAudioRawFrame(
-                        audio=audio,
-                        sample_rate=self.sample_rate,
-                        num_channels=self._params.audio_in_channels,
-                    )
-                )
+                try:
+                    loop.call_soon_threadsafe(hand_over, audio)
+                except RuntimeError:  # the loop closed
+                    return
