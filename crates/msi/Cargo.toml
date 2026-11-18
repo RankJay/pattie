@@ -20,7 +20,7 @@ windows = { workspace = true, features = ["Win32_Foundation", "Win32_System_Appl
 
 [dev-dependencies]
 # The installer authoring test reads pattie.wxs (tests/authoring/).
-roxmltree = "0.20"
+roxmltree = "0.21"
 
 [lints]
 workspace = true
