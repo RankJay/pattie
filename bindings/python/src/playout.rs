@@ -61,9 +61,12 @@ impl Playout {
 impl Playout {
     /// Queues audio (in the playout's format) after what's already queued, and
     /// returns at once. Returns how many of the microphone's frames were queued.
-    fn push(&self, data: &Bound<'_, PyAny>) -> PyResult<usize> {
+    fn push(&self, py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<usize> {
         let bytes = audio_bytes(data)?;
-        Ok(self.get()?.push_bytes(&bytes))
+        let playout = self.get()?;
+        // Copied once with the GIL held; converting and queueing (and freeing the
+        // copy) without it, so other threads go on meanwhile.
+        Ok(py.detach(move || playout.push_bytes(&bytes)))
     }
 
     /// Stops the current reply: whatever is still queued is dropped, and the

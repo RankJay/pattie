@@ -44,35 +44,43 @@ impl Playout {
     /// them, unless the queue holds 10 minutes. A frame split across pushes plays
     /// once its last sample arrives.
     pub fn push(&self, samples: &[f32]) -> usize {
-        let mut state = self.shared.lock();
+        // Copied before the lock: the feeder never waits behind the copy.
+        self.push_piece(samples[..samples.len().min(self.limit())].to_vec())
+    }
+
+    /// The most samples the queue holds.
+    fn limit(&self) -> usize {
+        QUEUE_SECONDS * self.shared.inner.format.rate as usize * self.shared.channels()
+    }
+
+    /// Queues `piece` as it is (no copy), as much of it as fits under the limit.
+    fn push_piece(&self, mut piece: Vec<f32>) -> usize {
         let channels = self.shared.channels();
-        let limit = QUEUE_SECONDS * self.shared.inner.format.rate as usize * channels;
-        let accepted = samples.len().min(limit.saturating_sub(state.queue.len()));
+        let limit = self.limit();
+        let mut state = self.shared.lock();
+        let accepted = piece.len().min(limit.saturating_sub(state.queue.len()));
+        piece.truncate(accepted);
         let frames_before = state.queue.len() / channels;
         if accepted > 0 {
             self.shared.end_reply_if_played(&mut state);
             state.reply.get_or_insert_with(Reply::default);
-            state.queue.extend(&samples[..accepted]);
+            state.queue.push(piece);
         }
         state.queue.len() / channels - frames_before
+        // (`state` is let go before an unaccepted `piece` is freed.)
     }
 
     /// Queues bytes in the playout's input format (see `Device::playout_from`),
     /// converted to the Device's own: a model's audio deltas as they arrive, in
     /// pieces of any size. Returns how many of the Device's frames were queued.
     pub fn push_bytes(&self, bytes: &[u8]) -> usize {
-        let mut converted = Vec::new();
-        self.converter
+        let samples = self
+            .converter
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .convert(bytes, &mut converted);
-        let samples: Vec<f32> = converted
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .map(|bytes| f32::from_le_bytes(*bytes))
-            .collect();
-        self.push(&samples)
+            .samples(bytes);
+        // The converted samples become the queue's piece as they are.
+        self.push_piece(samples)
     }
 
     /// Stops the current reply: everything still queued is dropped at once, and
@@ -81,11 +89,13 @@ impl Playout {
     pub fn interrupt(&self) -> Interrupted {
         let mut state = self.shared.lock();
         let discarded_frames = (state.queue.len() / self.shared.channels()) as u64;
-        state.queue.clear();
+        let dropped = state.queue.clear();
         let heard_frames = state
             .reply
             .take()
             .map_or(0, |reply| reply.heard(self.shared.inner.ring.taken()));
+        drop(state);
+        drop(dropped); // freed with the lock let go
         Interrupted {
             heard_frames,
             discarded_frames,

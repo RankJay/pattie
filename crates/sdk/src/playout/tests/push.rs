@@ -93,3 +93,53 @@ fn starving_the_ring_still_counts_as_gap() {
 
     assert_eq!(mic.stats().gap_frames, 480);
 }
+
+#[test]
+fn pushes_play_in_order_even_when_a_pass_spans_several_of_them() {
+    let (backend, mic, playout, lead) = setup();
+    // A ramp in pushes of uneven sizes, smaller and larger than one pass.
+    let ramp: Vec<f32> = (0..6_000u16).map(f32::from).collect();
+    for piece in ramp.chunks(77).chain(std::iter::once(&[][..])) {
+        playout.push(piece);
+    }
+
+    let mut heard = Vec::new();
+    playout.shared.pump();
+    while heard.len() < ramp.len() {
+        heard.extend(backend.system_read(mic.id(), 480).unwrap());
+        playout.shared.pump();
+    }
+
+    assert!(usize::try_from(lead).unwrap() < ramp.len());
+    assert_eq!(&heard[..ramp.len()], &ramp[..]);
+    assert_eq!(playout.queued_frames(), 0);
+}
+
+#[test]
+fn a_stereo_frame_split_across_pushes_plays_whole_once_its_last_sample_arrives() {
+    let backend = FakeBackend::new().unwrap();
+    let mic = Device::builder()
+        .name("Agent Mic")
+        .format(48_000, 2)
+        .backend(backend.backend())
+        .create()
+        .unwrap();
+    let stereo = AudioFormat {
+        channels: 2,
+        ..AudioFormat::DEVICE
+    };
+    let playout = Playout::manual(mic.inner().clone(), stereo).unwrap();
+    let samples: Vec<f32> = (1..=2_000u16).map(f32::from).collect();
+
+    // Three samples at a time: every other push ends mid-frame.
+    let added: usize = samples.chunks(3).map(|piece| playout.push(piece)).sum();
+    let mut heard = Vec::new();
+    playout.shared.pump();
+    while heard.len() < samples.len() {
+        heard.extend(backend.system_read(mic.id(), 240).unwrap());
+        playout.shared.pump();
+    }
+
+    assert_eq!(added, 1_000);
+    assert_eq!(&heard[..samples.len()], &samples[..]);
+}

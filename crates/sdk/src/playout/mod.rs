@@ -47,10 +47,84 @@ struct Shared {
 
 #[derive(Default)]
 struct State {
-    queue: VecDeque<f32>,
+    queue: Queue,
     /// The reply being played: from the first push after the playout was idle or
     /// interrupted, until it's all played or interrupted.
     reply: Option<Reply>,
+    /// The feeder's audio for one pass, kept between passes: no allocation on
+    /// the feeder thread once it has reached the lead's size.
+    pass: Vec<f32>,
+}
+
+/// The audio waiting for the Ring (interleaved), oldest first, as one piece per
+/// push. `push` copies its piece before taking the lock and only links it in
+/// under it, so the feeder never waits behind a copy or a regrowth of the whole
+/// queue (at 8 channels and 96 kHz a 10 s push into one buffer held the lock
+/// for 30-40 ms, longer than the lead).
+#[derive(Default)]
+struct Queue {
+    pieces: VecDeque<Vec<f32>>,
+    /// Samples of the front piece already taken.
+    taken: usize,
+    /// Samples waiting, in all pieces.
+    len: usize,
+    /// Pieces the feeder emptied, freed once it has let go of the lock.
+    spent: Vec<Vec<f32>>,
+}
+
+impl Queue {
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    fn push(&mut self, piece: Vec<f32>) {
+        if !piece.is_empty() {
+            self.len += piece.len();
+            self.pieces.push_back(piece);
+        }
+    }
+
+    /// Moves the oldest `count` samples (at most what's waiting) to the end of `out`.
+    fn take_into(&mut self, mut count: usize, out: &mut Vec<f32>) {
+        while count > 0
+            && let Some(front) = self.pieces.front()
+        {
+            let n = (front.len() - self.taken).min(count);
+            out.extend_from_slice(&front[self.taken..self.taken + n]);
+            self.taken += n;
+            self.len -= n;
+            count -= n;
+            if self.taken == front.len() {
+                self.spent.extend(self.pieces.pop_front());
+                self.taken = 0;
+            }
+        }
+    }
+
+    /// The samples waiting, oldest first.
+    #[cfg(test)]
+    fn iter(&self) -> impl Iterator<Item = &f32> {
+        let skip = self.taken;
+        self.pieces.iter().flatten().skip(skip)
+    }
+
+    /// The pieces emptied since the last call, to free outside the lock.
+    fn take_spent(&mut self) -> Vec<Vec<f32>> {
+        std::mem::take(&mut self.spent)
+    }
+
+    /// Empties the queue; returns its pieces, to free outside the lock.
+    fn clear(&mut self) -> Vec<Vec<f32>> {
+        let mut all = self.take_spent();
+        all.extend(self.pieces.drain(..));
+        self.taken = 0;
+        self.len = 0;
+        all
+    }
 }
 
 /// Where a reply's audio went in the Ring: one `(position, frames)` piece per
@@ -123,9 +197,15 @@ impl Shared {
     }
 
     /// One feeding pass: tops the Ring up to the lead, then tells `wait_idle`.
+    /// The pieces it used up are freed after the lock is let go.
     fn pump(&self) {
-        self.fill(&mut self.lock());
+        let spent = {
+            let mut state = self.lock();
+            self.fill(&mut state);
+            state.queue.take_spent()
+        };
         self.progress.notify_all();
+        drop(spent);
     }
 
     /// Samples in each of the Device's frames.
@@ -147,11 +227,13 @@ impl Shared {
         {
             reply.pieces.push((ring.written(), take as u64));
         }
-        let mut audio: Vec<f32> = state.queue.drain(..take * channels).collect();
+        let State { queue, pass, .. } = state;
+        pass.clear();
+        queue.take_into(take * channels, pass);
         // Silence for the rest: an idle agent keeps the stream running without
         // counting Gap, so Gap means only real starvation.
-        audio.resize(room * channels, 0.0);
-        ring.write(&audio);
+        pass.resize(room * channels, 0.0);
+        ring.write(pass);
     }
 }
 

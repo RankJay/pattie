@@ -72,17 +72,11 @@ impl LiveWriter {
     /// converted to the Device's own. Returns how many of the Device's frames
     /// were queued.
     pub fn push_bytes(&self, bytes: &[u8]) -> usize {
-        let mut converted = Vec::new();
-        self.converter
+        let samples = self
+            .converter
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .convert(bytes, &mut converted);
-        let samples: Vec<f32> = converted
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .map(|bytes| f32::from_le_bytes(*bytes))
-            .collect();
+            .samples(bytes);
         self.push(&samples)
     }
 

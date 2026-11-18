@@ -54,9 +54,11 @@ impl LiveWriter {
 impl LiveWriter {
     /// Queues audio (in the writer's format) as it arrives from the source, and
     /// returns at once. Returns how many of the microphone's frames were queued.
-    fn push(&self, data: &Bound<'_, PyAny>) -> PyResult<usize> {
+    fn push(&self, py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<usize> {
         let bytes = audio_bytes(data)?;
-        Ok(self.get()?.push_bytes(&bytes))
+        let writer = self.get()?;
+        // As Playout.push: converting and queueing without the GIL.
+        Ok(py.detach(move || writer.push_bytes(&bytes)))
     }
 
     #[getter]

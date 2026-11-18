@@ -82,14 +82,45 @@ impl Converter {
     /// sample, which is kept for the next call) and appends the result to
     /// `output` (bytes in the `to` format).
     pub fn convert(&mut self, input: &[u8], output: &mut Vec<u8>) {
-        self.pending.extend_from_slice(input);
+        let audio = self.samples(input);
+        let sample = self.to.frame_bytes() / usize::from(self.to.channels);
+        output.reserve(audio.len() * sample);
+        for sample in audio {
+            encode(self.to.encoding, sample, output);
+        }
+    }
+
+    /// As `convert`, but the result as samples (interleaved, as the `to` format's
+    /// rate and channels have them) instead of encoded bytes: what the Playout and
+    /// the LiveWriter queue, with no encoding to bytes and parsing back.
+    pub(crate) fn samples(&mut self, input: &[u8]) -> Vec<f32> {
         let frame_bytes = self.from.frame_bytes();
-        let whole = self.pending.len() / frame_bytes * frame_bytes;
-        let samples: Vec<f32> = self.pending[..whole]
-            .chunks_exact(self.from.frame_bytes() / usize::from(self.from.channels))
-            .map(|bytes| decode(self.from.encoding, bytes))
-            .collect();
-        self.pending.drain(..whole);
+        let sample_bytes = frame_bytes / usize::from(self.from.channels);
+        let encoding = self.from.encoding;
+        let decode_into = |bytes: &[u8], samples: &mut Vec<f32>| {
+            samples.extend(
+                bytes
+                    .chunks_exact(sample_bytes)
+                    .map(|bytes| decode(encoding, bytes)),
+            );
+        };
+        let mut samples = Vec::with_capacity((self.pending.len() + input.len()) / sample_bytes);
+        // A frame split across calls first; then straight from `input`, keeping
+        // only what's left of a frame at its end (no copy of the whole input).
+        let mut input = input;
+        if !self.pending.is_empty() {
+            let take = (frame_bytes - self.pending.len()).min(input.len());
+            self.pending.extend_from_slice(&input[..take]);
+            input = &input[take..];
+            if self.pending.len() < frame_bytes {
+                return Vec::new();
+            }
+            decode_into(&self.pending, &mut samples);
+            self.pending.clear();
+        }
+        let whole = input.len() / frame_bytes * frame_bytes;
+        decode_into(&input[..whole], &mut samples);
+        self.pending.extend_from_slice(&input[whole..]);
 
         // Fewer channels first (less to resample), more channels last.
         let (from, to) = (
@@ -107,16 +138,13 @@ impl Converter {
             samples
         };
         let audio = self.resample(audio);
-        let audio = if from == 1 && to > 1 {
+        if from == 1 && to > 1 {
             audio
                 .iter()
                 .flat_map(|&s| std::iter::repeat_n(s, to))
                 .collect()
         } else {
             audio
-        };
-        for sample in audio {
-            encode(self.to.encoding, sample, output);
         }
     }
 }
