@@ -35,15 +35,17 @@ test("16-bit PCM at 24 kHz, as voice APIs send it, is converted to the microphon
     assert.deepEqual([mic.rate, mic.channels], [48_000, 1]);
 });
 
-test("a Buffer from Node's pool is read within its own bytes", () => {
-    using mic = new Microphone('Agent Mic', { _backend: new FakeBackend() });
-    // Buffer.from shares an 8 KiB pool: the view starts partway into it.
-    const pooled = Buffer.from(new Float32Array([0.25, 0.5]).buffer);
-    const view = Buffer.from(pooled);
-    assert.ok(view.byteOffset > 0 || view.buffer.byteLength > view.byteLength);
+test('a Buffer over part of a larger ArrayBuffer is read within its own bytes', () => {
+    const backend = new FakeBackend();
+    using mic = new Microphone('Agent Mic', { _backend: backend });
+    // As Node's Buffer pool hands them out: 8 bytes, 16 bytes into 64.
+    const backing = new ArrayBuffer(64);
+    new Float32Array(backing).fill(0.9);
+    new Float32Array(backing, 16, 2).set([0.25, 0.5]);
+    const view = Buffer.from(backing, 16, 8);
 
     assert.equal(mic.writeNowait(view), 2);
-    assert.equal(mic.stats.bufferedFrames, 2);
+    assert.deepEqual(backend.systemRead(mic.id, 4), new Float32Array([0.25, 0.5, 0, 0]));
 });
 
 test('a Float32Array for 16-bit PCM is a TypeError, before anything is written', async () => {

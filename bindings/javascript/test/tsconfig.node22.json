@@ -1,0 +1,12 @@
+{
+  "//": "Node 22's V8 can't parse `using`, and type stripping never rewrites syntax. On Node 22 the tests run compiled: ES2022 turns `using` into try/finally (`pnpm test:node22`).",
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "target": "es2022",
+    "rootDir": ".",
+    "outDir": "../dist-test",
+    "declaration": false,
+    "rewriteRelativeImportExtensions": true
+  },
+  "include": ["*.ts"]
+}

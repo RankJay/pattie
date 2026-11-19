@@ -9,7 +9,9 @@ reads it.
 npm install pattie
 ```
 
-It needs Node.js 22.12 or newer, or Electron, and has no dependencies. A
+It needs Node.js 22.12 or newer, or Electron, and has no dependencies. The
+examples use `using`, which Node 24 runs as it is; on Node 22, compile with
+TypeScript (it turns `using` into try/finally) or call `close()` yourself. A
 prebuilt binary is installed for your platform (Windows x64, Linux x64 and
 arm64): no compiler, no node-gyp, no `electron-rebuild`. On Windows, the Pattie
 driver must be installed once, as administrator, with `pattie-cli install`. On

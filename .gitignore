@@ -19,6 +19,7 @@ __pycache__/
 bindings/javascript/node_modules/
 bindings/javascript/native/
 bindings/javascript/dist/
+bindings/javascript/dist-test/
 bindings/javascript/npm/
 *.node
 

@@ -43,8 +43,10 @@
     "lint": "oxlint lib test examples",
     "format": "oxfmt lib test examples",
     "format:check": "oxfmt --check lib test examples",
-    "test:release": "node --test \"test/release/*.test.ts\"",
-    "build:ts:release": "tsc -p tsconfig.release.json"
+    "test:release": "napi create-npm-dirs && node --test \"test/release/*.test.ts\"",
+    "build:ts:release": "tsc -p tsconfig.release.json",
+    "test:bun": "bun test --path-ignore-patterns=test/release/** ./test",
+    "test:node22": "tsc -p test/tsconfig.node22.json && node --test --test-concurrency=1 \"dist-test/*.test.js\""
   },
   "devDependencies": {
     "@napi-rs/cli": "3.10.12",

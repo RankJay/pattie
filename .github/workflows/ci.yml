@@ -169,12 +169,26 @@ jobs:
       # Builds the native module with the SDK's Fake backend, and pattie/_testing.
       - run: pnpm build:dev
       - run: pnpm typecheck
-      - run: pnpm test
+      # Node 22 can't parse `using`, which the tests use (Node 24 can): there
+      # they run compiled to ES2022. The package itself needs neither.
+      - name: pnpm test (compiled, on Node 22)
+        run: pnpm ${{ matrix.node == '22' && 'test:node22' || 'test' }}
       - name: The same tests inside Electron (Node-API, no rebuild)
         if: matrix.node == '24'
         env:
           ELECTRON_RUN_AS_NODE: "1"
         run: pnpm dlx electron@45.4.1 --test --test-concurrency=1 "test/*.test.ts"
+      # Bun reimplements Node-API, with no libuv: passing here doesn't prove
+      # Node, and Bun isn't promised (ADR 0019, 2026-11-20). For information:
+      # a failure shows, but doesn't fail the job.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        if: matrix.node == '24'
+        with:
+          bun-version: "1.4.4"
+      - name: The same tests under Bun (information only)
+        if: matrix.node == '24'
+        continue-on-error: true
+        run: pnpm test:bun
       - name: Against a real, headless PipeWire
         if: matrix.os == 'linux' && matrix.node == '24'
         uses: ./.github/actions/headless-pipewire

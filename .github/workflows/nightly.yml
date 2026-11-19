@@ -217,6 +217,7 @@ jobs:
         run: rustup toolchain install
       - uses: ./.github/actions/setup-libclang
       - name: Run it
-        run: cargo test -p pattie --release --lib e2e::
+        # Quoted: a plain YAML value can't end in a colon.
+        run: "cargo test -p pattie --release --lib e2e::"
         env:
           PATTIE_E2E_RUNS: 2000
