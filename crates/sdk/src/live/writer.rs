@@ -22,7 +22,7 @@ impl LiveWriter {
     }
 
     /// A live writer nobody feeds: tests call `pump` by hand.
-    pub(super) fn manual(inner: Arc<Inner>, input: AudioFormat) -> Result<LiveWriter, Error> {
+    pub(crate) fn manual(inner: Arc<Inner>, input: AudioFormat) -> Result<LiveWriter, Error> {
         let format = inner.format;
         let converter = Mutex::new(Converter::new(input, format)?);
         inner.take_access(Kind::Microphone)?;
@@ -46,6 +46,7 @@ impl LiveWriter {
                     step: (format.rate / STEP_PER_SECOND) as usize,
                     limit: format.rate as usize,
                     playing: false,
+                    started: false,
                     last_pass: None,
                     ppm: 0.0,
                     held: None,
@@ -90,6 +91,13 @@ impl LiveWriter {
     #[doc(hidden)]
     pub fn hold_correction(&self, ppm: Option<f64>) {
         self.shared.lock().held = ppm;
+    }
+
+    /// One feeding pass, as the feeder makes after each doorbell: for tests
+    /// that drive a `manual` writer.
+    #[cfg(test)]
+    pub(crate) fn pump(&self) {
+        self.shared.pump();
     }
 
     /// How it's doing: latency held, correction, losses.

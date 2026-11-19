@@ -20,8 +20,8 @@ class AsyncPlayout:
         self._playout = playout
         self._waits = _Waits()
 
-    def push(self, data: Buffer) -> int:
-        return self._playout.push(data)
+    def push(self, data: Buffer, reply: str | None = None) -> int:
+        return self._playout.push(data, reply)
 
     def interrupt(self) -> Interrupted:
         return self._playout.interrupt()

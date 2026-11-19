@@ -11,7 +11,8 @@ pub(crate) struct LiveStats {
     /// The drift correction in use, in ppm: positive when the source runs fast.
     #[pyo3(get)]
     correction_ppm: f64,
-    /// Frames played as silence because the source fell behind.
+    /// Frames played as silence because the source fell behind: from then until
+    /// the buffer has filled to its target again.
     #[pyo3(get)]
     starved_frames: u64,
     /// Frames dropped because more than a second had piled up.

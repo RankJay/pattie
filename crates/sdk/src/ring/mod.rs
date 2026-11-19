@@ -85,7 +85,8 @@ impl RingMemory {
         self.ptr.as_ptr().cast()
     }
 
-    fn capacity(&self) -> u64 {
+    /// Frames the Ring holds at most.
+    pub(crate) fn capacity(&self) -> u64 {
         // SAFETY: written once in `with_format`, before the driver ever saw the Ring.
         unsafe { (*self.header()).capacity_frames as u64 }
     }

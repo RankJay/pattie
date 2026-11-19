@@ -6,11 +6,15 @@ use super::*;
 /// handed it out, so closing the microphone ends it too. `None` once closed.
 pub(crate) type PlayoutSlot = Arc<RwLock<Option<Arc<sdk::Playout>>>>;
 
-/// What interrupt() cut: how much of the reply listeners heard, and how much was
-/// dropped before it reached them.
+/// What interrupt() cut: the reply listeners were hearing and how much of it they
+/// heard, and how much was dropped before it reached them.
 #[pyclass(module = "pattie", frozen, eq)]
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Interrupted {
+    /// The reply's name as given to push(reply=...); None if it was pushed
+    /// without one, or nothing was pushed.
+    #[pyo3(get)]
+    reply: Option<String>,
     /// Frames of the reply that listeners took, at the microphone's rate.
     #[pyo3(get)]
     heard_frames: u64,
@@ -32,8 +36,12 @@ impl Interrupted {
 
     fn __repr__(&self) -> String {
         format!(
-            "Interrupted(heard_frames={}, discarded_frames={})",
-            self.heard_frames, self.discarded_frames
+            "Interrupted(reply={}, heard_frames={}, discarded_frames={})",
+            self.reply
+                .as_deref()
+                .map_or_else(|| "None".to_owned(), |reply| format!("{reply:?}")),
+            self.heard_frames,
+            self.discarded_frames
         )
     }
 }
@@ -61,22 +69,36 @@ impl Playout {
 impl Playout {
     /// Queues audio (in the playout's format) after what's already queued, and
     /// returns at once. Returns how many of the microphone's frames were queued.
-    fn push(&self, py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<usize> {
+    /// `reply` names the reply it belongs to (OpenAI's item id): the same name
+    /// goes on with that reply even after the audio stalled, and another starts
+    /// a new one. Without it, a reply ends once all of it has played.
+    #[pyo3(signature = (data, reply = None))]
+    fn push(
+        &self,
+        py: Python<'_>,
+        data: &Bound<'_, PyAny>,
+        reply: Option<String>,
+    ) -> PyResult<usize> {
         let bytes = audio_bytes(data)?;
         let playout = self.get()?;
         // Copied once with the GIL held; converting and queueing (and freeing the
         // copy) without it, so other threads go on meanwhile.
-        Ok(py.detach(move || playout.push_bytes(&bytes)))
+        Ok(py.detach(move || match reply {
+            Some(reply) => playout.push_reply_bytes(&reply, &bytes),
+            None => playout.push_bytes(&bytes),
+        }))
     }
 
     /// Stops the current reply: whatever is still queued is dropped, and the
-    /// result says how much listeners heard.
+    /// result says which reply listeners were hearing and how much of it.
     fn interrupt(&self) -> PyResult<Interrupted> {
         let cut = self.get()?.interrupt();
+        let heard_ms = cut.heard_ms();
         Ok(Interrupted {
+            reply: cut.reply,
             heard_frames: cut.heard_frames,
             discarded_frames: cut.discarded_frames,
-            heard_ms: cut.heard_ms(),
+            heard_ms,
         })
     }
 

@@ -15,9 +15,11 @@ How it works:
   PCM the model takes, so it goes to the model as it is.
 - The model sends its audio much faster than real time. A Playout plays it at
   the meeting's pace.
+- Each delta is pushed under its item id, so the playout knows where each reply
+  begins and ends, whatever the network does.
 - When the model hears someone start talking (``speech-started``), the playout
   is interrupted at once, and ``conversation-item-truncate`` tells the model how
-  much of its reply was heard, so it forgets the rest.
+  much of the reply being heard was heard, so it forgets the rest.
 """
 
 import asyncio
@@ -73,28 +75,25 @@ async def main() -> None:
                 await socket.send(json.dumps({"type": "input-audio-append", "audio": audio}))
 
         async def talk() -> None:
-            playing_item = None  # the reply being played, to truncate it if cut
             async for message in socket:
                 event = json.loads(message)
                 match event["type"]:
                     case "audio-delta":
-                        voice.push(base64.b64decode(event["delta"]))
-                        playing_item = event.get("itemId")
+                        voice.push(base64.b64decode(event["delta"]), reply=event.get("itemId"))
                     case "speech-started":
-                        cut = voice.interrupt()
-                        if playing_item and cut.heard_frames:
+                        cut = voice.interrupt()  # says which reply was being heard
+                        if cut.reply and cut.heard_frames:
                             await socket.send(
                                 json.dumps(
                                     {
                                         "type": "conversation-item-truncate",
-                                        "itemId": playing_item,
+                                        "itemId": cut.reply,
                                         "contentIndex": 0,
                                         "audioEndMs": cut.heard_ms,
                                     }
                                 )
                             )
                             print(f"Interrupted after {cut.heard_ms} ms of the reply.")
-                        playing_item = None
                     case "error":
                         print("AI Gateway error:", event.get("message"), event.get("code"))
                     case "session-closed":

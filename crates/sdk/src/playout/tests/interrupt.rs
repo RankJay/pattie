@@ -8,7 +8,12 @@ use super::*;
     clippy::unwrap_used,
     reason = "a test helper: a failure should stop the test loudly"
 )]
-fn play(backend: &FakeBackend, mic: &Device, playout: &Playout, frames: usize) -> Vec<f32> {
+pub(super) fn play(
+    backend: &FakeBackend,
+    mic: &Device,
+    playout: &Playout,
+    frames: usize,
+) -> Vec<f32> {
     let mut heard = Vec::new();
     while heard.len() < frames {
         let take = (frames - heard.len()).min(480);
@@ -37,6 +42,7 @@ fn interrupting_a_reply_reports_what_was_heard_and_drops_the_rest() {
     assert_eq!(
         cut,
         Interrupted {
+            reply: None,
             heard_frames: 14_400,
             discarded_frames: 48_000 - 14_400 - lead,
             rate: 48_000,
@@ -77,6 +83,7 @@ fn interrupting_with_nothing_pushed_reports_nothing() {
     assert_eq!(
         playout.interrupt(),
         Interrupted {
+            reply: None,
             heard_frames: 0,
             discarded_frames: 0,
             rate: 48_000,
@@ -116,6 +123,7 @@ fn a_reply_played_to_the_end_was_heard_in_full() {
     assert_eq!(
         playout.interrupt(),
         Interrupted {
+            reply: None,
             heard_frames: 4_800,
             discarded_frames: 0,
             rate: 48_000,

@@ -110,3 +110,27 @@ def test_closing_the_microphone_ends_a_playouts_wait_idle_and_frees_the_name(
     assert not waiter.is_alive()
     assert result == [False]
     pattie.Microphone("Agent Mic", _backend=backend).close()
+
+
+def test_interrupt_names_the_reply_being_heard(backend: _testing.FakeBackend) -> None:
+    with pattie.Microphone("Agent Mic", _backend=backend) as mic, mic.playout() as playout:
+        assert playout.push(floats([0.5] * 4_800), reply="item_1") == 4_800
+        assert playout.push(floats([0.25] * 4_800), reply="item_2") == 4_800
+        deadline = time.monotonic() + 5
+        taken = 0
+        while taken < 960 and time.monotonic() < deadline:
+            got = backend.system_read(mic.id, 480)
+            assert got is not None
+            taken += sum(1 for x in as_floats(got) if x != 0)
+            time.sleep(0.005)
+        cut = playout.interrupt()
+
+    assert cut.reply == "item_1"
+    assert 960 <= cut.heard_frames < 4_800
+    assert "item_1" in repr(cut)
+
+
+def test_unnamed_audio_reports_no_reply(backend: _testing.FakeBackend) -> None:
+    with pattie.Microphone("Agent Mic", _backend=backend) as mic, mic.playout() as playout:
+        playout.push(floats([0.5] * 4_800))
+        assert playout.interrupt().reply is None

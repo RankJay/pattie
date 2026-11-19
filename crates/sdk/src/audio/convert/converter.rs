@@ -150,6 +150,17 @@ impl Converter {
 }
 
 impl Converter {
+    /// Starts a new stream: drops a frame split across calls and the resamplers'
+    /// history, as a new converter would. For a Playout's interrupt: the next
+    /// reply's bytes must not land after half a sample of the cut one.
+    pub(crate) fn reset(&mut self) {
+        self.pending.clear();
+        let (from, to) = (self.from.rate, self.to.rate);
+        for resampler in &mut self.resamplers {
+            *resampler = Resampler::new(from, to);
+        }
+    }
+
     /// Resamples interleaved audio, each channel through its own resampler.
     fn resample(&mut self, audio: Vec<f32>) -> Vec<f32> {
         match self.resamplers.as_mut_slice() {

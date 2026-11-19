@@ -35,6 +35,9 @@ mod audio;
 #[doc(hidden)]
 pub mod backend;
 mod device;
+// The end-to-end integrity tests: the C core, so not under Miri.
+#[cfg(all(test, not(miri), any(target_os = "linux", feature = "fake-backend")))]
+mod e2e;
 mod error;
 mod live;
 mod os;

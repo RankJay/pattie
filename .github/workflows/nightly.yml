@@ -1,5 +1,6 @@
 # Once a day (and on demand): the checks too slow for every push. CodeQL with
-# Microsoft's driver queries, mutation testing, coverage, and a long fuzz run.
+# Microsoft's driver queries, mutation testing, coverage, a long fuzz run, and
+# the end-to-end sample-integrity scripts on many seeds.
 name: Nightly
 
 on:
@@ -196,3 +197,26 @@ jobs:
         with:
           name: fuzz-crash
           path: crash-*
+
+  e2e-long:
+    # crates/sdk/src/e2e: 2,000 seeds per test instead of every push's 12. Linux
+    # and Windows both: the Fake backend's lead differs (2,048 and 960 frames).
+    name: Sample integrity, 2,000 seeds (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025-vs2026]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master; installs rustup where it is missing
+        with:
+          toolchain: stable
+      - name: Rust toolchain (the version in rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: ./.github/actions/setup-libclang
+      - name: Run it
+        run: cargo test -p pattie --release --lib e2e::
+        env:
+          PATTIE_E2E_RUNS: 2000

@@ -4,6 +4,12 @@
 //! queue at once and reports how much of the current reply the system took, which
 //! is what a model needs to forget the words nobody heard (OpenAI Realtime's
 //! `audio_end_ms`).
+//!
+//! Where a reply begins and ends is the app's to say: audio pushed with a reply
+//! key (`push_reply`, OpenAI's `item_id`) belongs to that reply, whatever the
+//! timing, so a network stall never splits a reply and two replies never merge.
+//! Without a key the Playout guesses from timing: a reply ends once all of it has
+//! played.
 
 use crate::Error;
 use crate::device::{Inner, Kind};
@@ -48,9 +54,11 @@ struct Shared {
 #[derive(Default)]
 struct State {
     queue: Queue,
-    /// The reply being played: from the first push after the playout was idle or
-    /// interrupted, until it's all played or interrupted.
-    reply: Option<Reply>,
+    /// The replies pushed and not yet played out, oldest first: usually one,
+    /// more where the app pushes a reply's audio before the last one has played.
+    /// The last keyed reply stays after it has played, until another reply
+    /// starts or an interrupt, so a reply whose producer stalled goes on.
+    replies: VecDeque<Reply>,
     /// The feeder's audio for one pass, kept between passes: no allocation on
     /// the feeder thread once it has reached the lead's size.
     pass: Vec<f32>,
@@ -127,14 +135,24 @@ impl Queue {
     }
 }
 
-/// Where a reply's audio went in the Ring: one `(position, frames)` piece per
-/// feeding pass, so silence written between pieces never counts as heard.
-#[derive(Default)]
+/// One reply: its key, if the app gave one; where its audio went in the Ring,
+/// one `(position, frames)` piece per feeding pass, so silence written between
+/// pieces never counts as heard; and its samples still in the queue.
 struct Reply {
+    key: Option<String>,
     pieces: Vec<(u64, u64)>,
+    queued: usize,
 }
 
 impl Reply {
+    fn new(key: Option<&str>) -> Reply {
+        Reply {
+            key: key.map(str::to_owned),
+            pieces: Vec::new(),
+            queued: 0,
+        }
+    }
+
     /// Frames of this reply the system has taken, its read counter at `taken`.
     fn heard(&self, taken: u64) -> u64 {
         self.pieces
@@ -147,17 +165,28 @@ impl Reply {
     fn end(&self) -> u64 {
         self.pieces.last().map_or(0, |&(at, frames)| at + frames)
     }
+
+    /// Nothing of it queued, and the system has taken all of it.
+    fn played(&self, taken: u64) -> bool {
+        self.queued == 0 && taken >= self.end()
+    }
 }
 
-/// What `Playout::interrupt` cut: how much of the reply the system had taken, and
-/// how much was dropped from the queue. At most the lead (about 20 ms on Windows)
-/// was already in the Ring and still plays.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// What `Playout::interrupt` cut: the reply listeners were hearing and how much
+/// of it the system had taken, and how much was dropped from the queue. At most
+/// the lead (about 20 ms on Windows) was already in the Ring and still plays.
+///
+/// The reply reported is the oldest one not yet all taken; where every reply
+/// pushed has played, the last one (all of it heard).
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Interrupted {
-    /// Frames of the reply the system took, at the Device's rate. Frames the
+    /// The key of that reply, as given to `push_reply`; `None` for audio pushed
+    /// without one, or when nothing was pushed since the last interrupt.
+    pub reply: Option<String>,
+    /// Frames of that reply the system took, at the Device's rate. Frames the
     /// driver skipped as stale when a recording started (ADR 0014) count as taken.
     pub heard_frames: u64,
-    /// Frames of the reply dropped before they reached the Ring.
+    /// Frames dropped before they reached the Ring, of every reply queued.
     pub discarded_frames: u64,
     /// The Device's rate, for `heard_ms`.
     rate: u32,
@@ -184,15 +213,17 @@ impl Shared {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// A reply ends once nothing of it is queued and the system has taken all of
-    /// it; the next push then starts a new one.
-    fn end_reply_if_played(&self, state: &mut State) {
-        let played = state
-            .reply
-            .as_ref()
-            .is_some_and(|reply| self.inner.ring.taken() >= reply.end());
-        if state.queue.is_empty() && played {
-            state.reply = None;
+    /// Forgets the replies that have played out: all but a keyed last one,
+    /// which goes on if its producer pushes again. An unkeyed reply ends here,
+    /// and the next push starts a new one.
+    fn end_played_replies(&self, state: &mut State) {
+        let taken = self.inner.ring.taken();
+        while let Some(front) = state.replies.front() {
+            let last = state.replies.len() == 1;
+            if !front.played(taken) || (last && front.key.is_some()) {
+                break;
+            }
+            state.replies.pop_front();
         }
     }
 
@@ -222,10 +253,21 @@ impl Shared {
         }
         // Whole frames only: a frame still missing samples waits for its push.
         let take = room.min(state.queue.len() / channels);
-        if take > 0
-            && let Some(reply) = state.reply.as_mut()
-        {
-            reply.pieces.push((ring.written(), take as u64));
+        // Dealt out to the replies in the order they were queued. A frame that
+        // straddles two replies (a key changed mid-frame) is the later one's.
+        let (total, at) = (take * channels, ring.written());
+        let mut offset = 0;
+        for reply in &mut state.replies {
+            if offset == total {
+                break;
+            }
+            let n = reply.queued.min(total - offset);
+            let (first, end) = (offset / channels, (offset + n) / channels);
+            if end > first {
+                reply.pieces.push((at + first as u64, (end - first) as u64));
+            }
+            reply.queued -= n;
+            offset += n;
         }
         let State { queue, pass, .. } = state;
         pass.clear();

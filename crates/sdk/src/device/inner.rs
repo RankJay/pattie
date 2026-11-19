@@ -15,16 +15,21 @@ impl Inner {
     }
 
     /// How much a paced writer may add now: what tops the Ring up to the lead
-    /// (ADR 0020), so it never holds more than the system's next pull or two.
+    /// (ADR 0020), so it never holds more than the system's next pull or two;
+    /// and never more than fits. A Ring smaller than the lead (256 frames under
+    /// Windows' 960) is filled only to its capacity: until 2026-11-19 the feeders
+    /// wrote the whole lead, the Ring dropped the rest as Overflow, and a Playout
+    /// counted the dropped frames as heard; a paced writer spun on a full Ring.
     pub(crate) fn room_below_lead(&self) -> usize {
-        usize::try_from(self.lead().saturating_sub(self.ring.buffered())).unwrap_or(usize::MAX)
+        let lead = self.lead().min(self.ring.capacity());
+        usize::try_from(lead.saturating_sub(self.ring.buffered())).unwrap_or(usize::MAX)
     }
 
     /// The lead now: the Backend's, or where it lets the lead follow the
     /// system's pull, that pull and a quarter (at most the Backend's). Each call
     /// shows the watch the system's latest pass: the paced writers call it once
     /// a pass, after the doorbell.
-    fn lead(&self) -> u64 {
+    pub(crate) fn lead(&self) -> u64 {
         let Some(watch) = &self.pull else {
             return self.lead_frames;
         };

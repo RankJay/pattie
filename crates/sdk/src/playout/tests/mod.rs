@@ -25,3 +25,4 @@ fn setup() -> (FakeBackend, Device, Playout, u64) {
 mod convert;
 mod interrupt;
 mod push;
+mod replies;

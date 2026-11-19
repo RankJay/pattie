@@ -47,7 +47,8 @@ pub struct LiveStats {
     /// The drift correction in use, in ppm: positive when the source runs fast.
     pub correction_ppm: f64,
     /// Frames played as silence because the source fell behind (after it
-    /// first started); the buffer then fills to its target again before playing.
+    /// first started): from the pass it ran short until the buffer has filled to
+    /// its target again and plays.
     pub starved_frames: u64,
     /// Frames dropped to keep the latency at its target: a backlog when playing
     /// starts, a pile-up past 100 ms over the target, or a queue past one second.
@@ -77,6 +78,9 @@ struct State {
     limit: usize,
     /// Playing from the queue; false while it fills to the target.
     playing: bool,
+    /// Has played since it was made: silence while filling counts as starved
+    /// only after the first start.
+    started: bool,
     /// The system's last pass seen: (frames, ns) of its clock pair.
     last_pass: Option<(u64, u64)>,
     ppm: f64,
@@ -145,9 +149,13 @@ impl Shared {
             Vec::new()
         };
         let pulled = audio.len() / channels;
-        if state.playing && pulled < room {
-            // The source fell behind: silence, and fill to the target again.
+        state.started |= state.playing;
+        if state.started {
+            // Silence where audio was due: the pass the source fell behind,
+            // and every pass while it fills to the target again.
             state.starved += (room - pulled) as u64;
+        }
+        if state.playing && pulled < room {
             state.playing = false;
         }
         audio.resize(room * channels, 0.0);

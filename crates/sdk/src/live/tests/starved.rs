@@ -89,3 +89,34 @@ fn a_source_that_falls_behind_plays_counted_silence_then_fills_up_again() {
     assert!(refilling.iter().all(|&s| s == 0.0));
     assert_eq!(live.stats().queued_frames, 960);
 }
+
+#[test]
+fn silence_while_it_fills_up_again_counts_as_starved_too() {
+    let (backend, mic, live) = setup();
+    live.push(&vec![0.5; target(&live)]);
+    live.shared.pump();
+    while live.stats().starved_frames == 0 {
+        backend.system_read(mic.id(), 480).unwrap();
+        live.shared.pump();
+    }
+    let starved = live.stats().starved_frames;
+
+    // Nothing arrives for three more passes: each is 480 frames of silence.
+    for _ in 0..3 {
+        backend.system_read(mic.id(), 480).unwrap();
+        live.shared.pump();
+    }
+
+    assert_eq!(live.stats().starved_frames, starved + 3 * 480);
+}
+
+#[test]
+fn silence_before_the_first_start_is_not_starved() {
+    let (backend, mic, live) = setup();
+    for _ in 0..5 {
+        backend.system_read(mic.id(), 480).unwrap();
+        live.shared.pump();
+    }
+
+    assert_eq!(live.stats().starved_frames, 0);
+}

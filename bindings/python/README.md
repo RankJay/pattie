@@ -54,10 +54,15 @@ its reply was actually heard. A `Playout` does both:
 
 ```python
 voice = mic.playout()  # takes the model's format from the microphone
-voice.push(audio_delta)  # returns at once; plays at the listeners' pace
+voice.push(audio_delta, reply=item_id)  # returns at once; plays at the listeners' pace
 cut = voice.interrupt()  # someone spoke: stop now
-cut.heard_ms  # how much was heard: OpenAI's audio_end_ms
+cut.reply, cut.heard_ms  # which reply, and how much was heard: OpenAI's audio_end_ms
 ```
+
+Name each reply (`reply=`, OpenAI's item id). A reply then stays one reply
+however its audio arrives: a network stall doesn't start a new one, and the next
+reply's audio, pushed while this one still plays, doesn't join it. Without a
+name, a reply ends whenever all of its audio has played.
 
 [`examples/barge_in.py`](examples/barge_in.py) is a whole agent in a meeting:
 OpenAI's realtime model through Vercel's AI Gateway, with barge-in.
