@@ -1,0 +1,32 @@
+[package]
+name = "pattie-javascript"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Node.js binding of the Pattie SDK (ADR 0019), built with napi-rs as the pattie npm package"
+
+[lib]
+name = "pattie_native"
+crate-type = ["cdylib"]
+# A Node-API module can't link a Rust test binary on its own: tests are the
+# node:test suite in test/, run against the built module.
+test = false
+doctest = false
+
+[features]
+# Dev builds only (package.json, `pnpm build:dev`): adds pattie/_testing, the
+# SDK's Fake backend, so the tests run without the driver. Releases leave it out.
+fake-backend = ["pattie/fake-backend"]
+
+[dependencies]
+pattie.workspace = true
+napi = { version = "3.16", default-features = false, features = ["napi9"] }
+napi-derive = "3.7"
+
+[build-dependencies]
+napi-build = "2.6"
+
+[lints]
+workspace = true

@@ -1,0 +1,57 @@
+{
+  "name": "pattie",
+  "version": "0.1.0",
+  "description": "Virtual microphones and speakers other apps can pick, from Node.js: no cable to install, no admin prompt in your app",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./_testing": {
+      "types": "./dist/_testing.d.ts",
+      "default": "./dist/_testing.js"
+    }
+  },
+  "files": [
+    "dist/*.js",
+    "dist/*.d.ts",
+    "!dist/_testing.*",
+    "native/index.js",
+    "native/index.d.ts"
+  ],
+  "napi": {
+    "binaryName": "pattie",
+    "targets": [
+      "x86_64-pc-windows-msvc",
+      "x86_64-unknown-linux-gnu",
+      "aarch64-unknown-linux-gnu"
+    ]
+  },
+  "scripts": {
+    "build:native": "napi build --platform --release --esm --output-dir native --js index.js --dts index.d.ts",
+    "build:native:dev": "napi build --platform --features fake-backend --esm --output-dir native --js index.js --dts index.d.ts",
+    "build:ts": "tsc -p tsconfig.json",
+    "build": "pnpm build:native && pnpm build:ts:release",
+    "build:dev": "pnpm build:native:dev && pnpm build:ts",
+    "test": "node --test --test-concurrency=1 \"test/*.test.ts\"",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p test/tsconfig.json --noEmit",
+    "lint": "oxlint lib test examples",
+    "format": "oxfmt lib test examples",
+    "format:check": "oxfmt --check lib test examples",
+    "test:release": "node --test \"test/release/*.test.ts\"",
+    "build:ts:release": "tsc -p tsconfig.release.json"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "3.10.12",
+    "@types/node": "26.6.6",
+    "oxfmt": "0.79.0",
+    "oxlint": "1.94.0",
+    "typescript": "7.0.2"
+  },
+  "packageManager": "pnpm@12.21.0"
+}

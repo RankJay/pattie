@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/sdk", "crates/cli", "crates/install", "crates/msi", "core/tests/conformance", "bindings/python"]
+members = ["crates/sdk", "crates/cli", "crates/install", "crates/msi", "core/tests/conformance", "bindings/python", "bindings/javascript"]
 resolver = "3"
 
 # Facts every package shares, in one place (each package says `x.workspace = true`).

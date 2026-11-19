@@ -81,6 +81,8 @@ pub(crate) struct Inner {
     pub(crate) pull: Option<Mutex<pull::PullWatch>>,
     /// The Ring has one app-side party: a single Writer or Reader at a time.
     access_taken: AtomicBool,
+    /// Set by [`Device::stop_waits`]: every app-side wait returns at once.
+    pub(crate) stopping: AtomicBool,
 }
 
 /// A live virtual microphone or speaker. Dropping it removes it (ADR 0005).
@@ -145,6 +147,16 @@ impl Device {
     /// The driver's ID for this Device; never reused until the machine restarts.
     pub fn id(&self) -> u32 {
         self.inner.id
+    }
+
+    /// Ends every wait on this Device, now and from now on: a paced write, read
+    /// or playout wait returns what it has at once instead of at its deadline.
+    /// For a binding's `close()`, called from another thread while one of its
+    /// own threads waits (ADR 0019 amendment, 2026-11-20). It can't be undone.
+    #[doc(hidden)]
+    pub fn stop_waits(&self) {
+        self.inner.stopping.store(true, Ordering::Release);
+        self.inner.doorbell.ring();
     }
 
     /// The shared parts, for the crate's own modules.

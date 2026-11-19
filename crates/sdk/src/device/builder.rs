@@ -78,6 +78,7 @@ impl DeviceBuilder {
                     .lead_follows_pull()
                     .then(|| Mutex::new(pull::PullWatch::default())),
                 access_taken: AtomicBool::new(false),
+                stopping: AtomicBool::new(false),
             }),
         })
     }

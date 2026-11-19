@@ -76,6 +76,7 @@ crates/
                             engine behind `pattie-cli install` and the MSI's custom action
   msi/                      pattie-msi: the MSI's custom actions (a DLL over pattie-install)
 bindings/python/            the Python binding (`pattie` on PyPI), built with maturin
+bindings/javascript/        the Node.js binding (`pattie` on npm), built with napi-rs
 integrations/pipecat/       the Pipecat transport (`pipecat-pattie` on PyPI)
 driver/                     the ACX/KMDF driver: shell sources, pattie.inf, project
   vm/                       scripts for the test VM (package, install, probe, trace)

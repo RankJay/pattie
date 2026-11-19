@@ -78,7 +78,7 @@ impl Writer {
                 continue;
             }
             let now = Instant::now();
-            if now >= deadline {
+            if now >= deadline || self.inner.stopped() {
                 break;
             }
             // The system rings after each pull, which is what makes room.
@@ -95,7 +95,7 @@ impl Writer {
                 return true;
             }
             let now = Instant::now();
-            if now >= deadline {
+            if now >= deadline || self.inner.stopped() {
                 return false;
             }
             self.inner.doorbell.wait(Some(deadline - now));

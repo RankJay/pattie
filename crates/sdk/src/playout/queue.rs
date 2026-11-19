@@ -187,8 +187,10 @@ impl Playout {
             if state.queue.is_empty() && state.replies.iter().all(|r| r.played(taken)) {
                 return true;
             }
+            // `stop_waits` rings the doorbell: the feeder wakes, pumps and
+            // notifies, so this sees the mark at once.
             let now = Instant::now();
-            if now >= deadline {
+            if now >= deadline || self.shared.inner.stopped() {
                 return false;
             }
             state = self

@@ -60,6 +60,7 @@ mod live;
 mod multichannel;
 mod pacing;
 mod playout;
+mod stop;
 mod streaming;
 
 /// The system's pulls, 10 ms apart, as a test thread plays them.

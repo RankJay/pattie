@@ -54,6 +54,11 @@ impl Inner {
             .map_err(|_| Error::AlreadyTaken)
     }
 
+    /// Whether [`Device::stop_waits`] was called: waits end at once.
+    pub(crate) fn stopped(&self) -> bool {
+        self.stopping.load(Ordering::Acquire)
+    }
+
     pub(crate) fn release_access(&self) {
         self.access_taken.store(false, Ordering::Release);
     }

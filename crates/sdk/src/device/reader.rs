@@ -55,7 +55,7 @@ impl Reader {
                 return Ok(read);
             }
             let now = Instant::now();
-            if now >= deadline {
+            if now >= deadline || self.inner.stopped() {
                 return Ok(0);
             }
             self.inner.doorbell.wait(Some(deadline - now));

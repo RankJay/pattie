@@ -132,9 +132,107 @@ jobs:
           name: wheel-${{ matrix.os }}-${{ matrix.arch }}
           path: target/release-files/*.whl
 
+  npm-binaries:
+    name: Node.js binary (${{ matrix.os }} ${{ matrix.arch }})
+    needs: version
+    strategy:
+      matrix:
+        include:
+          - os: windows
+            arch: x64
+            runner: windows-2025-vs2026
+            target: x86_64-pc-windows-msvc
+            cross: ""
+          - os: linux
+            arch: x64
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            # glibc 2.17's toolchain, so the binary runs on older distributions,
+            # as the wheels' manylinux does.
+            cross: --use-napi-cross
+          - os: linux
+            arch: arm64
+            runner: ubuntu-24.04-arm # built natively: no cross compiler for the C core
+            target: aarch64-unknown-linux-gnu
+            cross: --use-napi-cross
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        working-directory: bindings/javascript
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master; installs rustup where it is missing
+        with:
+          toolchain: stable
+      - name: Rust toolchain (the version in rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+      - run: npm install --global pnpm@12.21.0
+      - run: pnpm install --frozen-lockfile
+      # The Fake backend stays out: plain features only.
+      - run: pnpm napi build --platform --release --esm --target ${{ matrix.target }} ${{ matrix.cross }} --output-dir native --js index.js --dts index.d.ts
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: node-${{ matrix.os }}-${{ matrix.arch }}
+          path: bindings/javascript/native/*.node
+
+  npm:
+    name: npm packages
+    needs: [version, npm-binaries]
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: bindings/javascript
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master; installs rustup where it is missing
+        with:
+          toolchain: stable
+      - name: Rust toolchain (the version in rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+      - run: npm install --global pnpm@12.21.0
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: node-*
+          path: bindings/javascript/artifacts
+          merge-multiple: true
+      # The loader and types (from this runner's release build), then the
+      # TypeScript layer without pattie/_testing.
+      - run: pnpm build
+      - name: One package per platform, holding its binary
+        run: |
+          pnpm napi create-npm-dirs
+          pnpm napi artifacts --output-dir artifacts
+      # What `napi pre-publish` would add: each platform's package, as an
+      # optional dependency the matching platform installs.
+      - name: The main package's optional dependencies
+        run: |
+          node --input-type=module -e "
+            import { readFileSync, writeFileSync } from 'node:fs';
+            const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
+            const names = ['win32-x64-msvc', 'linux-x64-gnu', 'linux-arm64-gnu'];
+            pkg.optionalDependencies = Object.fromEntries(names.map((n) => ['pattie-' + n, pkg.version]));
+            writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+      - name: Pack them all (not published)
+        run: |
+          mkdir -p ../../target/release-files
+          for folder in npm/*/; do npm pack "$folder" --pack-destination ../../target/release-files; done
+          npm pack --pack-destination ../../target/release-files
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: npm-packages
+          path: target/release-files/*.tgz
+
   release:
     name: Draft release
-    needs: [version, driver, cli, wheels]
+    needs: [version, driver, cli, wheels, npm]
     runs-on: ubuntu-24.04
     permissions:
       contents: write # create the release
@@ -158,3 +256,5 @@ jobs:
             - `windows-pattie-cli.exe`, `linux-pattie-cli`: the test tool.
             - `pattie-*.whl`: the Python package (CPython 3.14+), for
               Windows x64 and Linux x64/arm64. Not on PyPI yet.
+            - `pattie-0.*.tgz` and `pattie-<platform>-*.tgz`: the Node.js package (Node 22+, Electron)
+              and its binary for Windows x64 and Linux x64/arm64. Not on npm yet.

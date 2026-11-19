@@ -24,7 +24,7 @@ that talks to it over shared memory.
 
 > **Status: v0 on Windows, plus Linux; not released.** The driver, SDK and CLI work end
 > to end in a test VM, including a real Zoom call; the Linux backend and the Python
-> binding work too. What's left before the v0 gate is an
+> and Node.js bindings work too. What's left before the v0 gate is an
 > attestation-signed driver installed on a clean Windows 11 with Secure Boot on.
 > Nothing is published to crates.io yet.
 
@@ -138,6 +138,7 @@ Add `-p:RunCodeAnalysis=true` for Microsoft's driver code analysis. Output goes 
 - [SECURITY.md](SECURITY.md): how to report a vulnerability.
 - [driver/README.md](driver/README.md): the driver, and testing it in a VM.
 - [bindings/python/](bindings/python/README.md), [integrations/pipecat/](integrations/pipecat/README.md): Python, Pipecat.
+- [bindings/javascript/](bindings/javascript/README.md): Node.js and Electron.
 
 ## Not in v0
 
@@ -145,7 +146,7 @@ Deliberately left out, to reach the gate first: loopback devices, renaming a liv
 Device, volume and mute, more than 8 Devices, latency under 10 ms (the original
 goal, still ahead), 24-bit and rates beyond 44.1 / 48 / 96 kHz, more than 8
 channels, installer self-heal (the SDK reconnecting by itself after a driver
-update), the macOS backend, bindings for C, Node and Swift.
+update), the macOS backend, bindings for C and Swift.
 
 ## License
 
