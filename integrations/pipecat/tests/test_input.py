@@ -109,3 +109,30 @@ async def test_a_busy_thread_pool_doesnt_starve_the_speaker(
 
     loud = [s for s in samples(frames) if s > 15_000]
     assert abs(len(loud) - 3_200) < 100, len(loud)
+
+
+async def test_silence_follows_audio_that_ends_partway_through_a_frame(
+    backend: _testing.FakeBackend,
+) -> None:
+    transport = listening(backend)
+    assert transport.speaker is not None
+    speaker_id = transport.speaker.id
+
+    async def meeting_app_plays_then_stops() -> None:
+        # 30 ms: a frame and a half at the pipeline's 20 ms, then the stream
+        # stops. The half frame left over once held back every silent frame
+        # after it (2026-11-19): voice detection never saw the turn end.
+        await asyncio.sleep(0.2)
+        for _ in range(3):
+            assert backend.system_write(speaker_id, f32([0.5] * 480))
+            await asyncio.sleep(0.01)
+
+    results = await asyncio.gather(
+        run_test(transport.input(), frames_to_send=[SleepFrame(sleep=1.2)]),
+        meeting_app_plays_then_stops(),
+    )
+    frames = audio_frames(list(results[0][0]))
+
+    seconds = len(frames) * 0.02
+    assert seconds > 0.9, seconds
+    assert all(len(f.audio) == 640 for f in frames)

@@ -145,9 +145,12 @@ class PattieInputTransport(BaseInputTransport):
             if played:
                 pending += converter.convert(played)
                 silence_due = now + _FRAME_SECONDS
-            elif not pending:
+            else:
+                # Silence fills out a frame the audio ended partway through, so
+                # the next frame still goes: a Windows packet is 10 ms, and an
+                # odd number of them once held back every silent frame after.
                 while silence_due <= now:
-                    pending += bytes(frame_bytes)
+                    pending += bytes(frame_bytes - len(pending) % frame_bytes)
                     silence_due += _FRAME_SECONDS
             while len(pending) >= frame_bytes:
                 audio, pending = pending[:frame_bytes], pending[frame_bytes:]

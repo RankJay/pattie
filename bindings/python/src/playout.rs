@@ -81,12 +81,29 @@ impl Playout {
     }
 
     /// Waits until everything pushed has been heard: True then, False if
-    /// `timeout` (seconds) ran out first.
+    /// `timeout` (seconds) ran out first, or the Playout or its microphone was
+    /// closed (from another thread, say: the wait then ends within about 100 ms).
     #[pyo3(signature = (timeout = None))]
     fn wait_idle(&self, py: Python<'_>, timeout: Option<f64>) -> PyResult<bool> {
         let deadline = deadline(timeout)?;
-        let playout = self.get()?;
-        Ok(py.detach(|| playout.wait_idle(deadline)))
+        let mut playout = self.get()?;
+        // In 100 ms pieces, as Microphone.wait_for_playout: the Playout (and so
+        // the Device) is held for one piece at a time, so a close from another
+        // thread ends the wait, and Ctrl+C gets through between pieces.
+        loop {
+            let piece = piece_end(deadline);
+            if py.detach(|| playout.wait_idle(piece)) {
+                return Ok(true);
+            }
+            if Instant::now() >= deadline {
+                return Ok(false);
+            }
+            py.check_signals()?;
+            match self.get() {
+                Ok(next) => playout = next,
+                Err(_) => return Ok(false), // closed meanwhile
+            }
+        }
     }
 
     /// Frames waiting to be played.

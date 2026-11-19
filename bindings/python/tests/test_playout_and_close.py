@@ -89,3 +89,24 @@ def test_closing_a_microphone_removes_it_even_with_a_playout_open(
     assert backend.system_read(mic.id, 480) is None, "the Device is still live"
     with pytest.raises(ValueError, match="closed"):
         playout.push(floats([0.5] * 480))
+
+
+def test_closing_the_microphone_ends_a_playouts_wait_idle_and_frees_the_name(
+    backend: _testing.FakeBackend,
+) -> None:
+    mic = pattie.Microphone("Agent Mic", _backend=backend)
+    playout = mic.playout()
+    playout.push(floats([0.1] * 48_000))  # nobody pulls: never idle
+    result: list[bool] = []
+    waiter = threading.Thread(target=lambda: result.append(playout.wait_idle()), daemon=True)
+    waiter.start()
+    time.sleep(0.05)
+
+    mic.close()
+
+    # The wait lets go within about one 100 ms piece, and with it the Device:
+    # until 2026-11-19 it held both until its timeout (a year when None).
+    waiter.join(timeout=1)
+    assert not waiter.is_alive()
+    assert result == [False]
+    pattie.Microphone("Agent Mic", _backend=backend).close()
