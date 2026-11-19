@@ -263,6 +263,16 @@ jobs:
       - uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3.0.0
         with:
           msbuild-architecture: x64
+      # Rust (for the MSI's custom actions) and its cache come before the driver
+      # build: when the cache only partly matches, rust-cache deletes every file
+      # in target/ outside Cargo's own folders, target/driver/ included. Restored
+      # after the build, it deleted the driver it had just built (2026-11-19).
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master; installs rustup where it is missing
+        with:
+          toolchain: stable
+      - name: Rust toolchain (the version in rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - uses: ./.github/actions/restore-wdk
       - name: Build (Release, warnings are errors, Microsoft's code analysis)
         run: msbuild driver/pattie.vcxproj -p:Configuration=Release -p:Platform=x64 -p:RunCodeAnalysis=true -p:PattieWdkNuGet=true -nologo -v:minimal
@@ -270,12 +280,6 @@ jobs:
       # built, then Windows Installer's ICE validation. Only a build check: the
       # payload's catalog is a placeholder (no signing in CI), so the MSI isn't
       # kept. Release MSIs are built by hand from Partner Center's output.
-      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master; installs rustup where it is missing
-        with:
-          toolchain: stable
-      - name: Rust toolchain (the version in rust-toolchain.toml)
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Install WiX v6
         shell: pwsh
         run: |

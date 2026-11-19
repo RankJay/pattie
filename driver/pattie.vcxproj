@@ -110,12 +110,4 @@
   </ItemGroup>
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
-
-  <!-- StampInf writes the stamped inf to IntDir. The installed WDK also copies
-       it next to the .sys; the NuGet WDK (CI, -p:PattieWdkNuGet=true) doesn't.
-       CI's MSI step, make-attestation-cab.ps1 and release.yml all read it from
-       OutDir, so copy it there whichever kit built it. -->
-  <Target Name="PattieCopyStampedInf" AfterTargets="Build">
-    <Copy SourceFiles="@(Inf->'$(IntDir)%(Filename)%(Extension)')" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
-  </Target>
 </Project>

@@ -11,7 +11,8 @@ import { nextWarning, pullInBackground, ramp } from './system.ts';
 test('write resolves once the system has taken it all, without blocking the event loop', async () => {
     const backend = new FakeBackend();
     using mic = new Microphone('Agent Mic', { _backend: backend });
-    using system = pullInBackground(backend, mic.id);
+    // Takes only what's buffered: a late write would otherwise hear Gap first.
+    using system = pullInBackground(backend, mic.id, () => mic.stats.bufferedFrames);
     const audio = ramp(9_600); // 200 ms
 
     const written = await mic.write(audio);
