@@ -142,23 +142,24 @@ jobs:
             arch: x64
             runner: windows-2025-vs2026
             target: x86_64-pc-windows-msvc
-            cross: ""
           - os: linux
             arch: x64
             runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
-            # glibc 2.17's toolchain, so the binary runs on older distributions,
-            # as the wheels' manylinux does.
-            cross: --use-napi-cross
+            # Built in the wheels' manylinux image: glibc 2.28 and a GCC new
+            # enough for the C core (napi's cross toolchain is GCC 4.8, no -std=c17).
+            container: quay.io/pypa/manylinux_2_28_x86_64
           - os: linux
             arch: arm64
             runner: ubuntu-24.04-arm # built natively: no cross compiler for the C core
             target: aarch64-unknown-linux-gnu
-            cross: --use-napi-cross
+            container: quay.io/pypa/manylinux_2_28_aarch64
     runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container }}
     defaults:
       run:
         working-directory: bindings/javascript
+        shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master; installs rustup where it is missing
@@ -172,7 +173,7 @@ jobs:
       - run: npm install --global pnpm@12.21.0
       - run: pnpm install --frozen-lockfile
       # The Fake backend stays out: plain features only.
-      - run: pnpm napi build --platform --release --esm --target ${{ matrix.target }} ${{ matrix.cross }} --output-dir native --js index.js --dts index.d.ts
+      - run: pnpm napi build --platform --release --esm --target ${{ matrix.target }} --output-dir native --js index.js --dts index.d.ts
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: node-${{ matrix.os }}-${{ matrix.arch }}
