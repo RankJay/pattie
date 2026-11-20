@@ -41,14 +41,25 @@ impl Shared {
     /// Up to 100 ms of what was played, as bytes in the speaker's format, and
     /// when its first frame was played; waits in pieces until there's some,
     /// or the speaker is closed or the call cancelled (then nothing).
-    fn read(&self, cancelled: &Cancelled) -> Result<(Vec<u8>, Option<Instant>)> {
+    ///
+    /// `asked_open`: whether the speaker was still open when JavaScript called
+    /// `read`. A read asked for before `close()` ends with nothing even when
+    /// `close()` takes the reader before this thread gets to it; one asked for
+    /// after is CLOSED.
+    fn read(&self, cancelled: &Cancelled, asked_open: bool) -> Result<(Vec<u8>, Option<Instant>)> {
         let mut guard = lock(&self.reading);
         let Reading {
             reader,
             output,
             samples,
         } = &mut *guard;
-        let reader = reader.as_mut().ok_or_else(closed)?;
+        let Some(reader) = reader.as_mut() else {
+            return if asked_open {
+                Ok((Vec::new(), None))
+            } else {
+                Err(closed())
+            };
+        };
         loop {
             let timed = reader.read_timed(samples, piece_end()).map_err(to_js)?;
             if timed.frames > 0 {
@@ -125,9 +136,10 @@ impl Speaker {
     pub fn read<'env>(&self, env: &'env Env, cancel: Option<&Cancel>) -> Result<Object<'env>> {
         let shared = self.shared.clone();
         let cancelled = Cancelled::of(cancel);
+        let asked_open = !shared.closing.load(Ordering::Acquire);
         self.waits.promise(
             env,
-            move || shared.read(&cancelled),
+            move || shared.read(&cancelled, asked_open),
             |_, (bytes, _)| Ok(Uint8Array::new(bytes)),
         )
     }
@@ -143,9 +155,10 @@ impl Speaker {
     ) -> Result<Object<'env>> {
         let shared = self.shared.clone();
         let cancelled = Cancelled::of(cancel);
+        let asked_open = !shared.closing.load(Ordering::Acquire);
         self.waits.promise(
             env,
-            move || shared.read(&cancelled),
+            move || shared.read(&cancelled, asked_open),
             |_, (bytes, first_at)| {
                 Ok(TimedBytes {
                     data: Uint8Array::new(bytes),
