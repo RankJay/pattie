@@ -3,8 +3,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { DEVICE_FORMAT, Microphone, PattieError, stableId } from 'pattie';
-import { FakeBackend } from 'pattie/_testing';
+import { DEVICE_FORMAT, Microphone, PattieError, stableId } from '@pattie/pattie';
+import { FakeBackend } from '@pattie/pattie/_testing';
 
 test('stableId matches the ID Windows and PipeWire give the Device', () => {
     // The same values as the SDK's and the Python binding's stable_id.

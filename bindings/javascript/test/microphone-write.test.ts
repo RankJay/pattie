@@ -3,8 +3,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { Microphone, PattieError } from 'pattie';
-import { FakeBackend } from 'pattie/_testing';
+import { Microphone, PattieError } from '@pattie/pattie';
+import { FakeBackend } from '@pattie/pattie/_testing';
 
 import { nextWarning, pullInBackground, ramp } from './system.ts';
 

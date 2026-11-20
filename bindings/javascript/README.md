@@ -20,7 +20,7 @@ Linux it uses PipeWire, which most desktops already run.
 ## Quickstart
 
 ```ts
-import { Microphone, Speaker } from 'pattie';
+import { Microphone, Speaker } from '@pattie/pattie';
 
 // 24 kHz 16-bit PCM in, the way most speech models send it.
 using mic = new Microphone('Agent Mic', { format: { rate: 24_000, encoding: 'pcm16' } });

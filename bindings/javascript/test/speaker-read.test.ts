@@ -4,8 +4,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
 
-import { Speaker } from 'pattie';
-import { FakeBackend } from 'pattie/_testing';
+import { Speaker } from '@pattie/pattie';
+import { FakeBackend } from '@pattie/pattie/_testing';
 
 import { ramp } from './system.ts';
 

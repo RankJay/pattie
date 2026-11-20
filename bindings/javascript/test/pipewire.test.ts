@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
 
-import { Microphone, stableId } from 'pattie';
+import { Microphone, stableId } from '@pattie/pattie';
 
 const skip =
     process.platform !== 'linux' || process.env.PATTIE_PIPEWIRE !== '1'

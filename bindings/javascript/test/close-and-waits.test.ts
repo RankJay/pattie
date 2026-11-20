@@ -5,8 +5,8 @@ import { pbkdf2 } from 'node:crypto';
 import { test } from 'node:test';
 import { promisify } from 'node:util';
 
-import { Microphone, PattieError } from 'pattie';
-import { FakeBackend } from 'pattie/_testing';
+import { Microphone, PattieError } from '@pattie/pattie';
+import { FakeBackend } from '@pattie/pattie/_testing';
 
 const isClosed = (error: unknown) => error instanceof PattieError && error.code === 'CLOSED';
 

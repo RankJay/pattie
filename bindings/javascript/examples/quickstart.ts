@@ -5,7 +5,7 @@
 //
 // Pick "Agent Mic" in Zoom, Teams or Meet; Ctrl+C removes it.
 
-import { Microphone } from 'pattie';
+import { Microphone } from '@pattie/pattie';
 
 using mic = new Microphone('Agent Mic', { format: { rate: 24_000, encoding: 'pcm16' } });
 const tone = Int16Array.from({ length: 24_000 }, (_, i) =>

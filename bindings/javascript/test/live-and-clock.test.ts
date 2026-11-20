@@ -5,8 +5,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
 
-import { Converter, Microphone, PattieError, Speaker } from 'pattie';
-import { FakeBackend, sdkError } from 'pattie/_testing';
+import { Converter, Microphone, PattieError, Speaker } from '@pattie/pattie';
+import { FakeBackend, sdkError } from '@pattie/pattie/_testing';
 
 import { pullInBackground, ramp } from './system.ts';
 

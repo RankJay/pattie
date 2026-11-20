@@ -21,7 +21,7 @@
 //   is interrupted at once, and `conversation-item-truncate` tells the model how
 //   much of the reply being heard was heard, so it forgets the rest.
 
-import { type AudioFormat, Microphone, Speaker } from 'pattie';
+import { type AudioFormat, Microphone, Speaker } from '@pattie/pattie';
 
 const URL = 'wss://ai-gateway.vercel.sh/v4/ai/realtime-model?ai-model-id=openai/gpt-realtime-2';
 // The model's audio, both ways: 16-bit PCM, 24 kHz, mono.

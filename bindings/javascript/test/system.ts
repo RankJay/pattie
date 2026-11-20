@@ -1,6 +1,6 @@
 // The system's side in the tests: what Windows' audio engine or PipeWire would do.
 
-import type { FakeBackend } from 'pattie/_testing';
+import type { FakeBackend } from '@pattie/pattie/_testing';
 
 /** Samples `0, 1/n, 2/n, ...`: audio whose order a test can check. */
 export function ramp(frames: number): Float32Array {

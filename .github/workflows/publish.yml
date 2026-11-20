@@ -2,7 +2,7 @@
 # the version in Cargo.toml ([workspace.package]):
 #   - crates.io: the `pattie` crate (crates/sdk)
 #   - PyPI:      the `pattie` wheels (bindings/python)
-#   - npm:       `pattie` and its per-platform binary packages (bindings/javascript)
+#   - npm:       `@pattie/pattie`, every platform's binary inside (bindings/javascript)
 # Nothing is published until every package has built, so a failed build never
 # leaves a half release. Re-running after a partial publish skips what is
 # already up.
@@ -174,7 +174,7 @@ jobs:
           path: bindings/javascript/native/*.node
 
   npm-pack:
-    name: npm packages (pack)
+    name: npm package (pack)
     needs: [version, npm-binaries]
     runs-on: ubuntu-24.04
     defaults:
@@ -192,37 +192,31 @@ jobs:
           node-version: "24"
       - run: npm install --global pnpm@12.21.0
       - run: pnpm install --frozen-lockfile
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          pattern: node-*
-          path: bindings/javascript/artifacts
-          merge-multiple: true
       # The loader and types (from this runner's release build), then the
       # TypeScript layer without pattie/_testing.
       - run: pnpm build
-      - name: One package per platform, holding its binary
+      # Every platform's binary inside the one package, next to the loader,
+      # which loads ./pattie.<platform>.node. They replace this runner's own
+      # build (newer glibc than the manylinux ones).
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: node-*
+          path: bindings/javascript/native
+          merge-multiple: true
+      - name: Check every binary is there
         run: |
-          pnpm napi create-npm-dirs
-          pnpm napi artifacts --output-dir artifacts
-      - name: The main package's optional dependencies
-        run: |
-          node --input-type=module -e "
-            import { readFileSync, writeFileSync } from 'node:fs';
-            const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
-            const names = ['win32-x64-msvc', 'linux-x64-gnu', 'linux-arm64-gnu'];
-            pkg.optionalDependencies = Object.fromEntries(names.map((n) => ['pattie-' + n, pkg.version]));
-            writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
-          "
-      # Platform packages in platform/, the main one in main/: publish order matters.
+          for platform in win32-x64-msvc linux-x64-gnu linux-arm64-gnu; do
+            test -f "native/pattie.$platform.node" || { echo "::error::missing pattie.$platform.node"; exit 1; }
+          done
+          ls -la native
       - name: Pack
         run: |
-          mkdir -p ../../target/npm/platform ../../target/npm/main
-          for folder in npm/*/; do npm pack "$folder" --pack-destination ../../target/npm/platform; done
-          npm pack --pack-destination ../../target/npm/main
+          mkdir -p ../../target/npm
+          npm pack --pack-destination ../../target/npm
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: npm-packages
-          path: target/npm/
+          name: npm-package
+          path: target/npm/*.tgz
 
   publish-crate:
     name: Publish to crates.io
@@ -296,9 +290,8 @@ jobs:
       - run: npm install --global npm@11 # trusted publishing needs npm 11.5.1+
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: npm-packages
+          name: npm-package
           path: npm
-      # Platform packages first: the main package depends on them.
       - name: Publish
         env:
           # Used only until trusted publishing is set up on npmjs.com; then
@@ -307,11 +300,10 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
           NPM_TAG: ${{ needs.version.outputs.npm-tag }}
         run: |
-          for tgz in npm/platform/*.tgz npm/main/*.tgz; do
-            name=$(tar -xOzf "$tgz" package/package.json | node -p "JSON.parse(require('fs').readFileSync(0)).name")
-            if npm view "$name@$VERSION" version >/dev/null 2>&1; then
-              echo "$name@$VERSION is already on npm, skipping"
-              continue
-            fi
-            npm publish "$tgz" --access public --tag "$NPM_TAG"
-          done
+          tgz=$(ls npm/*.tgz)
+          name=$(tar -xOzf "$tgz" package/package.json | node -p "JSON.parse(require('fs').readFileSync(0)).name")
+          if npm view "$name@$VERSION" version >/dev/null 2>&1; then
+            echo "$name@$VERSION is already on npm, skipping"
+            exit 0
+          fi
+          npm publish "$tgz" --access public --tag "$NPM_TAG"

@@ -3,8 +3,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { Microphone, PattieError } from 'pattie';
-import { FakeBackend } from 'pattie/_testing';
+import { Microphone, PattieError } from '@pattie/pattie';
+import { FakeBackend } from '@pattie/pattie/_testing';
 
 test('a second microphone with the same name is DUPLICATE_NAME, and says the fix', () => {
     const backend = new FakeBackend();
