@@ -1,6 +1,6 @@
 {
   "name": "pattie",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Virtual microphones and speakers other apps can pick, from Node.js: no cable to install, no admin prompt in your app",
   "license": "Apache-2.0",
   "type": "module",

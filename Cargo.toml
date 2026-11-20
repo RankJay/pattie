@@ -4,7 +4,7 @@ resolver = "3"
 
 # Facts every package shares, in one place (each package says `x.workspace = true`).
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 license = "Apache-2.0"
 rust-version = "1.97"  # the pinned toolchain (rust-toolchain.toml); no older one is tested

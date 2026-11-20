@@ -668,7 +668,6 @@ wheels = [
 
 [[package]]
 name = "pattie"
-version = "0.1.0"
 source = { editable = "../../bindings/python" }
 
 [package.metadata]
