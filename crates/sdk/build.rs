@@ -12,8 +12,15 @@ fn main() {
         return;
     }
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("set by cargo"));
-    let include = manifest.join("../../core/include");
-    let core = manifest.join("../../core/src");
+    // The published crate carries its own copy of the C core (publish.yml);
+    // in the repo it is the shared one two folders up.
+    let core_root = if manifest.join("core/src").is_dir() {
+        manifest.join("core")
+    } else {
+        manifest.join("../../core")
+    };
+    let include = core_root.join("include");
+    let core = core_root.join("src");
     let alloc = manifest.join("src/sys/alloc.c");
 
     let mut build = cc::Build::new();

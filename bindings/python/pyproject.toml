@@ -4,7 +4,8 @@ build-backend = "maturin"
 
 [project]
 name = "pattie"
-version = "0.1.0"
+# From Cargo.toml (the workspace version), the one place every package's version is set.
+dynamic = ["version"]
 description = "Virtual microphones and speakers that every app sees as real audio devices"
 readme = "README.md"
 requires-python = ">=3.14"

@@ -5,7 +5,14 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 description = "Create named virtual microphones and speakers that other apps see as real audio devices"
-publish = false
+repository = "https://github.com/RankJay/pattie"
+readme = "../../README.md"
+keywords = ["audio", "virtual-audio", "microphone", "speaker", "routing"]
+categories = ["multimedia::audio"]
+# What goes to crates.io. core/ is the C core, copied in from the repo's core/
+# by publish.yml just before `cargo publish` (build.rs reads it from there when
+# it is present, from ../../core otherwise).
+include = ["Cargo.toml", "build.rs", "src/**", "core/include/**", "core/src/**"]
 
 [dependencies]
 

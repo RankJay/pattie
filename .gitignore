@@ -26,5 +26,8 @@ bindings/javascript/npm/
 **/*node_modules/
 **/*dist/
 
+# The SDK crate's copy of the C core, made by publish.yml for `cargo publish`
+crates/sdk/core/
+
 # Env variables
 .env

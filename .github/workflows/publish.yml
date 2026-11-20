@@ -1,0 +1,313 @@
+# On an SDK tag (sdk-v<x.y.z>): build the SDK packages and publish them, all at
+# the version in Cargo.toml ([workspace.package]):
+#   - crates.io: the `pattie` crate (crates/sdk)
+#   - PyPI:      the `pattie` wheels (bindings/python)
+#   - npm:       `pattie` and its per-platform binary packages (bindings/javascript)
+# Nothing is published until every package has built, so a failed build never
+# leaves a half release. Re-running after a partial publish skips what is
+# already up.
+#
+# Driver releases are separate (release.yml, v<a.b.c.d> tags).
+#
+# Auth: crates.io and PyPI through trusted publishing (OIDC, no secret); npm
+# through trusted publishing once configured, NPM_TOKEN until then. Publish
+# jobs run in the `release` environment.
+#
+# Manual run (Actions > Publish > Run workflow): builds everything and runs
+# `cargo publish --dry-run`; it uploads only when "dry_run" is unticked.
+name: Publish
+
+on:
+  push:
+    tags: ["sdk-v[0-9]*.[0-9]*.[0-9]*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build and check only; publish nothing"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      npm-tag: ${{ steps.version.outputs.npm-tag }}
+      publish: ${{ steps.version.outputs.publish }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: version
+        env:
+          EVENT: ${{ github.event_name }}
+          TAG: ${{ github.ref_name }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          version=$(python3 -c "import tomllib; print(tomllib.load(open('Cargo.toml','rb'))['workspace']['package']['version'])")
+          npm_version=$(node -p "require('./bindings/javascript/package.json').version")
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "::error::Not semver: $version"; exit 1; }
+          [[ "$npm_version" == "$version" ]] || { echo "::error::bindings/javascript/package.json is $npm_version, Cargo.toml is $version"; exit 1; }
+          if [[ "$EVENT" == "push" ]]; then
+            [[ "$TAG" == "sdk-v$version" ]] || { echo "::error::Tag $TAG does not match Cargo.toml version $version (expected sdk-v$version)"; exit 1; }
+            publish=true
+          else
+            [[ "$DRY_RUN" == "false" ]] && publish=true || publish=false
+          fi
+          # Pre-releases (1.2.0-rc.1) go to npm's `next`, so `npm install pattie` keeps the last stable.
+          [[ "$version" == *-* ]] && npm_tag=next || npm_tag=latest
+          {
+            echo "version=$version"
+            echo "npm-tag=$npm_tag"
+            echo "publish=$publish"
+          } >> "$GITHUB_OUTPUT"
+          echo "Version $version, npm tag $npm_tag, publish $publish" >> "$GITHUB_STEP_SUMMARY"
+
+  crate:
+    name: Crate (package and verify)
+    needs: version
+    runs-on: ubuntu-24.04 # Linux compiles the C core, so this verifies the vendored copy builds
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master; installs rustup where it is missing
+        with:
+          toolchain: stable
+      - name: Rust toolchain (the version in rust-toolchain.toml)
+        run: rustup toolchain install
+      - name: Copy the C core into the crate (build.rs reads it from there)
+        run: |
+          mkdir -p crates/sdk/core
+          cp -r core/include core/src crates/sdk/core/
+      - run: cargo publish -p pattie --dry-run --allow-dirty
+
+  wheels:
+    name: Python wheel (${{ matrix.os }} ${{ matrix.arch }})
+    needs: version
+    strategy:
+      matrix:
+        include:
+          - os: windows
+            arch: x64
+            runner: windows-2025-vs2026
+            target: x86_64-pc-windows-msvc
+          - os: linux
+            arch: x64
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - os: linux
+            arch: arm64
+            runner: ubuntu-24.04-arm # built natively: no cross compiler for the C core
+            target: aarch64-unknown-linux-gnu
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.14"
+      # One abi3 wheel per platform serves every CPython from 3.14 on. The
+      # Fake backend stays out: plain features only.
+      - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          working-directory: bindings/python
+          target: ${{ matrix.target }}
+          manylinux: "2_28"
+          args: --release --out ../../target/wheels
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wheel-${{ matrix.os }}-${{ matrix.arch }}
+          path: target/wheels/*.whl
+
+  npm-binaries:
+    name: Node.js binary (${{ matrix.os }} ${{ matrix.arch }})
+    needs: version
+    strategy:
+      matrix:
+        include:
+          - os: windows
+            arch: x64
+            runner: windows-2025-vs2026
+            target: x86_64-pc-windows-msvc
+            cross: ""
+          - os: linux
+            arch: x64
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            cross: --use-napi-cross # glibc 2.17's toolchain, as the wheels' manylinux
+          - os: linux
+            arch: arm64
+            runner: ubuntu-24.04-arm # built natively: no cross compiler for the C core
+            target: aarch64-unknown-linux-gnu
+            cross: --use-napi-cross
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        working-directory: bindings/javascript
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master; installs rustup where it is missing
+        with:
+          toolchain: stable
+      - name: Rust toolchain (the version in rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+      - run: npm install --global pnpm@12.21.0
+      - run: pnpm install --frozen-lockfile
+      # The Fake backend stays out: plain features only.
+      - run: pnpm napi build --platform --release --esm --target ${{ matrix.target }} ${{ matrix.cross }} --output-dir native --js index.js --dts index.d.ts
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: node-${{ matrix.os }}-${{ matrix.arch }}
+          path: bindings/javascript/native/*.node
+
+  npm-pack:
+    name: npm packages (pack)
+    needs: [version, npm-binaries]
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: bindings/javascript
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master; installs rustup where it is missing
+        with:
+          toolchain: stable
+      - name: Rust toolchain (the version in rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+      - run: npm install --global pnpm@12.21.0
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: node-*
+          path: bindings/javascript/artifacts
+          merge-multiple: true
+      # The loader and types (from this runner's release build), then the
+      # TypeScript layer without pattie/_testing.
+      - run: pnpm build
+      - name: One package per platform, holding its binary
+        run: |
+          pnpm napi create-npm-dirs
+          pnpm napi artifacts --output-dir artifacts
+      - name: The main package's optional dependencies
+        run: |
+          node --input-type=module -e "
+            import { readFileSync, writeFileSync } from 'node:fs';
+            const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
+            const names = ['win32-x64-msvc', 'linux-x64-gnu', 'linux-arm64-gnu'];
+            pkg.optionalDependencies = Object.fromEntries(names.map((n) => ['pattie-' + n, pkg.version]));
+            writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+      # Platform packages in platform/, the main one in main/: publish order matters.
+      - name: Pack
+        run: |
+          mkdir -p ../../target/npm/platform ../../target/npm/main
+          for folder in npm/*/; do npm pack "$folder" --pack-destination ../../target/npm/platform; done
+          npm pack --pack-destination ../../target/npm/main
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: npm-packages
+          path: target/npm/
+
+  publish-crate:
+    name: Publish to crates.io
+    needs: [version, crate, wheels, npm-pack]
+    if: needs.version.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      id-token: write # trusted publishing
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Already on crates.io?
+        id: exists
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' -A 'pattie-publish-workflow' "https://crates.io/api/v1/crates/pattie/$VERSION")
+          [[ "$code" == 200 ]] && echo "skip=true" >> "$GITHUB_OUTPUT" || echo "skip=false" >> "$GITHUB_OUTPUT"
+      - if: steps.exists.outputs.skip == 'false'
+        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master; installs rustup where it is missing
+        with:
+          toolchain: stable
+      - if: steps.exists.outputs.skip == 'false'
+        name: Rust toolchain (the version in rust-toolchain.toml)
+        run: rustup toolchain install
+      - if: steps.exists.outputs.skip == 'false'
+        name: Copy the C core into the crate
+        run: |
+          mkdir -p crates/sdk/core
+          cp -r core/include core/src crates/sdk/core/
+      - if: steps.exists.outputs.skip == 'false'
+        uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
+        id: auth
+      - if: steps.exists.outputs.skip == 'false'
+        run: cargo publish -p pattie --allow-dirty
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: [version, crate, wheels, npm-pack]
+    if: needs.version.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      id-token: write # trusted publishing
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: wheel-*
+          path: dist
+          merge-multiple: true
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          skip-existing: true
+
+  publish-npm:
+    name: Publish to npm
+    needs: [version, crate, wheels, npm-pack]
+    if: needs.version.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      id-token: write # trusted publishing
+    steps:
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          registry-url: https://registry.npmjs.org
+      - run: npm install --global npm@11 # trusted publishing needs npm 11.5.1+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: npm-packages
+          path: npm
+      # Platform packages first: the main package depends on them.
+      - name: Publish
+        env:
+          # Used only until trusted publishing is set up on npmjs.com; then
+          # npm takes the OIDC route and this secret can be deleted.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ needs.version.outputs.version }}
+          NPM_TAG: ${{ needs.version.outputs.npm-tag }}
+        run: |
+          for tgz in npm/platform/*.tgz npm/main/*.tgz; do
+            name=$(tar -xOzf "$tgz" package/package.json | node -p "JSON.parse(require('fs').readFileSync(0)).name")
+            if npm view "$name@$VERSION" version >/dev/null 2>&1; then
+              echo "$name@$VERSION is already on npm, skipping"
+              continue
+            fi
+            npm publish "$tgz" --access public --tag "$NPM_TAG"
+          done
