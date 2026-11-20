@@ -300,7 +300,8 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
           NPM_TAG: ${{ needs.version.outputs.npm-tag }}
         run: |
-          tgz=$(ls npm/*.tgz)
+          # ./ first: npm reads a bare `npm/x.tgz` as the GitHub repo npm/x.tgz.
+          tgz=$(ls ./npm/*.tgz)
           name=$(tar -xOzf "$tgz" package/package.json | node -p "JSON.parse(require('fs').readFileSync(0)).name")
           if npm view "$name@$VERSION" version >/dev/null 2>&1; then
             echo "$name@$VERSION is already on npm, skipping"
