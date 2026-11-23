@@ -22,11 +22,28 @@ a virtual mic (soundboards, routers, AI voice agents) tell their users to instal
 third-party cable. Pattie is the missing piece: a kernel driver plus a small Rust SDK
 that talks to it over shared memory.
 
-> **Status: v0 on Windows, plus Linux; not released.** The driver, SDK and CLI work end
-> to end in a test VM, including a real Zoom call; the Linux backend and the Python
-> and Node.js bindings work too. What's left before the v0 gate is an
+> **Status: SDK 0.2.0 is out for Rust, Python and Node.js. Linux works today; the
+> Windows driver isn't signed yet.** On Linux there is nothing else to install. On
+> Windows the driver, SDK and CLI work end to end in a test VM, including a real Zoom
+> call, but the driver is only test-signed. What's left before the v0 gate is an
 > attestation-signed driver installed on a clean Windows 11 with Secure Boot on.
-> Nothing is published to crates.io yet.
+
+## Install
+
+| | Package |
+| --- | --- |
+| Rust | `cargo add pattie` ([crates.io](https://crates.io/crates/pattie)) |
+| Python 3.14+ | `pip install pattie` ([PyPI](https://pypi.org/project/pattie/), [docs](bindings/python/README.md)) |
+| Node.js 22.12+ and Electron | `npm install @pattie/pattie` ([npm](https://www.npmjs.com/package/@pattie/pattie), [docs](bindings/javascript/README.md)) |
+| Pipecat | `pipecat-pattie`, from this repo for now ([docs](integrations/pipecat/README.md)) |
+
+**Linux:** the SDK uses PipeWire, which most desktops already run. No driver.
+
+**Windows:** the SDK needs the Pattie driver, installed once as administrator with
+`pattie-cli install <package folder>` (build it with `cargo build -p pattie-cli`; it
+isn't published yet). Until the signed driver ships, the test-signed one loads only
+on a machine with test signing on and Secure Boot off, such as the VM described in
+[driver/README.md](driver/README.md).
 
 ---
 ## How it works
@@ -48,8 +65,8 @@ PipeWire nodes instead of a driver.
 | A Rust SDK: create a Device, write to its mic or read from its speaker | A meeting bot or recorder |
 | A shared-memory channel between your app and the driver | A GUI app |
 
-The same API is meant to work on Linux and macOS too. Windows is done to the v0 gate;
-Linux works (ADR 0018: PipeWire, inside the app's own process, no driver to install;
+The same API is meant to work on Linux and macOS too. Windows works up to the v0 gate
+(a signed driver is next); Linux works (ADR 0018: PipeWire, inside the app's own process, no driver to install;
 Microphones and Speakers, every Device format, tested on a real PipeWire); macOS comes
 later.
 

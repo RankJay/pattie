@@ -1,0 +1,11 @@
+# Who reviews what. With the main ruleset's pull-request rule this only requests the
+# review; set require_code_owner_review in .github/rulesets/main.json to require it.
+*                         @RankJay
+
+# The ABI contract, the kernel driver, and what ships or publishes.
+/core/include/pattie_abi.h @RankJay
+/crates/sdk/src/abi.rs     @RankJay
+/driver/                   @RankJay
+/release/                  @RankJay
+/.github/                  @RankJay
+/deny.toml                 @RankJay
