@@ -22,7 +22,7 @@ a virtual mic (soundboards, routers, AI voice agents) tell their users to instal
 third-party cable. Pattie is the missing piece: a kernel driver plus a small Rust SDK
 that talks to it over shared memory.
 
-> **Status: SDK 0.2.0 is out for Rust, Python and Node.js. Linux works today; the
+> **Status: SDK 0.2.1 is out for Rust, Python and Node.js. Linux works today; the
 > Windows driver isn't signed yet.** On Linux there is nothing else to install. On
 > Windows the driver, SDK and CLI work end to end in a test VM, including a real Zoom
 > call, but the driver is only test-signed. What's left before the v0 gate is an
