@@ -143,3 +143,19 @@ fn a_stereo_frame_split_across_pushes_plays_whole_once_its_last_sample_arrives()
     assert_eq!(added, 1_000);
     assert_eq!(&heard[..samples.len()], &samples[..]);
 }
+
+#[test]
+fn the_pieces_the_feeder_empties_are_handed_out_once_to_be_freed() {
+    let mut queue = Queue::default();
+    queue.push(vec![1.0, 2.0]);
+    queue.push(vec![3.0]);
+    queue.push(vec![4.0, 5.0]);
+    let mut out = Vec::new();
+
+    queue.take_into(4, &mut out); // empties the first two pieces, not the third
+
+    assert_eq!(out, [1.0, 2.0, 3.0, 4.0]);
+    assert_eq!(queue.take_spent(), [vec![1.0, 2.0], vec![3.0]]);
+    // Handed out, not kept: the queue holds no more than what's waiting.
+    assert!(queue.take_spent().is_empty());
+}

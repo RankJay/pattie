@@ -24,6 +24,10 @@ exclude_globs = [
     # names it without `tests::`, so the ` tests::` pattern below no longer catches it.
     "crates/sdk/src/**/tests.rs",
     "crates/sdk/src/**/tests/**",
+    # The end-to-end integrity tests (`#[cfg(test)] mod e2e`): a test suite with
+    # its own analyzer, not shipped code. A mutant there bends the checker, and
+    # 31 of them read as missed (nightly, 2026-11-21 on).
+    "crates/sdk/src/e2e/**",
     "crates/install/src/**/tests.rs",
     "crates/cli/src/**/tests.rs",
     "crates/cli/src/**/tests/**",
@@ -66,8 +70,9 @@ exclude_re = [
     # Equivalent: the IOCTL code's three bit fields don't overlap, so | and ^ agree.
     "replace \\| with \\^ in ioctl",
     # Equivalent: with one channel in (or out) the downmix (or upmix) leaves the
-    # samples as they are, so taking that path at 1 changes nothing.
-    "replace > with >= in Converter::convert",
+    # samples as they are, so taking that path at 1 changes nothing. (`samples`
+    # since the converter's refactor; `convert` before.)
+    "replace > with >= in Converter::(convert|samples)",
     # The 10-minute queue cap's `* channels`: with mono, * 1 and / 1 (or + 1)
     # agree, and seeing it with stereo takes 10 minutes of samples (~200 MB) in a
     # test. Pinned to its line and column; if the line moves these come back as
@@ -95,6 +100,14 @@ exclude_re = [
     # The default: the Windows Backend's lead, which only the VM sees; host
     # tests use the In-process core's own (backend/in_process/).
     "replace Backend::lead_frames -> u32",
+    # Equivalent on Windows, where mutation runs: its only In-process backends
+    # are the tests' (`with_nodes`), which don't follow the pull; Linux's
+    # `for_process` does, and the PipeWire tests (ci.yml) see it.
+    "replace <impl Backend for InProcessBackend>::lead_follows_pull -> bool with false",
+    # Equivalent: every queued sample is in a reply's `queued` until it's taken,
+    # and `interrupt` clears both, so where every reply has played the queue is
+    # already empty; `wait_idle`'s `is_empty()` is a guard, not the deciding test.
+    "replace Queue::is_empty -> bool with true",
     # Linux-only code inside shared files, not compiled on Windows where mutation
     # runs (as backend/linux/ above): the clock's and doorbell's `linux` modules, the
     # fallback clock, and the Linux core's setup.

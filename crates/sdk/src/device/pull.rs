@@ -126,8 +126,11 @@ mod tests {
     #[test]
     fn seeing_the_same_pass_again_changes_nothing() {
         let mut watch = watch([256; 3]);
-        watch.see(1_000 + 3 * 256, 0);
-        watch.see(1_000 + 3 * 256, 0);
+        // Two windows' worth: if a repeat counted as a pass, the windows would
+        // roll past the 256 and the lead would fall back to the cap.
+        for _ in 0..2 * WINDOW {
+            watch.see(1_000 + 3 * 256, 0);
+        }
         assert_eq!(watch.lead(2_048), 320);
     }
 }
