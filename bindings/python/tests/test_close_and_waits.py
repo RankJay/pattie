@@ -118,3 +118,28 @@ def test_a_write_still_finishes_when_listeners_take_it(backend: _testing.FakeBac
         written = mic.write(floats([0.2] * 24_000))  # 500 ms: several pieces
         done.set()
     assert written == 24_000
+
+
+def close_mid_piece(call: Callable[[], object], close: Callable[[], None]) -> float:
+    """Starts `call` in a thread, closes 50 ms in (halfway through its first
+    100 ms piece), and returns how long close() took to end it."""
+    thread = threading.Thread(target=call, daemon=True)
+    thread.start()
+    time.sleep(0.05)
+    return close_promptly(close, thread)
+
+
+def test_close_ends_a_write_at_once_not_at_its_piece(backend: _testing.FakeBackend) -> None:
+    mic = pattie.Microphone("Agent Mic", _backend=backend)
+
+    took = close_mid_piece(lambda: mic.write(floats([0.1] * 48_000)), mic.close)
+
+    assert took < 0.025, f"close() took {took * 1000:.0f} ms: the write ran out its piece"
+
+
+def test_close_ends_a_read_at_once_not_at_its_piece(backend: _testing.FakeBackend) -> None:
+    speaker = pattie.Speaker("Agent Speaker", _backend=backend)
+
+    took = close_mid_piece(lambda: speaker.read(timeout=None), speaker.close)
+
+    assert took < 0.025, f"close() took {took * 1000:.0f} ms: the read ran out its piece"

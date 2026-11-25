@@ -364,3 +364,11 @@ impl Microphone {
         self.shared.watch.flush()
     }
 }
+
+/// Garbage collected, or its Worker or Electron renderer gone, without
+/// `close()`: the Device goes too, and other apps stop listing it.
+impl Drop for Microphone {
+    fn drop(&mut self) {
+        self.close();
+    }
+}

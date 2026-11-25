@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { DEVICE_FORMAT, Microphone, PattieError, stableId } from '@pattie/pattie';
-import { FakeBackend } from '@pattie/pattie/_testing';
+import { BACKEND, FakeBackend } from '#testing';
 
 test('stableId matches the ID Windows and PipeWire give the Device', () => {
     // The same values as the SDK's and the Python binding's stable_id.
@@ -26,7 +26,7 @@ test("a format the converter can't take is UNSUPPORTED_FORMAT when the Microphon
         () =>
             new Microphone('Agent Mic', {
                 format: { rate: 12_345, encoding: 'pcm16' },
-                _backend: backend,
+                [BACKEND]: backend,
             }),
         (error: unknown) => error instanceof PattieError && error.code === 'UNSUPPORTED_FORMAT',
     );
@@ -39,7 +39,7 @@ test("an encoding that isn't f32, pcm16 or ulaw is a TypeError", () => {
             new Microphone('Agent Mic', {
                 // @ts-expect-error: not an Encoding
                 format: { rate: 24_000, encoding: 's24' },
-                _backend: backend,
+                [BACKEND]: backend,
             }),
         TypeError,
     );

@@ -1,0 +1,37 @@
+// The public API's report (api/pattie.api.md): `pnpm api` rewrites it, and CI's
+// `pnpm api:check` fails when the shipped types change without it. API Extractor
+// reads the built .d.ts with its own TypeScript, so TypeScript 7 doesn't matter.
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/api-extractor/v7/api-extractor.schema.json",
+  "mainEntryPointFilePath": "<projectFolder>/dist/index.d.ts",
+  // The same report on Windows and Linux runners.
+  "newlineKind": "lf",
+  "apiReport": {
+    "enabled": true,
+    "reportFolder": "<projectFolder>/api/",
+    "reportTempFolder": "<projectFolder>/node_modules/.api-extractor/"
+  },
+  "docModel": { "enabled": false },
+  "dtsRollup": { "enabled": false },
+  "tsdocMetadata": { "enabled": false },
+  "compiler": {
+    "overrideTsconfig": {
+      "compilerOptions": {
+        "target": "es2022",
+        "lib": ["es2024", "esnext.disposable"],
+        "module": "nodenext",
+        "moduleResolution": "nodenext",
+        "types": ["node"],
+        "strict": true,
+        "skipLibCheck": true
+      },
+      "include": ["dist/index.d.ts"]
+    }
+  },
+  "messages": {
+    "extractorMessageReporting": {
+      // No @public/@beta tags: everything exported is public.
+      "ae-missing-release-tag": { "logLevel": "none" }
+    }
+  }
+}

@@ -6,6 +6,7 @@
     "rootDir": ".",
     "outDir": "../dist-test",
     "declaration": false,
+    "isolatedDeclarations": false,
     "rewriteRelativeImportExtensions": true
   },
   "include": ["*.ts"]

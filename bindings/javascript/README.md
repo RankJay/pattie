@@ -6,16 +6,17 @@ Discord or a browser records it. Other apps play to a speaker, and your code
 reads it.
 
 ```bash
-npm install pattie
+npm install @pattie/pattie
 ```
 
 It needs Node.js 22.12 or newer, or Electron, and has no dependencies. The
 examples use `using`, which Node 24 runs as it is; on Node 22, compile with
-TypeScript (it turns `using` into try/finally) or call `close()` yourself. A
-prebuilt binary is installed for your platform (Windows x64, Linux x64 and
-arm64): no compiler, no node-gyp, no `electron-rebuild`. On Windows, the Pattie
-driver must be installed once, as administrator, with `pattie-cli install`. On
-Linux it uses PipeWire, which most desktops already run.
+TypeScript (it turns `using` into try/finally) or call `close()` yourself. The
+package carries prebuilt binaries for Windows x64 and Linux x64 and arm64
+(glibc 2.28 or newer), and loads the one for your platform: no compiler, no
+node-gyp, no `electron-rebuild`. On Windows, the Pattie driver must be
+installed once, as administrator, with `pattie-cli install`. On Linux it uses
+PipeWire, which most desktops already run.
 
 ## Quickstart
 
@@ -36,7 +37,8 @@ for await (const chunk of speaker) {
 ```
 
 The devices exist while the objects are open. Leaving the `using` block,
-`close()`, or the process ending, removes them.
+`close()`, the object being garbage collected, its Worker ending, or the
+process ending, removes them.
 
 Nothing blocks the event loop. A call that waits returns a Promise and waits on
 a thread of the Device's own (not libuv's pool, so your file and DNS calls go
@@ -74,6 +76,10 @@ realtime model through Vercel's AI Gateway, in a meeting, with barge-in.
 - **Reads** return the array that matches the format: `Float32Array`,
   `Int16Array`, or `Uint8Array` for μ-law. `readTimed()` also says when the
   first frame was played, in `performance.now()` milliseconds.
+- `speaker.values({ signal })` iterates until the signal aborts. Leaving a
+  `for await` loop early doesn't close the speaker. For a WHATWG stream,
+  `ReadableStream.from(speaker)` wraps it; for a Node stream,
+  `Readable.from(speaker)`.
 - `writeNowait()` writes what fits now and drops the rest. Lost audio is a
   `PATTIE_AUDIO_LOST` warning (`process.emitWarning`, at most once a second),
   or a thrown `AUDIO_LOST` with `{ strict: true }`.
@@ -81,6 +87,22 @@ realtime model through Vercel's AI Gateway, in a meeting, with barge-in.
   pushes never wait, and a jitter buffer resampled a few ppm stays at about
   40 ms for hours.
 - `new Converter(from, to)` converts audio that isn't a Device's.
+
+## Electron and bundlers
+
+The package loads a `.node` binary from its own `native/` folder, so it has to
+stay a real file in `node_modules`.
+
+- **Electron**: keep the binaries out of `app.asar`, which Electron can't load
+  them from. With electron-builder, `asarUnpack` takes the pattern
+  (`"**/node_modules/@pattie/pattie/native/*.node"`); with Electron Forge,
+  `@electron-forge/plugin-auto-unpack-natives` does it. Electron finds the
+  unpacked copy itself. Use it from the main process or a utility process,
+  where Node runs.
+- **Bundlers** (esbuild, webpack, Rollup, Vite): mark `@pattie/pattie`
+  external, so the bundle imports it from `node_modules` instead of copying its
+  code: `esbuild --external:@pattie/pattie`, webpack's `externals`, Rollup's
+  and Vite's `external`.
 
 ## Errors
 
@@ -97,18 +119,22 @@ Every error is a `PattieError` with a `code`, and its message says the fix:
 | `AUDIO_LOST` | audio was dropped or ran out, with `strict` |
 | `CLOSED` | the Device was closed |
 | `DRIVER_REMOVED` | the driver was updated while the Device was live: create it again |
+| `UNSUPPORTED_PLATFORM` | importing it where it has no binary (musl, macOS, Windows on Arm) |
 
 and `ACCESS_DENIED`, `NO_BACKEND`, `VERSION_MISMATCH`, `BAD_BUFFER_SIZE`,
 `BAD_NAME`, `WRONG_KIND`, `SYSTEM_REFUSED`, `PROTOCOL_ERROR`, `OS_ERROR`: the
-same errors as the Python binding's exceptions (ADR 0019).
+same errors as the Python binding's exceptions (ADR 0019). An SDK error newer
+than this package's codes is `ERROR`, with the SDK's message. `PattieErrorCode`
+is the union of them all, for a `switch` the compiler checks.
 
 ## Working on it
 
 ```bash
 pnpm install
-pnpm build:dev     # the native module with the SDK's Fake backend, and pattie/_testing
+pnpm build:dev     # the native module with the SDK's Fake backend, and the tests' `#testing` import
 pnpm test          # node:test against the Fake backend: no driver needed
 pnpm typecheck && pnpm lint && pnpm format:check
+pnpm api          # rewrites api/pattie.api.md after a change to the public API
 pnpm build && pnpm test:release   # a release build, packed and installed as users get it
 ```
 

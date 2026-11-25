@@ -19,8 +19,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
-    },
-    "./_testing": {
+    }
+  },
+  "imports": {
+    "#testing": {
       "types": "./dist/_testing.d.ts",
       "default": "./dist/_testing.js"
     }
@@ -29,7 +31,6 @@
     "dist/*.js",
     "dist/*.d.ts",
     "!dist/_testing.*",
-    "native/index.js",
     "native/index.d.ts",
     "native/*.node"
   ],
@@ -42,8 +43,8 @@
     ]
   },
   "scripts": {
-    "build:native": "napi build --platform --release --esm --output-dir native --js index.js --dts index.d.ts",
-    "build:native:dev": "napi build --platform --features fake-backend --esm --output-dir native --js index.js --dts index.d.ts",
+    "build:native": "napi build --platform --release --no-js --output-dir native --dts index.d.ts",
+    "build:native:dev": "napi build --platform --features fake-backend --no-js --output-dir native --dts index.d.ts",
     "build:ts": "tsc -p tsconfig.json",
     "build": "pnpm build:native && pnpm build:ts:release",
     "build:dev": "pnpm build:native:dev && pnpm build:ts",
@@ -55,13 +56,18 @@
     "test:release": "node --test \"test/release/*.test.ts\"",
     "build:ts:release": "tsc -p tsconfig.release.json",
     "test:bun": "bun test --path-ignore-patterns=test/release/** ./test",
+    "api": "api-extractor run --local",
+    "api:check": "api-extractor run",
     "test:node22": "tsc -p test/tsconfig.node22.json && node --test --test-concurrency=1 \"dist-test/*.test.js\""
   },
   "devDependencies": {
+    "@arethetypeswrong/cli": "0.18.5",
+    "@microsoft/api-extractor": "7.60.1",
     "@napi-rs/cli": "3.10.12",
     "@types/node": "26.6.6",
     "oxfmt": "0.79.0",
     "oxlint": "1.94.0",
+    "publint": "0.3.25",
     "typescript": "7.0.2"
   },
   "packageManager": "pnpm@12.21.0"

@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 import { Microphone, PattieError } from '@pattie/pattie';
-import { FakeBackend } from '@pattie/pattie/_testing';
+import { BACKEND, FakeBackend } from '#testing';
 
 import { pullInBackground } from './system.ts';
 
@@ -15,7 +15,7 @@ const isCode = (code: string) => (error: unknown) =>
 
 test('push queues a reply at once, and interrupt() says how much of it was heard', async () => {
     const backend = new FakeBackend();
-    using mic = new Microphone('Agent Mic', { _backend: backend });
+    using mic = new Microphone('Agent Mic', { [BACKEND]: backend });
     using playout = mic.playout();
 
     assert.equal(playout.push(new Float32Array(48_000), { reply: 'greeting' }), 48_000); // 1 s
@@ -37,7 +37,7 @@ test('waitIdle resolves once everything pushed has been heard', async () => {
     const backend = new FakeBackend();
     using mic = new Microphone('Agent Mic', {
         format: { rate: 24_000, encoding: 'pcm16' },
-        _backend: backend,
+        [BACKEND]: backend,
     });
     using playout = mic.playout();
     playout.push(new Int16Array(2_400)); // 100 ms
@@ -47,14 +47,14 @@ test('waitIdle resolves once everything pushed has been heard', async () => {
 });
 
 test('a microphone has one writer: write() or a playout, not both', async () => {
-    using mic = new Microphone('Agent Mic', { _backend: new FakeBackend() });
+    using mic = new Microphone('Agent Mic', { [BACKEND]: new FakeBackend() });
     mic.writeNowait(new Float32Array(480));
 
     assert.throws(() => mic.playout(), isCode('ALREADY_TAKEN'));
 });
 
 test('closing the microphone ends its playout and a waitIdle in progress', async () => {
-    const mic = new Microphone('Agent Mic', { _backend: new FakeBackend() });
+    const mic = new Microphone('Agent Mic', { [BACKEND]: new FakeBackend() });
     const playout = mic.playout();
     playout.push(new Float32Array(48_000));
     const waiting = playout.waitIdle();

@@ -11,6 +11,7 @@
     "verbatimModuleSyntax": true,
     "isolatedModules": true,
     "declaration": true,
+    "isolatedDeclarations": true,
     "rootDir": "lib",
     "outDir": "dist",
     "skipLibCheck": true

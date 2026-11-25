@@ -6,12 +6,12 @@ import { test } from 'node:test';
 import { promisify } from 'node:util';
 
 import { Microphone, PattieError } from '@pattie/pattie';
-import { FakeBackend } from '@pattie/pattie/_testing';
+import { BACKEND, FakeBackend } from '#testing';
 
 const isClosed = (error: unknown) => error instanceof PattieError && error.code === 'CLOSED';
 
 test('close() ends a write nobody records at once, and it resolves with what it wrote', async () => {
-    const mic = new Microphone('Agent Mic', { _backend: new FakeBackend() });
+    const mic = new Microphone('Agent Mic', { [BACKEND]: new FakeBackend() });
     // Nobody pulls: the lead fills, then the write waits for room forever.
     const writing = mic.write(new Float32Array(48_000));
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -26,18 +26,18 @@ test('close() ends a write nobody records at once, and it resolves with what it 
 
 test('after close() the name is free, and calls are CLOSED', async () => {
     const backend = new FakeBackend();
-    const mic = new Microphone('Agent Mic', { _backend: backend });
+    const mic = new Microphone('Agent Mic', { [BACKEND]: backend });
     mic.close();
     mic.close(); // twice is fine
 
-    using _again = new Microphone('Agent Mic', { _backend: backend });
+    using _again = new Microphone('Agent Mic', { [BACKEND]: backend });
     assert.throws(() => mic.writeNowait(new Float32Array(480)), isClosed);
     await assert.rejects(mic.write(new Float32Array(480)), isClosed);
 });
 
 test('an AbortSignal ends a write within a piece, and the microphone stays usable', async () => {
     const backend = new FakeBackend();
-    using mic = new Microphone('Agent Mic', { _backend: backend });
+    using mic = new Microphone('Agent Mic', { [BACKEND]: backend });
     const startedAt = performance.now();
 
     // Nobody pulls, so only the signal ends it.
@@ -53,7 +53,7 @@ test('an AbortSignal ends a write within a piece, and the microphone stays usabl
 });
 
 test('an AbortSignal already aborted rejects without writing', async () => {
-    using mic = new Microphone('Agent Mic', { _backend: new FakeBackend() });
+    using mic = new Microphone('Agent Mic', { [BACKEND]: new FakeBackend() });
     const controller = new AbortController();
     controller.abort();
 
@@ -69,7 +69,7 @@ test('waits on many Devices leave libuv pool free for the app', async () => {
     // More Devices waiting than libuv's pool has threads (4).
     const mics = Array.from(
         { length: 6 },
-        (_, i) => new Microphone(`Agent Mic ${i}`, { _backend: backend }),
+        (_, i) => new Microphone(`Agent Mic ${i}`, { [BACKEND]: backend }),
     );
     const writes = mics.map((mic) => mic.write(new Float32Array(48_000)));
     await new Promise((resolve) => setTimeout(resolve, 20));

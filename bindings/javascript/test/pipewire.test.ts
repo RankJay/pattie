@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { Worker } from 'node:worker_threads';
 
 import { Microphone, stableId } from '@pattie/pattie';
 
@@ -85,5 +86,34 @@ test(
             written >= 9_000,
             `heard ${heard.length} samples, ${written} of them the 0.5 written`,
         );
+    },
+);
+
+test(
+    "a Microphone made in a Worker goes when the Worker is terminated, though it wasn't closed",
+    { skip },
+    async () => {
+        const name = `Pattie JS Worker ${process.pid}`;
+        const node = `pattie.${stableId('microphone', name)}`;
+        // Mid-write, as an app would be: nobody records, so the write waits.
+        const worker = new Worker(
+            // A script, not a module, so no top-level await: the same on Node 22 to 26.
+            `(async () => {
+                const { Microphone } = await import(${JSON.stringify(import.meta.resolve('@pattie/pattie'))});
+                const { parentPort } = await import('node:worker_threads');
+                const mic = new Microphone(${JSON.stringify(name)});
+                mic.write(new Float32Array(480_000));
+                parentPort.postMessage('made');
+            })();`,
+            { eval: true },
+        );
+        await once(worker, 'message');
+        assert.ok(nodes().includes(node), `${node} isn't listed`);
+
+        await worker.terminate();
+
+        // PipeWire removes the node a moment after the Device goes.
+        for (let tries = 0; tries < 20 && nodes().includes(node); tries++) await sleep(100);
+        assert.ok(!nodes().includes(node), `${node} is still listed after the Worker ended`);
     },
 );

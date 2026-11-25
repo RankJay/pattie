@@ -166,9 +166,13 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm format:check
       - run: pnpm lint
-      # Builds the native module with the SDK's Fake backend, and pattie/_testing.
+      # Builds the native module with the SDK's Fake backend, and the tests'
+      # #testing module.
       - run: pnpm build:dev
       - run: pnpm typecheck
+      # The shipped types against api/pattie.api.md: a change to the public API
+      # fails here until `pnpm api` rewrites the report in the same change.
+      - run: pnpm api:check
       # Node 22 can't parse `using`, which the tests use (Node 24 can): there
       # they run compiled to ES2022. The package itself needs neither.
       - name: pnpm test (compiled, on Node 22)
@@ -342,3 +346,32 @@ jobs:
       - uses: ./.github/actions/build-fuzzer
       - name: Run it
         run: target/fuzz/hostile_apps -max_total_time=60 -max_len=4096 -rss_limit_mb=2048 target/fuzz/corpus
+
+  # The one check the main ruleset requires (.github/rulesets/main.json). The matrix
+  # jobs' check names change with their matrix, so the ruleset names this instead.
+  # Add every new job above to `needs`.
+  ci-ok:
+    name: ci-ok
+    if: always()
+    needs:
+      - rust-windows
+      - rust-linux
+      - pipewire
+      - python
+      - javascript
+      - pipecat
+      - deny
+      - driver
+      - miri
+      - style
+      - fuzz-smoke
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Every job passed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "results: $RESULTS"
+          for r in $RESULTS; do
+            [ "$r" = success ] || { echo "a required job ended '$r'"; exit 1; }
+          done

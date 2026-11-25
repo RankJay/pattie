@@ -1,0 +1,58 @@
+name: Bug report
+description: Something in Pattie does the wrong thing.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A suspected security issue goes through SECURITY.md, not here.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Driver (driver/)
+        - Core (core/)
+        - Rust SDK or CLI (crates/)
+        - Python binding
+        - Node.js binding
+        - Pipecat transport
+        - Installer or release
+        - CI or tooling
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: "0.2.0, or a commit SHA"
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: OS and version
+      placeholder: "Windows 11 24H2 (26100.x), Ubuntu 24.04 with PipeWire 1.x, ..."
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened, and what you expected instead
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The smallest program or command sequence that shows it.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs, traces or a crash dump summary
+      description: For a driver crash, the bugcheck code and stack help most.
+      render: text

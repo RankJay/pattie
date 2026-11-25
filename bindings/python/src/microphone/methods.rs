@@ -234,10 +234,15 @@ impl Microphone {
     }
 
     /// Removes the microphone, and ends its Playout or LiveWriter if one is open.
-    /// A write or wait in progress in another thread stops within about 100 ms
-    /// and returns what it managed. Closing twice is fine.
+    /// A write or wait in progress in another thread stops at once and returns
+    /// what it managed. Closing twice is fine.
     fn close(&self, py: Python<'_>) {
         self.closing.store(true, Ordering::Release);
+        // Ends the SDK wait a write or wait_for_playout is in, so it lets go of
+        // `writing` now rather than at the end of its 100 ms piece.
+        if let Some(device) = lock(py, &self.device).as_ref() {
+            device.stop_waits();
+        }
         let mut writing = lock(py, &self.writing);
         // Losses held back from the last second's warnings, reported now. A
         // logging error here can't stop the close.

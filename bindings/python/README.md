@@ -31,8 +31,8 @@ with pattie.Speaker("Agent Speaker", format=pattie.AudioFormat(16_000, "pcm16"))
 
 The devices exist while the objects are open. Leaving the `with` block, or the
 process ending, removes them.
-A `close()` from another thread ends a call that's waiting (it returns what it
-managed within about 100 ms), and Ctrl+C interrupts one.
+A `close()` from another thread ends a call that's waiting at once (it returns
+what it managed), and Ctrl+C interrupts one within about 100 ms.
 
 With asyncio, use `pattie.aio`. Waiting happens in a worker thread, so the
 event loop keeps running, and a call can be cancelled:

@@ -2,7 +2,7 @@
 
 import { type AudioData, audioBytes } from './bytes.js';
 import type { Encoding } from './format.js';
-import { call, type native } from './native.js';
+import { call, type Native } from './native.js';
 
 /** A LiveWriter's jitter buffer. */
 export interface LiveStats {
@@ -22,21 +22,28 @@ export interface LiveStats {
  * arrives. For a voice agent's replies, use `playout()`.
  */
 export class LiveWriter implements Disposable {
-    readonly #native: native.LiveWriter;
+    readonly #native: Native.LiveWriter;
     readonly #encoding: Encoding;
 
     /** @internal Made by `Microphone.liveWriter()`. */
-    constructor(live: native.LiveWriter, encoding: Encoding) {
+    constructor(live: Native.LiveWriter, encoding: Encoding) {
         this.#native = live;
         this.#encoding = encoding;
     }
 
-    /** Adds audio as it arrives; never waits. Returns how many of the microphone's frames that adds. */
+    /**
+     * Adds audio as it arrives; never waits. Returns how many of the
+     * microphone's frames that adds.
+     *
+     * @throws `PattieError` `CLOSED` once the writer or its microphone is closed.
+     * @throws `TypeError` for a typed array that doesn't match the writer's encoding.
+     */
     push(data: AudioData): number {
         const bytes = audioBytes(data, this.#encoding);
         return call(() => this.#native.push(bytes));
     }
 
+    /** The jitter buffer's state. Never waits for a push. */
     get stats(): LiveStats {
         return Object.freeze(call(() => this.#native.stats));
     }
@@ -46,6 +53,7 @@ export class LiveWriter implements Disposable {
         this.#native.close();
     }
 
+    /** As `close()`: what leaving a `using` block calls. */
     [Symbol.dispose](): void {
         this.close();
     }

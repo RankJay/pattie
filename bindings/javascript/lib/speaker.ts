@@ -2,7 +2,15 @@
 
 import { type AudioArray, audioArray } from './bytes.js';
 import { type AudioFormat, DEVICE_FORMAT, type Encoding, nativeFormat } from './format.js';
-import { backendOf, call, cancellable, native, type WaitOptions } from './native.js';
+import {
+    BACKEND,
+    backendOf,
+    call,
+    cancellable,
+    native,
+    type Native,
+    type WaitOptions,
+} from './native.js';
 import { type ClockPoint, clockPoint, timeOf } from './clock.js';
 import type { Stats } from './stats.js';
 
@@ -14,26 +22,39 @@ export interface SpeakerOptions<E extends Encoding = 'f32'> {
     channels?: number;
     /** What `read` returns: the speaker's own (32-bit float) when left out. */
     format?: AudioFormat & { encoding: E };
-    /** For tests: a FakeBackend from `pattie/_testing`. Leave it out. */
-    _backend?: unknown;
+    /** For tests: a FakeBackend from the package's own `#testing` import. Leave it out. */
+    [BACKEND]?: unknown;
 }
 
 /**
  * A virtual speaker: what other apps play to it is what the app reads, as a
  * `Float32Array`, an `Int16Array` (pcm16) or a `Uint8Array` (μ-law).
+ *
+ * @example
+ * ```ts
+ * using speaker = new Speaker('Agent Speaker', { format: { rate: 16_000, encoding: 'pcm16' } });
+ * for await (const chunk of speaker) transcriber.feed(chunk); // an Int16Array
+ * ```
  */
 export class Speaker<E extends Encoding = 'f32'>
     implements Disposable, AsyncDisposable, AsyncIterable<AudioArray<E>>
 {
-    readonly #native: native.Speaker;
+    readonly #native: Native.Speaker;
     readonly #format: Required<AudioFormat>;
     readonly #rate: number;
     readonly #channels: number;
     readonly #pending = new Set<Promise<unknown>>();
 
-    /** Creates the speaker; other apps list it by `name` until it's closed. */
+    /**
+     * Creates the speaker; other apps list it by `name` until it's closed.
+     *
+     * @throws `PattieError` `DRIVER_NOT_INSTALLED` (Windows) or
+     * `AUDIO_SERVER_UNAVAILABLE` (Linux); `DUPLICATE_NAME` if a speaker has the
+     * name; `TOO_MANY_DEVICES`; `BAD_NAME`; `UNSUPPORTED_FORMAT`.
+     * @throws `TypeError` for a `format` with an unknown encoding.
+     */
     constructor(name: string, options: SpeakerOptions<E> = {}) {
-        const backend = backendOf(options._backend);
+        const backend = backendOf(options[BACKEND]);
         const rate = options.rate ?? DEVICE_FORMAT.rate;
         const channels = options.channels ?? DEVICE_FORMAT.channels;
         this.#rate = rate;
@@ -80,6 +101,9 @@ export class Speaker<E extends Encoding = 'f32'>
     /**
      * Resolves with what other apps played since the last read, up to 100 ms of
      * it, waiting until there's some. Empty once the speaker is closed.
+     *
+     * @throws The signal's reason (an `AbortError` or `TimeoutError`
+     * `DOMException`) if `options.signal` aborts first.
      */
     read(options: WaitOptions = {}): Promise<AudioArray<E>> {
         return this.#track(this.#read(options));
@@ -116,13 +140,31 @@ export class Speaker<E extends Encoding = 'f32'>
         return clockPoint(call(() => this.#native.clock));
     }
 
-    /** What's played, a read at a time, until the speaker is closed. */
-    async *[Symbol.asyncIterator](): AsyncIterator<AudioArray<E>> {
+    /**
+     * What's played, a read at a time, until the speaker is closed or
+     * `options.signal` aborts. Leaving the loop early (`break`) doesn't close
+     * the speaker.
+     *
+     * @throws The signal's reason if `options.signal` aborts.
+     *
+     * @example
+     * ```ts
+     * for await (const chunk of speaker.values({ signal: AbortSignal.timeout(60_000) })) {
+     *     transcriber.feed(chunk);
+     * }
+     * ```
+     */
+    async *values(options: WaitOptions = {}): AsyncGenerator<AudioArray<E>, void, undefined> {
         while (!this.closed) {
-            const chunk = await this.read();
+            const chunk = await this.read(options);
             if (chunk.length === 0) return;
             yield chunk;
         }
+    }
+
+    /** As `values()`: `for await (const chunk of speaker)`. */
+    [Symbol.asyncIterator](): AsyncIterator<AudioArray<E>> {
+        return this.values();
     }
 
     /** Removes the speaker. A read in progress resolves at once, with nothing. */
@@ -130,6 +172,7 @@ export class Speaker<E extends Encoding = 'f32'>
         this.#native.close();
     }
 
+    /** As `close()`: what leaving a `using` block calls. */
     [Symbol.dispose](): void {
         this.close();
     }

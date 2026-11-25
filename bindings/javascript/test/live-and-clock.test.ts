@@ -6,13 +6,13 @@ import { test } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 import { Converter, Microphone, PattieError, Speaker } from '@pattie/pattie';
-import { FakeBackend, sdkError } from '@pattie/pattie/_testing';
+import { BACKEND, FakeBackend, sdkError } from '#testing';
 
 import { pullInBackground, ramp } from './system.ts';
 
 test('a LiveWriter takes audio as it arrives, never waits, and reports its jitter buffer', async () => {
     const backend = new FakeBackend();
-    using mic = new Microphone('Agent Mic', { _backend: backend });
+    using mic = new Microphone('Agent Mic', { [BACKEND]: backend });
     using live = mic.liveWriter({ rate: 16_000, encoding: 'pcm16' });
     using _system = pullInBackground(backend, mic.id);
 
@@ -36,7 +36,7 @@ test('a LiveWriter takes audio as it arrives, never waits, and reports its jitte
 
 test('clock is null until the system runs, then a point on performance.now()', () => {
     const backend = new FakeBackend();
-    using mic = new Microphone('Agent Mic', { _backend: backend });
+    using mic = new Microphone('Agent Mic', { [BACKEND]: backend });
     const [clockBefore, nextBefore] = [mic.clock, mic.nextPlayTime];
     assert.equal(clockBefore, null);
     assert.equal(nextBefore, null);
@@ -55,7 +55,7 @@ test('clock is null until the system runs, then a point on performance.now()', (
 
 test('readTimed says when the first frame it returns was played', async () => {
     const backend = new FakeBackend();
-    using speaker = new Speaker('Agent Speaker', { _backend: backend });
+    using speaker = new Speaker('Agent Speaker', { [BACKEND]: backend });
     const start = performance.now();
     backend.systemWrite(speaker.id, ramp(480));
     const end = performance.now();

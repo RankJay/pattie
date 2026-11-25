@@ -121,10 +121,15 @@ impl Speaker {
         Ok(device.as_ref().ok_or_else(closed)?.stats().into())
     }
 
-    /// Removes the speaker. A read in progress in another thread stops within
-    /// about 100 ms and returns nothing. Closing twice is fine.
+    /// Removes the speaker. A read in progress in another thread stops at once
+    /// and returns nothing. Closing twice is fine.
     fn close(&self, py: Python<'_>) {
         self.closing.store(true, Ordering::Release);
+        // Ends the SDK wait a read is in, so it lets go of `reading` now rather
+        // than at the end of its 100 ms piece.
+        if let Some(device) = lock(py, &self.device).as_ref() {
+            device.stop_waits();
+        }
         let mut reading = lock(py, &self.reading);
         let mut device = lock(py, &self.device);
         // The reader shares the Device; it goes once both do.

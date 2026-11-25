@@ -1,0 +1,32 @@
+# A pull request's title becomes the squash commit's subject, so it must be a
+# conventional commit like the history: `type(scope): summary`, scope optional.
+# The main ruleset requires this check (.github/rulesets/main.json).
+name: PR title
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions: {}
+
+concurrency:
+  group: pr-title-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  pr-title:
+    name: pr-title
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Title is a conventional commit
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          types='build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test'
+          pattern="^($types)(\([a-z0-9._/-]+\))?!?: [^ ].{0,99}$"
+          if printf '%s' "$TITLE" | grep -Eq "$pattern"; then
+            echo "ok: $TITLE"
+          else
+            echo "::error::PR title must look like 'type(scope): summary', type one of: ${types//|/, }; at most ~100 characters. Got: $TITLE"
+            exit 1
+          fi

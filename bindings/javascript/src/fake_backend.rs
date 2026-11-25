@@ -1,4 +1,4 @@
-//! `FakeBackend`, for `pattie/_testing` (dev builds only): the SDK's Fake backend,
+//! `FakeBackend`, for the package's `#testing` import (dev builds only): the SDK's Fake backend,
 //! which plays the system's side of each Device in the tests.
 
 use super::*;

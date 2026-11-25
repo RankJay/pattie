@@ -4,13 +4,13 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { Microphone, PattieError } from '@pattie/pattie';
-import { FakeBackend } from '@pattie/pattie/_testing';
+import { BACKEND, FakeBackend } from '#testing';
 
 import { nextWarning, pullInBackground, ramp } from './system.ts';
 
 test('write resolves once the system has taken it all, without blocking the event loop', async () => {
     const backend = new FakeBackend();
-    using mic = new Microphone('Agent Mic', { _backend: backend });
+    using mic = new Microphone('Agent Mic', { [BACKEND]: backend });
     // Takes only what's buffered: a late write would otherwise hear Gap first.
     using system = pullInBackground(backend, mic.id, () => mic.stats.bufferedFrames);
     const audio = ramp(9_600); // 200 ms
@@ -26,7 +26,7 @@ test('write resolves once the system has taken it all, without blocking the even
 test("16-bit PCM at 24 kHz, as voice APIs send it, is converted to the microphone's own", async () => {
     const backend = new FakeBackend();
     const format = { rate: 24_000, encoding: 'pcm16' } as const;
-    using mic = new Microphone('Agent Mic', { format, _backend: backend });
+    using mic = new Microphone('Agent Mic', { format, [BACKEND]: backend });
     using _system = pullInBackground(backend, mic.id);
 
     const written = await mic.write(new Int16Array(2_400).fill(8_192)); // 100 ms
@@ -38,7 +38,7 @@ test("16-bit PCM at 24 kHz, as voice APIs send it, is converted to the microphon
 
 test('a Buffer over part of a larger ArrayBuffer is read within its own bytes', () => {
     const backend = new FakeBackend();
-    using mic = new Microphone('Agent Mic', { _backend: backend });
+    using mic = new Microphone('Agent Mic', { [BACKEND]: backend });
     // As Node's Buffer pool hands them out: 8 bytes, 16 bytes into 64.
     const backing = new ArrayBuffer(64);
     new Float32Array(backing).fill(0.9);
@@ -52,7 +52,7 @@ test('a Buffer over part of a larger ArrayBuffer is read within its own bytes', 
 test('a Float32Array for 16-bit PCM is a TypeError, before anything is written', async () => {
     using mic = new Microphone('Agent Mic', {
         format: { rate: 24_000, encoding: 'pcm16' },
-        _backend: new FakeBackend(),
+        [BACKEND]: new FakeBackend(),
     });
 
     await assert.rejects(mic.write(new Float32Array(480)), TypeError);
@@ -62,7 +62,7 @@ test('a Float32Array for 16-bit PCM is a TypeError, before anything is written',
 
 test('playedFrames and playedMs count what the system has taken', () => {
     const backend = new FakeBackend();
-    using mic = new Microphone('Agent Mic', { _backend: backend });
+    using mic = new Microphone('Agent Mic', { [BACKEND]: backend });
     mic.writeNowait(new Float32Array(2_400));
 
     backend.systemRead(mic.id, 1_200);
@@ -74,7 +74,7 @@ test('closed says whether close() was called, and await using closes it', async 
     const backend = new FakeBackend();
     let kept: Microphone;
     {
-        await using mic = new Microphone('Agent Mic', { _backend: backend });
+        await using mic = new Microphone('Agent Mic', { [BACKEND]: backend });
         kept = mic;
         assert.equal(mic.closed, false);
     }
@@ -82,7 +82,7 @@ test('closed says whether close() was called, and await using closes it', async 
 });
 
 test('writeNowait writes what fits now, and warns PATTIE_AUDIO_LOST about the rest', async () => {
-    using mic = new Microphone('Agent Mic', { _backend: new FakeBackend() });
+    using mic = new Microphone('Agent Mic', { [BACKEND]: new FakeBackend() });
     const warned = nextWarning('writeNowait()');
 
     // Nobody pulls: a 4,096-frame Ring takes 4,096 of the 48,000 frames.
@@ -95,7 +95,7 @@ test('writeNowait writes what fits now, and warns PATTIE_AUDIO_LOST about the re
 });
 
 test('with strict, writeNowait throws AUDIO_LOST instead of warning', () => {
-    using mic = new Microphone('Agent Mic', { strict: true, _backend: new FakeBackend() });
+    using mic = new Microphone('Agent Mic', { strict: true, [BACKEND]: new FakeBackend() });
 
     assert.throws(
         () => mic.writeNowait(new Float32Array(48_000)),

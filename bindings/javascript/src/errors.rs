@@ -70,6 +70,10 @@ pub(crate) fn to_js(error: sdk::Error) -> napi::Error {
         sdk::Error::Os(_) => ("OS_ERROR", text),
         // Its own message says what to do: create the Device again (ADR 0024).
         sdk::Error::DriverRemoved => ("DRIVER_REMOVED", text),
+        // Audio that stops partway through a frame: the argument's shape, so a
+        // TypeError. The microphone keeps a split frame for the next write, so
+        // nothing reaches the SDK this way today.
+        sdk::Error::PartialFrame => ("TYPE_ERROR", text),
         _ => ("ERROR", text),
     };
     coded(code, &message)

@@ -2,14 +2,22 @@
 
 import { type AudioData, audioBytes } from './bytes.js';
 import { type AudioFormat, DEVICE_FORMAT, nativeFormat } from './format.js';
-import { backendOf, call, cancellable, native, type WaitOptions } from './native.js';
+import {
+    BACKEND,
+    backendOf,
+    call,
+    cancellable,
+    native,
+    type Native,
+    type WaitOptions,
+} from './native.js';
 import { type ClockPoint, clockPoint, timeOf } from './clock.js';
 import { LiveWriter } from './live-writer.js';
 import { Playout } from './playout.js';
 import type { Stats } from './stats.js';
 
 /** Emits a lost-audio warning the native module returned, if any. */
-function warned(written: native.Written): number {
+function warned(written: Native.Written): number {
     if (written.warning != null) {
         process.emitWarning(written.warning, { code: 'PATTIE_AUDIO_LOST' });
     }
@@ -29,22 +37,39 @@ export interface MicrophoneOptions {
      * (`process.emitWarning`, at most once a second).
      */
     strict?: boolean;
-    /** For tests: a FakeBackend from `pattie/_testing`. Leave it out. */
-    _backend?: unknown;
+    /** For tests: a FakeBackend from the package's own `#testing` import. Leave it out. */
+    [BACKEND]?: unknown;
 }
 
-/** A virtual microphone: what the app writes is what other apps record. */
+/**
+ * A virtual microphone: what the app writes is what other apps record.
+ *
+ * @example
+ * ```ts
+ * using mic = new Microphone('Agent Mic', { format: { rate: 24_000, encoding: 'pcm16' } });
+ * await mic.write(pcm); // an Int16Array: resolves as listeners take it
+ * await mic.waitForPlayout();
+ * ```
+ */
 export class Microphone implements Disposable, AsyncDisposable {
-    readonly #native: native.Microphone;
+    readonly #native: Native.Microphone;
     readonly #format: Required<AudioFormat>;
     readonly #rate: number;
     readonly #channels: number;
     /** Calls in progress, which `Symbol.asyncDispose` lets settle. */
     readonly #pending = new Set<Promise<unknown>>();
 
-    /** Creates the microphone; other apps list it by `name` until it's closed. */
+    /**
+     * Creates the microphone; other apps list it by `name` until it's closed.
+     *
+     * @throws `PattieError` `DRIVER_NOT_INSTALLED` (Windows) or
+     * `AUDIO_SERVER_UNAVAILABLE` (Linux); `DUPLICATE_NAME` if a microphone has
+     * the name; `TOO_MANY_DEVICES`; `BAD_NAME`; `UNSUPPORTED_FORMAT` for a rate
+     * or channel count it can't run at.
+     * @throws `TypeError` for a `format` with an unknown encoding.
+     */
     constructor(name: string, options: MicrophoneOptions = {}) {
-        const backend = backendOf(options._backend);
+        const backend = backendOf(options[BACKEND]);
         const rate = options.rate ?? DEVICE_FORMAT.rate;
         const channels = options.channels ?? DEVICE_FORMAT.channels;
         this.#rate = rate;
@@ -113,6 +138,17 @@ export class Microphone implements Disposable, AsyncDisposable {
      * Writes `data` (in this microphone's format) at the pace listeners take it,
      * so nothing is dropped. Resolves with how many of the microphone's frames
      * went in: all of them, unless it was closed meanwhile.
+     *
+     * @throws `TypeError` for a typed array that doesn't match the format's encoding.
+     * @throws `PattieError` `CLOSED`; `ALREADY_TAKEN` while a playout or a
+     * live writer has the microphone; `AUDIO_LOST` with `strict`.
+     * @throws The signal's reason (an `AbortError` or `TimeoutError`
+     * `DOMException`) if `options.signal` aborts first.
+     *
+     * @example
+     * ```ts
+     * await mic.write(chunk, { signal: AbortSignal.timeout(5_000) });
+     * ```
      */
     write(data: AudioData, options: WaitOptions = {}): Promise<number> {
         return this.#track(this.#write(data, options));
@@ -132,13 +168,21 @@ export class Microphone implements Disposable, AsyncDisposable {
      * Writes what fits right now without waiting; the rest is dropped and counted
      * as Overflow (and warned about, or thrown with `strict`). Returns how many of
      * the microphone's frames went in.
+     *
+     * @throws `PattieError` `CLOSED`; `ALREADY_TAKEN`; `AUDIO_LOST` with `strict`.
      */
     writeNowait(data: AudioData): number {
         const bytes = audioBytes(data, this.#format.encoding);
         return warned(call(() => this.#native.writeNowait(bytes)));
     }
 
-    /** Resolves with true once listeners have taken everything written so far. */
+    /**
+     * Resolves with true once listeners have taken everything written so far,
+     * false if the microphone was closed first.
+     *
+     * @throws `PattieError` `CLOSED`; `ALREADY_TAKEN`.
+     * @throws The signal's reason if `options.signal` aborts first.
+     */
     waitForPlayout(options: WaitOptions = {}): Promise<boolean> {
         return this.#track(this.#waitForPlayout(options));
     }
@@ -156,6 +200,16 @@ export class Microphone implements Disposable, AsyncDisposable {
      * microphone's one writer, so it can't be mixed with `write()`; closing the
      * microphone closes it too. `format` is what it takes: the microphone's own
      * `format` when left out.
+     *
+     * @throws `PattieError` `ALREADY_TAKEN` while `write()` or a live writer
+     * has the microphone; `CLOSED`; `UNSUPPORTED_FORMAT`.
+     *
+     * @example
+     * ```ts
+     * using voice = mic.playout({ rate: 24_000, encoding: 'pcm16' });
+     * voice.push(Buffer.from(delta, 'base64'), { reply: itemId });
+     * const cut = voice.interrupt(); // someone spoke
+     * ```
      */
     playout(format: AudioFormat = this.#format): Playout {
         const playout = call(() => this.#native.playout(nativeFormat(format)));
@@ -167,6 +221,9 @@ export class Microphone implements Disposable, AsyncDisposable {
      * from something with its own clock (a network call, a capture card), pushed
      * as it arrives in `format` (the microphone's own when left out). It takes
      * the microphone's one writer; closing the microphone closes it too.
+     *
+     * @throws `PattieError` `ALREADY_TAKEN` while `write()` or a playout has
+     * the microphone; `CLOSED`; `UNSUPPORTED_FORMAT`.
      */
     liveWriter(format: AudioFormat = this.#format): LiveWriter {
         const live = call(() => this.#native.liveWriter(nativeFormat(format)));
@@ -199,6 +256,7 @@ export class Microphone implements Disposable, AsyncDisposable {
         if (warning != null) process.emitWarning(warning, { code: 'PATTIE_AUDIO_LOST' });
     }
 
+    /** As `close()`: what leaving a `using` block calls. */
     [Symbol.dispose](): void {
         this.close();
     }

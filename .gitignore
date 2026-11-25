@@ -5,6 +5,8 @@
 .agents/
 .claude/
 docs/
+assets/demo-video/
+assets/launch/
 
 # Python binding: uv's virtual environment and build output
 bindings/python/.venv/

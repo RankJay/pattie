@@ -57,6 +57,29 @@ adds it:
 Signed-off-by: Your Name <you@example.com>
 ```
 
+## Pull requests and branch rules
+
+Changes reach `main` through a pull request, squashed or rebased (no merge commits).
+Before it can merge, two checks must pass: `ci-ok` (every job in `ci.yml`) and
+`pr-title`. The title must be a conventional commit, `type(scope): summary`, because it
+becomes the squash commit's subject. Only the maintainer (@RankJay, the one bypass
+actor in `main.json`, by user ID) can push to `main` directly. Release tags (`v*`,
+`sdk-v*`) can be created but not moved or deleted, except by repository admins.
+
+These rules are kept as code in `.github/rulesets/`. GitHub doesn't read that folder
+on its own, so after changing a file there, an admin applies it:
+
+```bash
+.github/rulesets/apply.sh --dry-run
+```
+
+```bash
+.github/rulesets/apply.sh
+```
+
+When you add a job to `ci.yml`, also add it to the `needs` list of `ci-ok`.
+Otherwise the rules won't wait for it.
+
 ## Repository layout
 
 ```

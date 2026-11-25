@@ -1,6 +1,6 @@
 // "Agent Mic": a virtual microphone any app can pick, playing a 440 Hz tone.
 //
-//     npm install pattie
+//     npm install @pattie/pattie
 //     node quickstart.ts      # Node 24 or newer: `using` and TypeScript run as they are
 //
 // Pick "Agent Mic" in Zoom, Teams or Meet; Ctrl+C removes it.

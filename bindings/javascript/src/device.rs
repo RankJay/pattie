@@ -3,7 +3,7 @@
 use super::*;
 
 /// A Backend for the hidden `_backend` option. Only `FakeBackend` (in
-/// `pattie/_testing`, dev builds) makes one, so ordinary code gets the system's.
+/// `#testing`, dev builds) makes one, so ordinary code gets the system's.
 #[napi]
 pub struct Backend {
     pub(crate) inner: Arc<dyn sdk::backend::Backend>,

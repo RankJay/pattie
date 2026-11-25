@@ -7,7 +7,9 @@ export type Encoding = 'f32' | 'pcm16' | 'ulaw';
 
 /** A rate (8,000 to 96,000), an encoding, and 1 to 8 interleaved channels. */
 export interface AudioFormat {
+    /** Frames a second: 8,000, 11,025, 16,000, 22,050, 24,000, 32,000, 44,100, 48,000 or 96,000. */
     readonly rate: number;
+    /** How each sample is written. */
     readonly encoding: Encoding;
     /** 1 when left out. */
     readonly channels?: number;

@@ -4,7 +4,7 @@
 // "Agent Mic" and listens through "Agent Speaker". Talk over it and it stops
 // mid-sentence, then answers what you said, knowing which of its words you heard.
 //
-//     npm install pattie
+//     npm install @pattie/pattie
 //     AI_GATEWAY_API_KEY=vck_... node barge-in.ts
 //
 // Then, in Zoom (or Teams, Meet, ...), pick microphone "Agent Mic" and speaker
