@@ -62,6 +62,9 @@ exclude_re = [
     # The non-Windows stand-ins for crates/install/src/setup/, which changes
     # the machine (VM-STEPS D.5 and R).
     "replace (install|uninstall) -> Result<Outcome, String> with Ok",
+    # And its root-device check's stand-in: not compiled on Windows, where
+    # mutation runs, so no test there can see it.
+    "replace root_device_present -> Result<bool, String> with Ok",
     # MMCSS "Pro Audio": its effect is only scheduling priority under load (the
     # VM's cpu-load runs), and reverting it releases an OS registration.
     "<impl Drop for ProAudio>::drop",
@@ -76,8 +79,13 @@ exclude_re = [
     # The 10-minute queue cap's `* channels`: with mono, * 1 and / 1 (or + 1)
     # agree, and seeing it with stereo takes 10 minutes of samples (~200 MB) in a
     # test. Pinned to its line and column; if the line moves these come back as
-    # missed, so update it then.
-    "queue\\.rs:49:76: replace \\* with [+/] in Playout::push",
+    # missed, so update it then. (It moved into `Playout::limit` in 2026-11.)
+    "queue\\.rs:70:64: replace \\* with [+/] in Playout::limit",
+    # Equivalent: the series stops once a term falls below 1e-12 of the sum; the
+    # two differ only on a term exactly equal to it, which the floats don't give.
+    "replace > with >= in bessel_i0",
+    # Equivalent output: its `/` and `*` only size `output.reserve()`.
+    "replace [/*] with [-+%*/] in Converter::convert",
     # Debug output: cosmetic, no behaviour.
     "<impl (std::)?fmt::Debug for ",
     # Equivalent: NaN becomes 0 either way (Rust's float-to-int cast saturates
@@ -100,6 +108,13 @@ exclude_re = [
     # The default: the Windows Backend's lead, which only the VM sees; host
     # tests use the In-process core's own (backend/in_process/).
     "replace Backend::lead_frames -> u32",
+    # Likewise the default `lead_follows_pull`: only the Windows Backend takes
+    # it; the tests' In-process backends answer for themselves.
+    "replace Backend::lead_follows_pull -> bool with true",
+    # Equivalent on Windows, where mutation runs: there the lead (960) and a
+    # quarter is below 40 ms at every Device rate, so the target is the 40 ms
+    # either way. Linux's 2,048 is where the lead decides it.
+    "replace \\+ with - in LiveWriter::manual",
     # Equivalent on Windows, where mutation runs: its only In-process backends
     # are the tests' (`with_nodes`), which don't follow the pull; Linux's
     # `for_process` does, and the PipeWire tests (ci.yml) see it.

@@ -105,3 +105,22 @@ fn unnamed_audio_after_a_named_reply_is_a_new_reply() {
     assert_eq!(cut.reply, None);
     assert_eq!(cut.heard_frames, 1_200);
 }
+
+#[test]
+fn a_reply_that_starts_partway_through_a_pass_is_heard_from_where_it_starts() {
+    let (backend, mic, playout, _) = setup();
+    playout.push_reply("item_1", &[0.5; 200]);
+    playout.push_reply("item_2", &[0.25; 200]);
+    playout.shared.pump(); // one pass takes both: item_2 starts 200 frames in
+    backend.system_read(mic.id(), 300).unwrap();
+
+    assert_eq!(
+        playout.interrupt(),
+        Interrupted {
+            reply: key("item_2"),
+            heard_frames: 100,
+            discarded_frames: 0,
+            rate: 48_000,
+        }
+    );
+}

@@ -96,3 +96,20 @@ fn network_jitter_above_the_target_is_kept_and_played() {
     assert_eq!(stats.dropped_frames, 0, "{stats:?}");
     assert!(stats.queued_frames > target(&live) as u64, "{stats:?}");
 }
+
+#[test]
+fn a_queue_exactly_100_ms_over_the_target_is_jitter_not_a_pile_up() {
+    let (backend, mic, live) = setup();
+    play_steadily(&backend, &mic, &live);
+    let (queued, target, step) = {
+        let state = live.shared.lock();
+        (state.queue.len() / state.channels, state.target, state.step)
+    };
+    let dropped = live.stats().dropped_frames;
+
+    // Up to exactly the target and the step: the most that's still kept.
+    live.push(&vec![0.5; target + step - queued]);
+    live.shared.pump();
+
+    assert_eq!(live.stats().dropped_frames, dropped, "{:?}", live.stats());
+}
