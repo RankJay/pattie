@@ -124,6 +124,9 @@ jobs:
       - name: Run tonight's shard
         shell: pwsh
         run: |
+          # cargo-mutants exits 3 for timeouts alone, which aren't failures (below).
+          # A native command's exit code mustn't end the step on its own, then.
+          $PSNativeCommandUseErrorActionPreference = $false
           $shard = ([int](Get-Date).ToUniversalTime().DayOfWeek + 6) % 7 * 2 + ${{ matrix.slice }}
           "Shard $shard of 14"
           cargo mutants -j 2 --shard "$shard/14" --sharding round-robin --output target
@@ -135,6 +138,9 @@ jobs:
           $missed = @(Get-Content target/mutants.out/missed.txt -ErrorAction SilentlyContinue)
           if ($missed.Count -gt 0) { $missed; throw "$($missed.Count) missed mutant(s)" }
           if ($code -notin 0, 2, 3) { exit $code } # 1: usage, 4: the baseline failed
+          # Passed. Explicitly: the runner ends a pwsh step with `exit $LASTEXITCODE`,
+          # which is still cargo-mutants' 3 after a run with timeouts.
+          exit 0
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
